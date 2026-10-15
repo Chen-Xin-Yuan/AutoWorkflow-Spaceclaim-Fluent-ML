@@ -1,0 +1,607 @@
+{
+  "physics": {
+    "kept": [
+      {
+        "IsSuppressed": "False", 
+        "name": "Missile", 
+        "Style": "Opaque", 
+        "type": "DesignBody", 
+        "collection": "Bodies"
+      }, 
+      {
+        "IsSuppressed": "False", 
+        "name": "BOI", 
+        "Style": "Opaque", 
+        "type": "DesignBody", 
+        "collection": "Bodies"
+      }, 
+      {
+        "name": "Enclosure", 
+        "type": "Component", 
+        "collection": "Components"
+      }, 
+      {
+        "IsSuppressed": "False", 
+        "name": "<unreadable>", 
+        "Style": "Transparent", 
+        "type": "DesignBodyGeneral", 
+        "collection": "AllBodies"
+      }
+    ], 
+    "failed": [], 
+    "suppressed": [
+      {
+        "isSuppressedAfter": "False", 
+        "name": "", 
+        "isSuppressedBefore": "False", 
+        "type": "CoordinateSystem", 
+        "collection": "CoordinateSystems"
+      }
+    ]
+  }, 
+  "bodyCount": 3, 
+  "status": "PASS", 
+  "measurements": {
+    "faces": [
+      {
+        "area": 0.0018930508198890124, 
+        "arcRadius": "unavailable", 
+        "index": 0, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 1.7982283362866733, 
+        "arcRadius": "unavailable", 
+        "index": 1, 
+        "cylinderDiameter": 0.17999999999999999
+      }, 
+      {
+        "area": 0.025446900494077322, 
+        "arcRadius": "unavailable", 
+        "index": 2, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0002803891817769555, 
+        "arcRadius": "unavailable", 
+        "index": 3, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "coneAngle": 0.36329766000002389, 
+        "index": 4, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": "unavailable", 
+        "area": 0.13899696383921509
+      }, 
+      {
+        "area": 0.0007200000000000007, 
+        "arcRadius": "unavailable", 
+        "index": 5, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0027608005341817278, 
+        "arcRadius": "unavailable", 
+        "index": 6, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 7, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0007200000000000007, 
+        "arcRadius": "unavailable", 
+        "index": 8, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0027608005341817278, 
+        "arcRadius": "unavailable", 
+        "index": 9, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 10, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0007200000000000007, 
+        "arcRadius": "unavailable", 
+        "index": 11, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0027608005341817278, 
+        "arcRadius": "unavailable", 
+        "index": 12, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 13, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0007200000000000007, 
+        "arcRadius": "unavailable", 
+        "index": 14, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0027608005341817278, 
+        "arcRadius": "unavailable", 
+        "index": 15, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 16, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 17, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0022799999999999834, 
+        "arcRadius": "unavailable", 
+        "index": 18, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0026408005341817279, 
+        "arcRadius": "unavailable", 
+        "index": 19, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 20, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0022799999999999834, 
+        "arcRadius": "unavailable", 
+        "index": 21, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0026408005341817279, 
+        "arcRadius": "unavailable", 
+        "index": 22, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 23, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0022799999999999834, 
+        "arcRadius": "unavailable", 
+        "index": 24, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0026408005341817279, 
+        "arcRadius": "unavailable", 
+        "index": 25, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 26, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0022799999999999834, 
+        "arcRadius": "unavailable", 
+        "index": 27, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0026408005341817279, 
+        "arcRadius": "unavailable", 
+        "index": 28, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 29, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 30, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034330793862495327, 
+        "arcRadius": "unavailable", 
+        "index": 31, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034330793862495327, 
+        "arcRadius": "unavailable", 
+        "index": 32, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034330793862495327, 
+        "arcRadius": "unavailable", 
+        "index": 33, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034330793862495327, 
+        "arcRadius": "unavailable", 
+        "index": 34, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 35, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 36, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.03339606604055833, 
+        "arcRadius": "unavailable", 
+        "index": 37, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034893238010375157, 
+        "arcRadius": "unavailable", 
+        "index": 38, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034893238010375157, 
+        "arcRadius": "unavailable", 
+        "index": 39, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034893238010375157, 
+        "arcRadius": "unavailable", 
+        "index": 40, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0034893238010375157, 
+        "arcRadius": "unavailable", 
+        "index": 41, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 42, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 43, 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.06277610194383948, 
+        "arcRadius": "unavailable", 
+        "index": 44, 
+        "cylinderDiameter": "unavailable"
+      }
+    ], 
+    "volumeM3": 0.091048086817910018, 
+    "surfaceAreaM2": 2.7955190015194136, 
+    "extentsM": {
+      "axial": 3.6900000000000004, 
+      "vertical": 0.64000000000000001, 
+      "lateral": 0.64000000000000001
+    }
+  }, 
+  "regions": {
+    "enclosure": {
+      "faces": 3, 
+      "edges": 2, 
+      "volumeM3": 545.74747402630237, 
+      "componentCount": 1, 
+      "extentsM": {
+        "axial": 23.829946413040162, 
+        "vertical": 5.399999979769513, 
+        "lateral": 5.399999979769513
+      }, 
+      "centerOfMassM": {
+        "z": 2.6039249637492797e-17, 
+        "y": 2.3435324673743519e-16, 
+        "x": 8.225026965141296
+      }
+    }, 
+    "boi": {
+      "faces": 3, 
+      "edges": 2, 
+      "volumeM3": 4.256036879503297, 
+      "componentCount": 0, 
+      "extentsM": {
+        "axial": 6.69, 
+        "vertical": 0.90000000000000002, 
+        "lateral": 0.90000000000000002
+      }, 
+      "centerOfMassM": {
+        "z": -1.3143495284590503e-06, 
+        "y": 4.0502009069787782e-06, 
+        "x": 4.22498319188656
+      }
+    }
+  }, 
+  "regionBodyCount": 2, 
+  "namedSelections": {
+    "groups": {
+      "missile_nose": {
+        "faces": 1, 
+        "areaM2": 0.13899696383921509
+      }, 
+      "outlet": {
+        "faces": 1, 
+        "areaM2": 22.902210273068526
+      }, 
+      "missile_fin": {
+        "faces": 40, 
+        "areaM2": 0.83067336089778454
+      }, 
+      "missile_nose_tip": {
+        "faces": 1, 
+        "areaM2": 0.0002803891817769555
+      }, 
+      "wall": {
+        "faces": 1, 
+        "areaM2": 404.26551525335026
+      }, 
+      "inlet": {
+        "faces": 1, 
+        "areaM2": 22.902210273068526
+      }, 
+      "missile_body": {
+        "faces": 3, 
+        "areaM2": 1.8255682876006398
+      }
+    }, 
+    "expected": {
+      "wall": "wall", 
+      "enclosure": {
+        "back": "outlet", 
+        "front": "inlet", 
+        "wall": "wall"
+      }, 
+      "keep": [
+        "Missile", 
+        "BOI", 
+        "Enclosure"
+      ], 
+      "groups": {
+        "tip": "missile_nose_tip", 
+        "cylinder": "missile_body", 
+        "shoulder": "missile_body", 
+        "cone": "missile_nose", 
+        "base": "missile_body", 
+        "fin": "missile_fin"
+      }
+    }, 
+    "names": [
+      "missile_nose", 
+      "outlet", 
+      "missile_fin", 
+      "missile_nose_tip", 
+      "wall", 
+      "inlet", 
+      "missile_body"
+    ]
+  }, 
+  "modelBodyCount": 1, 
+  "edgeCount": 100, 
+  "modelPath": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\missile.scdoc", 
+  "diagnostics": {
+    "componentNames": [
+      "Enclosure"
+    ], 
+    "freshAfter_rear": 2, 
+    "assemblyImageNamedView": false, 
+    "edgeArcRadii": "error: \u672a\u5c06\u5bf9\u8c61\u5f15\u7528\u8bbe\u7f6e\u5230\u5bf9\u8c61\u7684\u5b9e\u4f8b\u3002", 
+    "mergeTargetCount": 17, 
+    "physicsSuppression": {
+      "kept": [
+        {
+          "IsSuppressed": "False", 
+          "name": "Missile", 
+          "Style": "Opaque", 
+          "type": "DesignBody", 
+          "collection": "Bodies"
+        }, 
+        {
+          "IsSuppressed": "False", 
+          "name": "BOI", 
+          "Style": "Opaque", 
+          "type": "DesignBody", 
+          "collection": "Bodies"
+        }, 
+        {
+          "name": "Enclosure", 
+          "type": "Component", 
+          "collection": "Components"
+        }, 
+        {
+          "IsSuppressed": "False", 
+          "name": "<unreadable>", 
+          "Style": "Transparent", 
+          "type": "DesignBodyGeneral", 
+          "collection": "AllBodies"
+        }
+      ], 
+      "failed": [], 
+      "suppressed": [
+        {
+          "isSuppressedAfter": "False", 
+          "name": "", 
+          "isSuppressedBefore": "False", 
+          "type": "CoordinateSystem", 
+          "collection": "CoordinateSystems"
+        }
+      ]
+    }, 
+    "namedSelectionFaceCounts": {
+      "missile_fin": 40, 
+      "missile_nose": 1, 
+      "missile_nose_tip": 1, 
+      "missile_body": 3
+    }, 
+    "freshAfter_front": 2, 
+    "missileFaceCount": 45, 
+    "revolveFaces": [
+      {
+        "area": 0.0018930508198890124, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 1.8275352078041491, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": 0.17999999999999999
+      }, 
+      {
+        "area": 0.025446900494077322, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "area": 0.0002803891817769555, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": "unavailable"
+      }, 
+      {
+        "coneAngle": 0.36329766000002389, 
+        "area": 0.13899696383921509, 
+        "arcRadius": "unavailable", 
+        "cylinderDiameter": "unavailable"
+      }
+    ], 
+    "bodyCenterOfMassAfterRevolve": {
+      "z": -1.8575013977566631e-09, 
+      "y": -8.1526043310929763e-09, 
+      "x": 3.3696709382464176
+    }, 
+    "deletedComponents": [
+      {
+        "bodies": 0, 
+        "name": "", 
+        "type": "Component"
+      }, 
+      {
+        "bodies": 0, 
+        "name": "", 
+        "type": "Component"
+      }, 
+      {
+        "bodies": 0, 
+        "name": "", 
+        "type": "Component"
+      }, 
+      {
+        "bodies": 0, 
+        "name": "", 
+        "type": "Component"
+      }
+    ], 
+    "namedObjects": {
+      "BOI": true, 
+      "Enclosure": true, 
+      "Missile": true
+    }, 
+    "assemblyImage": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\preview-assembly.png", 
+    "patternCreatedTypes": [
+      "Component", 
+      "ComponentGeneral", 
+      "DesignBodyGeneral", 
+      "DesignEdgeGeneral", 
+      "DesignFaceGeneral", 
+      "PartGeneral"
+    ], 
+    "bodyVolumeAfterRevolve": 0.086436530156063077, 
+    "assemblyImageZoom": "ok", 
+    "patternCreated": 344, 
+    "patternBodyCount": 16, 
+    "bodyNames": [
+      "Missile", 
+      "BOI", 
+      "<unreadable>"
+    ], 
+    "bodyAfterRevolve": "5 faces", 
+    "apiVersion": "V241", 
+    "imageZoom": "ok", 
+    "image": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\preview.png", 
+    "documentBodyCount": 3, 
+    "imageNamedView": false, 
+    "bodyExtrema": "<SpaceClaim.Api.V241.Scripting.Helpers.BodyExtremaInfo object at 0x000000000000002B [SpaceClaim.Api.V241.Scripting.Helpers.BodyExtremaInfo]>"
+  }, 
+  "faceCount": 45, 
+  "finPositions": [
+    {
+      "index": 0, 
+      "name": "front", 
+      "centerOfMassM": {
+        "z": 0.0030000000000000001, 
+        "y": 0.17933629410313348, 
+        "x": 3.248015586951157
+      }
+    }, 
+    {
+      "index": 1, 
+      "name": "front", 
+      "centerOfMassM": {
+        "z": -0.0030000000000000001, 
+        "y": 0.17933629410313348, 
+        "x": 3.248015586951157
+      }
+    }, 
+    {
+      "index": 0, 
+      "name": "rear", 
+      "centerOfMassM": {
+        "z": 0.0030000000000000001, 
+        "y": 0.18481203007518787, 
+        "x": 4.8109415584415585
+      }
+    }, 
+    {
+      "index": 1, 
+      "name": "rear", 
+      "centerOfMassM": {
+        "z": -0.0030000000000000001, 
+        "y": 0.18481203007518787, 
+        "x": 4.8109415584415585
+      }
+    }
+  ]
+}

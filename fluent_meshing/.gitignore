@@ -1,0 +1,6 @@
+.python-path
+.mesh-inspect-python
+.mesh_inspect_deps_313/
+__pycache__/
+tests/__pycache__/
+tools/__pycache__/

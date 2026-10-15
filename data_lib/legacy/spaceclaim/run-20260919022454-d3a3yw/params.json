@@ -1,0 +1,431 @@
+{
+  "schemaVersion": 1,
+  "generator": "ansys-scdmdoc-mcp",
+  "units": "m",
+  "params": {
+    "L_N": 0.49,
+    "L": 3.69,
+    "D": 0.18,
+    "L_W": 1.72,
+    "C_RW": 0.23,
+    "C_TW": 0.06,
+    "B_W": 0.23,
+    "L_F": 3.2,
+    "C_RF": 0.38,
+    "C_TF": 0.19,
+    "B_F": 0.22,
+    "t_fin": 0.012,
+    "k_nose": 0.005,
+    "k_tip": 0.002,
+    "fin_phase": "+",
+    "root_overlap": 0.005,
+    "le_mode": "trailing_aligned",
+    "fillet_location": "both",
+    "cruciform_count": 4,
+    "scdm_api_version": "",
+    "enclosure_shape": "cylinder",
+    "enclosure_radius": 2.7,
+    "enclosure_front": 3.69,
+    "enclosure_back": 16.45,
+    "boi_radius": 0.45,
+    "boi_front": 0.5,
+    "boi_back": 2.5,
+    "model_placement": "ensemble",
+    "model_offset": -4,
+    "enclosure_name": "Enclosure",
+    "boi_name": "BOI",
+    "output_dir": "",
+    "file_name": "missile.scdoc"
+  },
+  "placement": {
+    "mode": "ensemble",
+    "rule": 5.38,
+    "offset": 1.38,
+    "requested": -4
+  },
+  "sources": {
+    "L_N": "default",
+    "L": "default",
+    "D": "default",
+    "L_W": "default",
+    "C_RW": "default",
+    "C_TW": "default",
+    "B_W": "default",
+    "L_F": "default",
+    "C_RF": "default",
+    "C_TF": "default",
+    "B_F": "default",
+    "t_fin": "default",
+    "k_nose": "default",
+    "k_tip": "default",
+    "fin_phase": "default",
+    "root_overlap": "default",
+    "le_mode": "default",
+    "fillet_location": "default",
+    "cruciform_count": "default",
+    "scdm_api_version": "default",
+    "enclosure_shape": "default",
+    "enclosure_radius": "default",
+    "enclosure_front": "default",
+    "enclosure_back": "default",
+    "boi_radius": "default",
+    "boi_front": "default",
+    "boi_back": "default",
+    "model_placement": "default",
+    "model_offset": "default",
+    "enclosure_name": "default",
+    "boi_name": "default",
+    "output_dir": "default",
+    "file_name": "default"
+  },
+  "warnings": [],
+  "corrections": [],
+  "geometry": {
+    "units": "m",
+    "R": 0.09,
+    "L": 3.69,
+    "D": 0.18,
+    "body": {
+      "R": 0.09,
+      "segments": [
+        {
+          "type": "arc",
+          "kind": "tip",
+          "center": [
+            1.3873799999999998,
+            0
+          ],
+          "from": [
+            1.38,
+            0
+          ],
+          "mid": [
+            1.381709749711707,
+            0.0047236280196597605
+          ],
+          "to": [
+            1.3860467917799768,
+            0.007258578086792402
+          ],
+          "sweep": "cw",
+          "sense": true,
+          "radius": 0.00738
+        },
+        {
+          "type": "line",
+          "from": [
+            1.3860467917799768,
+            0.007258578086792402
+          ],
+          "to": [
+            1.8348751794887814,
+            0.089696445216981
+          ],
+          "kind": "cone"
+        },
+        {
+          "type": "arc",
+          "kind": "shoulder",
+          "center": [
+            1.8382082000388391,
+            0.07155
+          ],
+          "from": [
+            1.8348751794887814,
+            0.089696445216981
+          ],
+          "mid": [
+            1.8365347924754074,
+            0.08992395458595263
+          ],
+          "to": [
+            1.8382082000388391,
+            0.09
+          ],
+          "sweep": "cw",
+          "sense": true,
+          "radius": 0.01845
+        },
+        {
+          "type": "line",
+          "from": [
+            1.8382082000388391,
+            0.09
+          ],
+          "to": [
+            5.07,
+            0.09
+          ],
+          "kind": "cylinder"
+        },
+        {
+          "type": "line",
+          "from": [
+            5.07,
+            0.09
+          ],
+          "to": [
+            5.07,
+            0
+          ],
+          "kind": "base"
+        },
+        {
+          "type": "line",
+          "from": [
+            5.07,
+            0
+          ],
+          "to": [
+            1.38,
+            0
+          ],
+          "kind": "axis"
+        }
+      ],
+      "fillet": {
+        "enabled": true,
+        "r_f": 0.01845,
+        "alpha": 0.18164883000001195,
+        "alphaDeg": 10.40771131249006,
+        "S": 0.49819674828324606,
+        "cx": 0.4916803333980655,
+        "cy": 0.07155,
+        "t": 0.001680333398065435,
+        "t1": [
+          0.48834731284800775,
+          0.089696445216981
+        ],
+        "t2": [
+          0.4916803333980655,
+          0.09
+        ],
+        "mid": [
+          0.49000692583463384,
+          0.08992395458595263
+        ],
+        "sweep": "cw"
+      },
+      "tip": {
+        "enabled": true,
+        "r_t": 0.00738,
+        "alpha": 0.18164883000001195,
+        "alphaDeg": 10.40771131249006,
+        "d": 0.040852133359226175,
+        "offset": 0.03347213335922618,
+        "front": [
+          0.03347213335922618,
+          0
+        ],
+        "tangent": [
+          0.03951892513920308,
+          0.007258578086792402
+        ],
+        "mid": [
+          0.03518188307093332,
+          0.0047236280196597605
+        ],
+        "sweep": "cw",
+        "maxRadius": 0.0915055251948819,
+        "maxK": 0.0247982453102661
+      },
+      "shift": 1.3465278666407736,
+      "offset": 1.38
+    },
+    "expectedAreas": {
+      "faces": [
+        {
+          "kind": "tip",
+          "area": 0.0002803891759143343
+        },
+        {
+          "kind": "cone",
+          "area": 0.1389969638392153
+        },
+        {
+          "kind": "shoulder",
+          "area": 0.0018930508198890118
+        },
+        {
+          "kind": "cylinder",
+          "area": 1.8275352078041494
+        },
+        {
+          "kind": "base",
+          "area": 0.025446900494077326
+        }
+      ],
+      "total": 1.9941525121332455
+    },
+    "expectedVolume": 0.08643655830342178,
+    "bodyCenterOfMass": 3.3696708050876754,
+    "fins": [
+      {
+        "name": "front",
+        "thickness": 0.012,
+        "points": [
+          [
+            3.0963043478260865,
+            0.08499999999999999
+          ],
+          [
+            3.3299999999999996,
+            0.08499999999999999
+          ],
+          [
+            3.3299999999999996,
+            0.32
+          ],
+          [
+            3.2699999999999996,
+            0.32
+          ]
+        ],
+        "tip_radius": 0.32,
+        "root_radius": 0.08499999999999999,
+        "surface_radius": 0.09,
+        "le_at_surface": 3.0999999999999996,
+        "buried_le": 3.0963043478260865,
+        "te": 3.3299999999999996,
+        "tip_le": 3.2699999999999996,
+        "root_chord_at_surface": 0.23,
+        "centroid": [
+          3.2480155869511593,
+          0.17933629410313368
+        ],
+        "leAtSurface": 3.0999999999999996,
+        "leStation": 3.0999999999999996,
+        "rootChordAtSurface": 0.23,
+        "leFromNoseTip": 1.7199999999999998,
+        "leFromNoseJunction": 1.2617917999611605
+      },
+      {
+        "name": "rear",
+        "thickness": 0.012,
+        "points": [
+          [
+            4.575681818181819,
+            0.08499999999999999
+          ],
+          [
+            4.96,
+            0.08499999999999999
+          ],
+          [
+            4.96,
+            0.31
+          ],
+          [
+            4.7700000000000005,
+            0.31
+          ]
+        ],
+        "tip_radius": 0.31,
+        "root_radius": 0.08499999999999999,
+        "surface_radius": 0.09,
+        "le_at_surface": 4.58,
+        "buried_le": 4.575681818181819,
+        "te": 4.96,
+        "tip_le": 4.7700000000000005,
+        "root_chord_at_surface": 0.38,
+        "centroid": [
+          4.810941558441559,
+          0.18481203007518807
+        ],
+        "leAtSurface": 4.58,
+        "leStation": 4.58,
+        "rootChordAtSurface": 0.38,
+        "leFromNoseTip": 3.2,
+        "leFromNoseJunction": 2.741791799961161
+      }
+    ],
+    "cruciform_count": 4,
+    "fin_phase_deg": 0,
+    "tip_to_tip": 0.64,
+    "expectedFinFaceCount": 40,
+    "model_offset": 1.38,
+    "nose_tip_x": 1.38,
+    "tip_offset": 0.03347213335922618,
+    "nose_junction_x": 1.8382082000388391,
+    "expectedExtents": {
+      "axial": 3.69,
+      "lateral": 0.64,
+      "vertical": 0.64
+    }
+  },
+  "regions": [
+    {
+      "name": "enclosure",
+      "shape": "cylinder",
+      "radius": 2.7,
+      "front": 3.69,
+      "back": 16.45,
+      "bodyName": "Enclosure",
+      "shift": 0,
+      "xFront": -3.69,
+      "xBack": 20.14,
+      "length": 23.830000000000002,
+      "expectedExtents": {
+        "axial": 23.830000000000002,
+        "lateral": 5.4,
+        "vertical": 5.4
+      },
+      "expectedVolume": 545.7596748964766,
+      "mode": "enclosure-command",
+      "envelopeRadius": 0.4525483399593905,
+      "cushion": {
+        "axisLow": 5.07,
+        "axisHigh": 15.07,
+        "radius": 2.2474516600406096
+      }
+    },
+    {
+      "name": "boi",
+      "shape": "cylinder",
+      "radius": 0.45,
+      "front": 0.5,
+      "back": 2.5,
+      "bodyName": "BOI",
+      "shift": 1.38,
+      "xFront": 0.8799999999999999,
+      "xBack": 7.57,
+      "length": 6.69,
+      "expectedExtents": {
+        "axial": 6.69,
+        "lateral": 0.9,
+        "vertical": 0.9
+      },
+      "expectedVolume": 4.255994107634433,
+      "mode": "revolve"
+    }
+  ],
+  "namedSelections": {
+    "groups": {
+      "tip": "missile_nose_tip",
+      "cone": "missile_nose",
+      "shoulder": "missile_body",
+      "cylinder": "missile_body",
+      "base": "missile_body",
+      "fin": "missile_fin"
+    },
+    "enclosure": {
+      "front": "inlet",
+      "wall": "wall",
+      "back": "outlet"
+    },
+    "keep": [
+      "Missile",
+      "BOI",
+      "Enclosure"
+    ],
+    "wall": "wall"
+  },
+  "output": {
+    "model": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\missile.scdoc",
+    "result": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\result.json",
+    "diagnostic": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\diagnostic.txt",
+    "image": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\preview.png",
+    "assemblyImage": "D:\\2_my_sci_train\\scdoc_file\\run-20260919022454-d3a3yw\\preview-assembly.png"
+  },
+  "apiVersion": "V241"
+}

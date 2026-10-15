@@ -1,0 +1,225 @@
+{
+  "source": "migration",
+  "runtimeVerified": false,
+  "createdAt": "2026-10-14T08:53:05.7176644Z",
+  "snapshot": "archive/migration-20261014T084018Z",
+  "schemaVersion": 1,
+  "files": [
+    {
+      "originalPath": "prompt/params_mine.json",
+      "path": "data_lib/inputs/params_mine.json",
+      "size": 663,
+      "sha256": "6f00c6c7535cd2ef8157596f8066fe9822fe0cf7bb127be54aa26ec2a48a093c"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/fluent-20260920-203110-30340.trn",
+      "path": "data_lib/legacy/fluent_meshing/generated/fluent-20260920-203110-30340.trn",
+      "size": 27641,
+      "sha256": "3863fdd0ffb4fb4680634cce8715cf3e07878ea267821747df5b4b6c10459e7a"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh.msh.h5",
+      "size": 516167026,
+      "sha256": "712ddc0282003f84261c26bb92d3b215a99d12f74463cb828d4141446f6e73a4"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/geometry/missile.scdoc",
+      "path": "data_lib/inputs/fluent_meshing/geometry/missile.scdoc",
+      "size": 148676,
+      "sha256": "ac9818ed500575922036af6825cb8aa6f32c4e3c2ced8a5bbeec4d83c18dbd0b"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/logs/mesh_20260920_143851.log",
+      "path": "data_lib/legacy/fluent_meshing/generated/logs/mesh_20260920_143851.log",
+      "size": 12262,
+      "sha256": "7825a2f46bf1267efe29cfdad2840a2150f65b795cc90d3c034e6dddd527fbd5"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/logs/mesh_20260920_143851.trn",
+      "path": "data_lib/legacy/fluent_meshing/generated/logs/mesh_20260920_143851.trn",
+      "size": 28104,
+      "sha256": "b3975a1744a8921229dc04d5448741ca75eff1794b5c1af15b6b205d8ea7028e"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/logs/missile_mesh.json",
+      "path": "data_lib/legacy/fluent_meshing/generated/logs/missile_mesh.json",
+      "size": 7265,
+      "sha256": "d1589f9f9d943a9c27a6ec1142cca2ef218738b68ab36a1cd62be97be20b6ab6"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/missile_mesh.wft",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/missile_mesh.wft",
+      "size": 14832,
+      "sha256": "cd15c9e304863a9e6883ab9bd7a05f8c83d78396b6440b8759d5fb2b4ebe20ec"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/missile.scdoc.pmdb",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/missile.scdoc.pmdb",
+      "size": 530152,
+      "sha256": "6b053eedbfcb90e8eb4325b51f6b49779b6eeda31cacb1649495c40f4cc7d2ab"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/missile.sf",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/missile.sf",
+      "size": 2261389,
+      "sha256": "23cf33dc824c229613a08ae808655868609ef6b35d460bb9bf40082eba2d4846"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/TaskObject11.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/TaskObject11.msh.h5",
+      "size": 1874516,
+      "sha256": "59c1e61f6367b22bb84b71f6ecfe0ebf218870aa790184e9ed785652a0813ca7"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/TaskObject3.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/TaskObject3.msh.h5",
+      "size": 251885,
+      "sha256": "bdc0075fd04b586c8d56b6a8c5af480ea1a3b7c490deb419622d0c62059791d8"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/TaskObject5.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/TaskObject5.msh.h5",
+      "size": 1288424,
+      "sha256": "32a36a98d19068328d5367ea7f07129c75798d5c1fde4aebd4f041901482817f"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/TaskObject8.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/TaskObject8.msh.h5",
+      "size": 1874037,
+      "sha256": "b01ad8f546ac63e8a86f835090ca8d24f4e7ad802dde2ca9c4c5293b75d1c631"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/missile_mesh_workflow_files/zone----enclosure----.sf",
+      "path": "data_lib/legacy/fluent_meshing/generated/missile_mesh_workflow_files/zone----enclosure----.sf",
+      "size": 2195868,
+      "sha256": "961b1217a671585f45ba09392b6f70421c1678abdf37dfbd7c37229122223e21"
+    },
+    {
+      "originalPath": "mcp_skill/Fluent_meshing_mcp/runs/mesh_20260920_143851/fluent-20260920-143901-27888.trn",
+      "path": "data_lib/legacy/fluent_meshing/generated/runs/mesh_20260920_143851/fluent-20260920-143901-27888.trn",
+      "size": 28710,
+      "sha256": "450aabed036b031a371d2aeb06e5885744016d1fd9289baca32b97c80aaf11f9"
+    },
+    {
+      "originalPath": "spaceclaim/missile.scdoc",
+      "path": "data_lib/legacy/spaceclaim/missile.scdoc",
+      "size": 148676,
+      "sha256": "ac9818ed500575922036af6825cb8aa6f32c4e3c2ced8a5bbeec4d83c18dbd0b"
+    },
+    {
+      "originalPath": "spaceclaim/preview-assembly.png",
+      "path": "data_lib/legacy/spaceclaim/preview-assembly.png",
+      "size": 54479,
+      "sha256": "ca55cf058b2382ae9c127c9ec4e7e2b36805abafb988d1e9bb4faff751c3e236"
+    },
+    {
+      "originalPath": "spaceclaim/preview.png",
+      "path": "data_lib/legacy/spaceclaim/preview.png",
+      "size": 48354,
+      "sha256": "0740621d8020bc70e041d6d7024caddef8bb548c2d1b7d746eb85ac3ade3e4b5"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/missile.scdoc",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/missile.scdoc",
+      "size": 148676,
+      "sha256": "ac9818ed500575922036af6825cb8aa6f32c4e3c2ced8a5bbeec4d83c18dbd0b"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/model.py",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/model.py",
+      "size": 33225,
+      "sha256": "e0691e95030e8e13074119418276a77d42ed0f0e024a5a8484e73ca28a3f1f2a"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/params.json",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/params.json",
+      "size": 10082,
+      "sha256": "c41ab6959230987d4012a2bd38cbb6ad901a900a743ca1aca9ddb30c9c09facd"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/preview-assembly.png",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/preview-assembly.png",
+      "size": 54479,
+      "sha256": "ca55cf058b2382ae9c127c9ec4e7e2b36805abafb988d1e9bb4faff751c3e236"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/preview.png",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/preview.png",
+      "size": 48354,
+      "sha256": "0740621d8020bc70e041d6d7024caddef8bb548c2d1b7d746eb85ac3ade3e4b5"
+    },
+    {
+      "originalPath": "spaceclaim/run-20260919022454-d3a3yw/result.json",
+      "path": "data_lib/legacy/spaceclaim/run-20260919022454-d3a3yw/result.json",
+      "size": 15324,
+      "sha256": "28d2e14bdc662c8de1afb1372afc0a59cd0b4394e1c20200e8317324150771ef"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/fluent-20260920-105954-19336.trn",
+      "path": "data_lib/legacy/fluent_meshing/reference/fluent-20260920-105954-19336.trn",
+      "size": 36242,
+      "sha256": "ef519f756326fe96ea0f28d7e3070446cff96f8061a1ed02f6762f121d82e7c0"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/fluent-20260920-114313-3480.trn",
+      "path": "data_lib/legacy/fluent_meshing/reference/fluent-20260920-114313-3480.trn",
+      "size": 3662,
+      "sha256": "f45c3bc9145a2a9303704e5e77e30ca273f12db0b4d67fc93ef9ed3f8ade0d2b"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile.msh.h5",
+      "size": 516167042,
+      "sha256": "de9e0c94cdcdf9088a15b0c27eb096cb8f9dba80b15bae68744e363fe2e7f591"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/missile.scdoc.pmdb",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/missile.scdoc.pmdb",
+      "size": 530152,
+      "sha256": "4d57fd7224c99936b84daeb9ecd8bb45da0c126bf4a9df274dbdf7480ed54a53"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/missile.sf",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/missile.sf",
+      "size": 2261389,
+      "sha256": "23cf33dc824c229613a08ae808655868609ef6b35d460bb9bf40082eba2d4846"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/missile.wft",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/missile.wft",
+      "size": 19178,
+      "sha256": "08c9ae598508970318cb69db30731379d401a78b8f2363b138e750568dade2bf"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/TaskObject11.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/TaskObject11.msh.h5",
+      "size": 1874545,
+      "sha256": "d455f23704f0af0e2258c4bb6216a58fe4264ba4137dbda44f4d0c563e0c5a8e"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/TaskObject3.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/TaskObject3.msh.h5",
+      "size": 252497,
+      "sha256": "54c2ea40a02cc4d529a0e597296e1e335eca4e6e5e6d109723faca03f0d3a6a3"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/TaskObject5.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/TaskObject5.msh.h5",
+      "size": 1288909,
+      "sha256": "f5ba08eec23d3f2bcb1fab08da090e38e4fc89e82f76fef65bd8de0c7b3af704"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/TaskObject8.msh.h5",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/TaskObject8.msh.h5",
+      "size": 1874415,
+      "sha256": "236dbcfd11be4edf619f564c14c02ebe0d72e0958107ebf72708a74f35431d1f"
+    },
+    {
+      "originalPath": "fluent_meshing/mesh/missile_workflow_files/zone----enclosure----.sf",
+      "path": "data_lib/legacy/fluent_meshing/reference/missile_workflow_files/zone----enclosure----.sf",
+      "size": 2195868,
+      "sha256": "961b1217a671585f45ba09392b6f70421c1678abdf37dfbd7c37229122223e21"
+    }
+  ]
+}

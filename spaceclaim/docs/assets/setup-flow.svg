@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">ANSYS SCDM MCP setup and search flow</title>
+  <desc id="desc">The setup page chooses AWP_ROOT or a manual SpaceClaim executable path, validates the official CHM, then exposes API search and inferred Python candidates.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#071426"/><stop offset="1" stop-color="#102b4a"/></linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#163453"/><stop offset="1" stop-color="#0d2038"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#55d6ff"/></marker>
+    <filter id="glow"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="620" rx="28" fill="url(#bg)"/>
+  <text x="70" y="72" fill="#f1f8ff" font-family="Segoe UI,Arial,sans-serif" font-size="34" font-weight="700">首次配置 → 官方 API 查询 → Python 候选</text>
+  <text x="72" y="108" fill="#9fc4df" font-family="Segoe UI,Arial,sans-serif" font-size="18">Local-first workflow · no hard-coded ANSYS installation path</text>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <rect x="70" y="175" width="300" height="260" rx="20" fill="url(#card)" stroke="#3b7ca5" stroke-width="2"/>
+    <circle cx="110" cy="220" r="24" fill="#ff9d3c"/><text x="110" y="228" text-anchor="middle" font-size="22" font-weight="700" fill="#071426">1</text>
+    <text x="150" y="228" fill="#fff" font-size="23" font-weight="700">浏览器首次配置</text>
+    <text x="102" y="278" fill="#c5dfef" font-size="18">选择一种来源：</text>
+    <text x="112" y="316" fill="#55d6ff" font-size="19">▾ AWP_ROOT&lt;版本&gt;</text>
+    <text x="112" y="354" fill="#55d6ff" font-size="19">▸ SpaceClaim.exe</text>
+    <text x="102" y="402" fill="#9fc4df" font-size="16">保存到用户配置目录</text>
+    <rect x="450" y="175" width="300" height="260" rx="20" fill="url(#card)" stroke="#3b7ca5" stroke-width="2"/>
+    <circle cx="490" cy="220" r="24" fill="#ff9d3c"/><text x="490" y="228" text-anchor="middle" font-size="22" font-weight="700" fill="#071426">2</text>
+    <text x="530" y="228" fill="#fff" font-size="23" font-weight="700">路径验证</text>
+    <text x="482" y="282" fill="#c5dfef" font-size="18">定位官方 CHM：</text>
+    <text x="482" y="324" fill="#55d6ff" font-size="17">SpaceClaim.Api.V*</text>
+    <text x="482" y="357" fill="#55d6ff" font-size="17">API_Combined_Class_Library.chm</text>
+    <text x="482" y="402" fill="#9fc4df" font-size="16">失败 → 强制手动输入</text>
+    <rect x="830" y="175" width="300" height="260" rx="20" fill="url(#card)" stroke="#3b7ca5" stroke-width="2"/>
+    <circle cx="870" cy="220" r="24" fill="#ff9d3c"/><text x="870" y="228" text-anchor="middle" font-size="22" font-weight="700" fill="#071426">3</text>
+    <text x="910" y="228" fill="#fff" font-size="23" font-weight="700">MCP 工具</text>
+    <text x="862" y="282" fill="#55d6ff" font-size="18">search_api</text>
+    <text x="862" y="318" fill="#55d6ff" font-size="18">get_doc</text>
+    <text x="862" y="354" fill="#55d6ff" font-size="18">find_python_command</text>
+    <text x="862" y="390" fill="#55d6ff" font-size="18">get_geometry_recipe</text>
+  </g>
+  <path d="M375 305 H440" stroke="#55d6ff" stroke-width="4" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M755 305 H820" stroke="#55d6ff" stroke-width="4" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <rect x="70" y="500" width="1060" height="70" rx="16" fill="#0a1b30" stroke="#245879"/>
+  <text x="600" y="544" text-anchor="middle" fill="#e8f7ff" font-family="Consolas,monospace" font-size="20">official-doc evidence  +  inferred Python  +  runtime verification</text>
+</svg>

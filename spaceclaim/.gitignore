@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+*.log
+.cache/
+.scdm-cache/
+.scdm-index*.json
+*.chm
+*.hhc
+*.hhk
+extracted-*/
+html/

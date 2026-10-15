@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "dataRoot": "data_lib",
+  "feedbackRoot": "feedback",
+  "legacyRoot": "data_lib/legacy",
+  "inputRoot": "data_lib/inputs"
+}

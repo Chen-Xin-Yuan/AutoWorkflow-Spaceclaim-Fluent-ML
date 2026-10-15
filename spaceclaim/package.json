@@ -1,0 +1,30 @@
+{
+  "name": "ansys-scdmdoc-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP search server for SpaceClaim.Api V261 CHM documentation and SCDM Python command candidates",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "ansys",
+    "spaceclaim",
+    "scdm",
+    "cad"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs",
+    "verify:real": "node scripts/verify-real.mjs",
+    "verify:geometry": "node scripts/verify-geometry.mjs",
+    "setup": "node scripts/setup.mjs",
+    "missile": "node scripts/missile.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
+  }
+}
