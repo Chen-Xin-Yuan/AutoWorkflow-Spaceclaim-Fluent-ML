@@ -1,107 +1,129 @@
-# 当前工作区入口与数据位置
+# Fluent Meshing 自动网格划分
 
-本项目已迁移为工作区的 fluent_meshing 项目根。以下入口和数据约定用于当前版本，后续原文中的历史案例设置保留作参考。
+本仓库使用 **ANSYS Fluent Meshing 2024 R1 + PyFluent**，对显式提供的 `.scdoc`
+执行 Watertight Geometry 工作流。当前只支持从原 `missile.msh.h5` 记录中复现的专用
+`recorded` 流程；参数来源见 [fluent_meshing.md](fluent_meshing.md)。输入模型必须提供下文要求的标签和区域。
 
-- 从任意目录调用根 `scripts/run.ps1 verify-meshing -Geometry <新生成的 .scdoc>`；入口必须显式给出几何，没有默认模型。
-- run_meshing.cmd 保留原命令行选项，另有 `--geometry`、`--run-dir`、`--out`、`--start-timeout`、`--timeout`、`--stop-after`。
-- 工作流只有原来的专用 7 步 recorded 流程：局部尺寸（4 个曲率控制 + BOI）→ 面网格 → 描述几何 → 共享拓扑 → 创建区域 → 更新区域 → 边界层 → 体网格。
-- 导入后核对必需标签（`missile_body` / `missile_nose` / `missile_nose_tip` / `missile_fin` / `missile-boi`）；区域与边界层区域必须唯一匹配，缺失或多义都直接报错，不再回退到猜测的名字。
-- 新运行记录与合格产物归 data_lib/runs；失败日志、参数和实际失败产物归 feedback/fluent_meshing。
-- `--out` 指定文件须不存在；`--run-dir` 须使用新目录。主动 `--stop-after` 记录 STOPPED，不作为完整验收通过。
-- PyFluent 环境 `_deps` 与网格文件核验环境互相隔离：真实工作流只把 `_deps` 放入 PYTHONPATH；导出的 `.msh.h5` 由 `mesh_check.cmd`（解释器记录在 `.mesh-inspect-python`，依赖在 `.mesh_inspect_deps_313`）独立核验，supervisor 在同一记录里写入 `exportedMesh`。
-- 历史参考及生成结果分别归 data_lib/legacy/fluent_meshing/reference 和 generated；比较工具默认使用这两处历史 workflow。
-- 真实验收对象是新生成的 `.scdoc`：标签、区域、体网格区域、边界组都由本次导入的模型决定。
+运行模型、网格和日志保存在仓库外的工作区数据目录。以下说明对应当前脚本；末尾的数值和对比结果是历史记录。
 
----
-# missile.scdoc 自动网格划分脚本
+## 1. 当前目录与数据位置
 
-本目录下的脚本用 **ANSYS Fluent Meshing 2024 R1 + PyFluent** 自动完成
-`missile.scdoc` 的整套 Watertight Geometry 工作流，并把生成的网格导出到本目录。
-所有参数取自本目录的 `fluent_meshing.md`（该文档是从原 `missile.msh.h5` 中读出的配置）。
-
-## 1. 交付内容
-
-| 文件 | 说明 |
+| 文件或目录 | 用途 |
 | --- | --- |
-| `mesh_missile.py` | 主脚本：启动 Fluent Meshing，按 7 个步骤自动布网格，最后写出 mesh |
-| `run_meshing.cmd` | Windows 启动器：自动找到 Python 3.10/3.11 并设置 `PYTHONPATH=.\_deps` |
-| `missile_mesh.msh.h5` | **生成的网格文件（导出到本目录）**，516,167,026 字节 |
-| `missile_mesh_workflow_files\` | Fluent 随网格一起写出的工作流文件（`missile_mesh.wft`、中间网格等） |
-| `geometry\missile.scdoc` | 输入几何（与用户提供的附件 SHA256 完全一致） |
-| `logs\` | 最近一次运行的日志：`mesh_*.log`（脚本日志）、`mesh_*.trn`（Fluent 原始 transcript）、`missile_mesh.json`（网格内嵌工作流参数） |
-| `runs\` | Fluent 运行目录（临时文件、失败时保存的 `failed_workflow.wft`） |
-| `tools\compare_with_reference.py` | 校验工具：把生成的 `.wft` 与原始 `missile.wft` 逐参数对比 |
-| `_deps\` | 本地安装的 PyFluent（ansys-fluent-core 0.19.2），脚本运行所需 |
+| `mesh_missile.py` | 工作流参数、任务实现和命令行入口 |
+| `mesh_runner.py` | 参数解析、Fluent 启动、工作流执行和导出检查 |
+| `mesh_validation.py` | Fluent 网格检查、正交质量解析和导出文件拓扑核验 |
+| `workspace_runtime.py` | 读取工作区配置、管理运行记录、超时处理和独立文件核验 |
+| `run_meshing.cmd` | 使用独立 `_deps` 环境启动划分流程 |
+| `mesh_check.cmd` | 使用独立 h5py 环境读取导出的 `.msh.h5`，输出维度、单位、网格数量和区域信息 |
+| `fluent_meshing.md` | 从历史网格提取的工作流配置参考 |
+| `tools/` | `compare_with_reference.py` 比较工作流参数；`inspect_mesh_file.py` 读取网格文件；`probe_regions.py` 诊断模型标签和区域；`__pycache__/` 为生成缓存，不纳入版本控制，不手工编辑 |
+| `tests/` | `test_workflows.py` 验证质量解析、名称匹配、导出核验和运行记录等逻辑；`__pycache__/` 为生成缓存，不纳入版本控制，不手工编辑 |
+| `.vscode/` | 本地编辑器配置，当前包含 `settings.json` |
+| `_deps/` | 本地 PyFluent 依赖（ansys-fluent-core 0.19.2）；不纳入版本控制，不手工编辑 |
+| `.mesh_inspect_deps_313/` | 当前 CPython 3.13 网格读取依赖（h5py 3.16.0 及配套 NumPy）；不纳入版本控制，不手工编辑 |
+| `.mesh_inspect_deps/` | 保留的旧 CPython 3.12 网格读取依赖，当前启动器不使用；不纳入版本控制，不手工编辑 |
+| `__pycache__/` | Python 自动生成的缓存；不纳入版本控制，不手工编辑 |
+| `.python-path` / `.mesh-inspect-python` | 本机解释器路径配置；不纳入版本控制 |
+
+工作区根目录是本仓库的父目录，运行数据位置由其 `workspace.json` 配置。默认约定如下（均相对工作区根目录）：
+
+| 位置 | 用途 |
+| --- | --- |
+| `data_lib/runs/<run-id>/fluent_meshing/` | 新运行记录、工作文件、日志和默认导出的 `missile_mesh.msh.h5` |
+| `feedback/fluent_meshing/<run-id>/` | 失败运行的记录、日志、参数和实际产生的失败产物 |
+| `data_lib/legacy/fluent_meshing/reference/` | 历史参考网格和工作流 |
+| `data_lib/legacy/fluent_meshing/generated/` | 历史生成网格和工作流 |
+
+每次运行使用新目录。常见记录包括 `run.json`、`request.json`、`pipeline.log`、`supervisor.log`、
+`validation.trn`、`quality-native.json`、`quality.json` 和 `mesh-inspection.json`；工作流按状态保存为
+`completed_workflow.wft`、`stopped_workflow.wft` 或 `failed_workflow.wft`。文件是否产生取决于实际执行阶段。
 
 ## 2. 运行环境
 
-* 已安装 ANSYS Fluent 2024 R1，环境变量 `AWP_ROOT241` 指向安装目录；
-  许可证服务器可用（`ANSYSLMD_LICENSE_FILE=1055@localhost`）。
-* Python 3.10 或 3.11（PyFluent 0.19.2 不支持 3.13）。
-  本机使用 `D:\ProgarmFile\Python310\python.exe`，PyFluent 安装在 `.\_deps`。
-* 无需额外安装 ANSYS 官方 Python 包，`run_meshing.cmd` 会设置好 `PYTHONPATH`。
-* 网格文件核验使用**另一套**环境：`.mesh_inspect_deps_313`（h5py 3.16.0，配本机 CPython 3.13）+
-  解释器记录文件 `.mesh-inspect-python`（被 Git 忽略）。原 `.mesh_inspect_deps` 是 CPython 3.12 的构建，
-  与本机 3.13 解释器 ABI 不符，保留但不再使用；两套依赖不混用。重建方式：
+- ANSYS Fluent 2024 R1 和可用许可证；通过 `AWP_ROOT241` 等受支持的环境配置发现安装，不在源码或文档中固定安装路径和许可连接信息。
+- 划分流程使用 Python 3.10 或 3.11，以及 `_deps/` 中的 PyFluent 0.19.2。
+  `run_meshing.cmd` 优先使用 `FLUENT_MESH_PYTHON`，其次读取 `.python-path`，再查找本机 3.10/3.11 解释器；`PYTHONPATH` 由启动器按脚本所在目录设置。
+- 导出文件核验使用独立的 CPython 3.13 环境和 `.mesh_inspect_deps_313/`。
+  解释器通过 `MESH_INSPECT_PYTHON` 或 `.mesh-inspect-python` 配置。
+- `_deps/`、`.mesh_inspect_deps/` 和 `.mesh_inspect_deps_313/` 的 Python/NumPy 环境保持隔离，保留原有版本，不合并依赖目录。
 
-```bat
-python -m pip install --target .mesh_inspect_deps_313 "h5py==3.16.0" --no-deps --only-binary=:all:
+## 3. 使用方法与验收
+
+以下示例在本仓库目录中用 PowerShell 执行，`run-xxxx` 应替换为实际的几何生成记录目录。必须显式提供新生成的 `.scdoc`，没有默认输入模型。
+
+```powershell
+# 工作区统一入口
+..\scripts\run.ps1 verify-meshing -Geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc
+
+# 也可直接使用本仓库启动器
+.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc -n 8
+
+# 调试：只执行到局部尺寸设置完成
+.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc --stop-after sizing
 ```
 
-## 3. 使用方法
+| 选项 | 说明 |
+| --- | --- |
+| `--geometry` | 必填，输入 `.scdoc` 路径 |
+| `-n` / `--processors` | Fluent 进程数，默认 16，必须为正数 |
+| `--run-dir` | 指定新的运行目录，目录须不存在；应放在 `data_lib/runs/` 下 |
+| `--out` | 指定新的网格文件路径，文件须不存在；应放在仓库外的运行数据目录中 |
+| `--start-timeout` | Fluent 启动超时秒数，默认 300，必须为正数 |
+| `--timeout` | 工作进程运行时限秒数，默认 900，必须为正数；随后独立文件核验另有 600 秒时限 |
+| `--keep-fluent` | 运行结束后保留 Fluent 进程 |
+| `--show-gui` | 显示 Fluent 界面 |
+| `--draw-size-control true\|false` | 是否绘制局部尺寸控制，默认 `true` |
+| `--stop-after` | 在 `import`、`sizing`、`surface`、`describe`、`share`、`regions`、`update-regions`、`bl` 或 `volume` 后主动停止 |
 
-```bat
-:: 必需：给出新生成的几何（没有默认模型）
-run_meshing.cmd --geometry D:\runs\run-xxxx\spaceclaim\missile.scdoc
+导入后核对必需标签：`missile_body`、`missile_nose`、`missile_nose_tip`、`missile_fin`、`missile-boi`。
+区域与边界层作用范围必须能够唯一匹配；缺失或多义会报错。体网格检查还会确认实际流体区域与工作流设置一致。
 
-:: 指定进程数 / 输出路径 / 保留 Fluent 进程
-run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc -n 8
-run_meshing.cmd --geometry ..\model.scdoc --out D:\somewhere\missile_mesh.msh.h5
-run_meshing.cmd --geometry ..\model.scdoc --keep-fluent
-run_meshing.cmd --geometry ..\model.scdoc --show-gui       :: 带界面运行（调试用）
-run_meshing.cmd --geometry ..\model.scdoc --stop-after sizing
-                                      :: 只跑到某一步（import|sizing|surface|describe|
-                                      :: share|regions|update-regions|bl|volume）
+完整运行先在 Fluent 内执行网格检查和正交质量检查，再由 supervisor 使用独立环境读取导出的 `.msh.h5`。
+当前检查要求最小单元体积为正、最小正交质量大于 0.01；导出文件须为本次生成的非空三维毫米网格，
+包含 `inlet`、`outlet`、`wall`、非空的 missile 壁面和唯一的非空流体单元区域，并与质量报告中的单元数交叉核对。
+核验结果写入 `run.json` 的 `verification`，独立读取结果写入 `verification.exportedMesh`。
+
+- `PASSED`：完整流程及独立导出文件核验通过。
+- `STOPPED`：通过 `--stop-after` 主动停止，`runtimeVerified=false`，不作为完整验收通过；命令退出码仍可为 0。
+- `FAILED`：执行或核验失败，记录和已有产物保留在 `feedback/fluent_meshing/`。
+
+也可单独查看导出文件的结构信息；这条命令不代替完整流程中的质量检查和边界组交叉核验：
+
+```powershell
+.\mesh_check.cmd ..\data_lib\runs\run-xxxx\fluent_meshing\missile_mesh.msh.h5
 ```
-
-也可以直接调用：
-
-```bat
-set PYTHONPATH=%CD%\_deps
-D:\ProgarmFile\Python310\python.exe mesh_missile.py --geometry ..\model.scdoc -n 16
-```
-
-导出的网格由独立的核验环境检查（两套依赖不混用）：
-
-```bat
-mesh_check.cmd ..\data_lib\runs\run-xxxx\fluent_meshing\missile_mesh.msh.h5
-```
-
-本机 16 进程实测：**整流程约 7.5 分钟**（体网格 5.4 分钟）。
 
 ## 4. 脚本执行的步骤与参数（与 `fluent_meshing.md` 一致）
 
 | 步骤 | 任务 | 关键参数 |
 | --- | --- | --- |
-| 1 导入几何 | Import Geometry | 单位 mm，`MaxFacetLength=0`，导入 3 个 parts/objects |
+| 1 导入几何 | Import Geometry | 单位 mm，`MaxFacetLength=0`；导入后的标签必须通过检查，parts/objects 数量由输入模型决定 |
 | 2 添加局部尺寸 | Add Local Sizing | `missile_body` 曲率 3–30 mm，增长率 1.18，法向角 18°，`BOISize=18`<br>`missile_nose` 曲率 2–18 mm，1.18，16°，`BOISize=9`<br>`missile_nose_tip` 曲率 1.6–10 mm，1.15，18°，`BOISize=6`<br>`missile_fin` 曲率 3–40 mm，1.2，18°<br>`boi_1` Body Of Influence 目标尺寸 30 mm，增长率 1.2，标签 `missile-boi` |
 | 3 生成面网格 | Generate the Surface Mesh | 全局最小 15 mm、最大 300 mm、增长率 1.2、每间隙单元数 2、邻近作用范围 faces，本步不做共享拓扑 |
 | 4 描述几何结构 | Describe Geometry | 封盖 No、调用共享拓扑 Yes、非共形 No |
 | 4.1 使用共享拓扑 | Apply Share Topology | 间隙距离 3 mm、接口选择 Manual |
 | 4.2 创建区域 | Create Regions | 流动体积数量 1 |
-| 5 更新区域类型 | Update Regions | `zone----enclosure----`：solid → fluid |
-| 6 添加边界层 | Add Boundary Layers → `last-ratio_1` | last-ratio，首层高度 0.07 mm，12 层，连续性 Stair Step，区域类型 fluid-regions，区域 `zone----enclosure----`，区域范围 `missile`，面区域 `missile-zone----enclosure----_43`、`inlet`、`wall`、`outlet` |
-| 7 生成体网格 | Generate the Volume Mesh | polyhedra，Region-based，不划分固体区域；区域最大单元长度 `missile` 25 mm、`zone----enclosure----` 500 mm，增长率 1.2，全局控制块 1.2 / 80 mm |
-| 8 校验 | — | check-mesh、列出 boundary zones 与 scoped sizing、复制 Fluent transcript、导出工作流参数 |
-| 9 写出网格 | — | `file/write-mesh` → `missile_mesh.msh.h5` |
+| 5 更新区域类型 | Update Regions | 将实际检测并匹配的区域设为 fluid；历史参考名为 `zone----enclosure----` |
+| 6 添加边界层 | Add Boundary Layers → `last-ratio_1` | last-ratio，首层高度 0.07 mm，12 层，连续性 Stair Step，区域类型 fluid-regions；按实际模型匹配区域和面区域，历史配置为 `zone----enclosure----`、`missile` 及 `missile-zone----enclosure----_43`、`inlet`、`wall`、`outlet` |
+| 7 生成体网格 | Generate the Volume Mesh | polyhedra，Region-based，不划分固体区域；匹配 `missile` 与 enclosure 区域，最大单元长度分别为 25 / 500 mm，增长率 1.2，全局控制块 1.2 / 80 mm |
+| 8 会话内校验 | — | 执行 check-mesh，读取原生正交质量、单元区域与边界组，保存检查报告 |
+| 9 写出与独立核验 | — | 写出 `missile_mesh.msh.h5`，由独立环境读取文件并交叉核验；默认输出到本次运行目录 |
 
-## 5. 验证结果
+上述编号沿用历史参数文档，其中描述几何包含 4.1、4.2 子步骤；当前实际执行顺序为：
+导入与标签检查 → 局部尺寸 → 面网格 → 描述几何 → 共享拓扑 → 创建区域 → 更新区域 → 边界层 → 体网格 → 校验与导出。
 
-**(a) 网格规模、质量与区域拓扑（本次生成 vs 原 `missile.msh.h5`）**
+## 5. 历史验证记录（仅供参考）
 
-直接读取两个 `.msh.h5` 的 `/meshes/1` 属性与 `/meshes/1/*/zoneTopology` 对比，结果**完全一致**：
+以下数据保留自迁移前的记录，本次 README 更新未重新运行 Fluent，也未重新验证这些产物。
+历史参考及生成文件位于 `data_lib/legacy/fluent_meshing/`；这些数值不代表新模型的验收结果。
+历史记录中，16 进程整流程约 7.5 分钟（体网格约 5.4 分钟），实际耗时随模型和环境变化。
 
-| 项目 | 原文件 | 本次生成 |
+**(a) 网格规模、质量与区域拓扑（历史生成 vs 原 `missile.msh.h5`）**
+
+历史记录中的 `/meshes/1` 属性、区域拓扑和质量对比如下（网格统计与质量一致，文件大小略有差异）：
+
+| 项目 | 原文件 | 历史生成 |
 | --- | ---: | ---: |
 | 体单元数 cellCount | 2,518,996 | 2,518,996 |
 | 面数 faceCount | 15,519,933 | 15,519,933 |
@@ -133,14 +155,24 @@ mesh_check.cmd ..\data_lib\runs\run-xxxx\fluent_meshing\missile_mesh.msh.h5
 
 **(b) 逐参数对比**
 
-```bat
+```powershell
 python tools\compare_with_reference.py
 ```
 
-结果：17 个任务中，除下面列出的 3 处非网格参数差异外，**其余任务参数完全一致**
+不传参数时，比较工具读取 `data_lib/legacy/fluent_meshing/generated/` 和 `reference/` 中的历史工作流。
+比较新的运行须显式指定文件，例如：
+
+```powershell
+python tools\compare_with_reference.py ..\data_lib\runs\run-xxxx\fluent_meshing\completed_workflow.wft
+```
+
+第二个位置参数可指定参考 `.wft`；省略时仍使用历史参考。当前工具只忽略明确列出的任务记录字段，
+并统一 `curvature_1` 与 `missile_nose_tip` 的别名及数值表示；真实参数差异仍会报告并返回非零退出码。
+
+原始历史记录：17 个任务中，除下面列出的 3 处记录或显示项差异外，**其余任务参数完全一致**
 （局部尺寸 5 个控制的 min/max/增长率/法向角/每间隙单元数/BOISize、面网格控制、
 共享拓扑、区域类型、边界层控制、体网格区域尺寸等）。
-已知差异（不影响网格）：
+历史记录列出的差异如下；别名和 `AddChild` 等记录项已由当前比较工具处理，`DrawSizeControl` 仍参与比较：
 
 1. `DrawSizeControl`：原文件为 `true`，脚本默认也是 `true`（headless 亦可用）；
    若加 `--draw-size-control false` 则关闭该显示项。
@@ -155,7 +187,7 @@ python tools\compare_with_reference.py
   在 Windows 作业对象（job object）中会失败，因此脚本固定 `start_watchdog=False`。
 * **ANSYS 许可**：licensing 客户端要把端口文件写到 `%APPDATA%\Ansys`；
   该目录不可写时会报 `Cannot initialize ANSYS Licensing context`。
-  脚本启动前会探测，不可写时自动把 `APPDATA` 重定向到 `.\_appdata`。
+  脚本启动前会探测，不可写时自动把 `APPDATA` 重定向到本次运行目录下的 `_appdata/`。
 * **数值类型**：局部尺寸的数值（最小/最大尺寸、增长率、法向角等）必须传数字而不是字符串，
   否则 Fluent 报 `tg-draw-size-boxes: wta[2](float) ["3"]`。
 * **添加子任务**：`AddChildAndUpdate()` 会立即更新工作流，所以子任务的必填参数

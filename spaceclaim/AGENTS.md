@@ -55,6 +55,14 @@ The fixture must save a fresh SpaceClaim model and write a structured PASS resul
 
 Before editing, inspect the relevant files and preserve unrelated user changes. Prefer small, testable changes and update tests and README together.
 
+### Mandatory README synchronization
+
+- Every code change must include a corresponding README update in the same change. This applies to features, fixes, refactors, scripts, parameters, defaults, configuration, dependencies, and validation behavior.
+- Update the affected directory's `README.md` and the project-level README whenever its usage, capabilities, configuration, outputs, or limitations are affected. Keep `README.md`, `README.en.md`, and `README.bilingual.md` consistent for any information they share.
+- For internal-only changes, update the relevant directory README with the current responsibility, data flow, or verification guidance; do not leave stale descriptions or add a date-only synchronization note.
+- When adding, removing, renaming, or moving a directory, update its parent's README in the same change to list all direct child directories and their purposes. Document dependency, generated, and cache directories as not version-controlled and not to be edited by hand; do not edit their bundled READMEs.
+- Before finishing, compare README commands, MCP tools, parameters, defaults, output paths, evidence claims, and directory listings against the code. A code change without its matching README update is incomplete.
+
 Required checks for normal code changes:
 
 ```powershell

@@ -1,30 +1,75 @@
-# Fluent Meshing 工作流配置记录
+# Fluent Meshing 工作流配置与历史记录
 
-读取日期：2026-09-20。本文按所附工作台截图的步骤顺序，整理 `missile.msh.h5` 中已经保存的配置，不包含新参数或优化建议。
+文档同步日期：2026-10-19。历史参数提取日期：2026-09-20。
 
-文档命名调整：`TaskObject14` 的控制名称统一写为 `missile_nose_tip`，附录中的对应控制名同步写为 `missile_nose_tip_faces`。此调整仅用于本文，源网格文件中的名称未修改。
+本文保留原 `missile.msh.h5` 的配置提取记录，并补充当前自动化脚本如何使用这些参数。下文第 1–7 节及附录 A
+按历史工作台截图顺序记录保存值；“当前脚本与运行约定”及各节的当前实现说明以现有源码为依据。
+本次只更新文档，未重新读取历史网格、计算质量或执行 Fluent；历史任务状态、警告、数量和耗时不作为新运行的验收结果。
 
-## 数据来源与读取说明
+命名约定：历史 `TaskObject14` 的控制名 `curvature_1` 在本文和当前脚本中统一为 `missile_nose_tip`，
+附录中的对应控制名写为 `missile_nose_tip_faces`。源网格文件未修改；当前工作流比较工具会归一此别名。
+
+## 当前脚本与运行约定
+
+当前仅支持专用的 `recorded` 工作流。`mesh_missile.py` 定义参数和任务，`mesh_runner.py` 管理执行与导出，
+`mesh_validation.py` 和 `workspace_runtime.py` 完成会话内检查、独立文件核验与运行记录。
+完整命令行和环境配置见 [README.md](README.md)。
+
+以下命令在本仓库目录中使用 PowerShell 执行，`run-xxxx` 替换为实际几何生成记录目录：
+
+```powershell
+.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc -n 16
+```
+
+| 项目 | 当前行为 |
+| --- | --- |
+| 输入几何 | `--geometry` 必填，没有默认模型；导入时设置 `LengthUnit=mm`、`MaxFacetLength=0`，部件数量由输入决定 |
+| 参数基线 | 按下文的尺寸、面网格、共享拓扑、区域更新、边界层和体网格设置执行；历史底层字段不一定由脚本显式设置 |
+| 必需标签 | `missile_body`、`missile_nose`、`missile_nose_tip`、`missile_fin`、`missile-boi`；标签查询可用时检查是否存在，查询不可用时记录警告 |
+| 区域名称 | 优先读取任务的 `RegionNameList`，其次 `OldRegionNameList`；两者为空时尝试历史参考名 `zone----enclosure----`，之后核对实际生成的流体区域 |
+| 边界层范围 | `BLRegionList` 使用区域更新结果，`RegionScope` 保留 `missile`；Fluent 返回 `CompleteBLZoneList` 时逐项匹配配置的面区域，缺失或多义报错；未返回时保留配置并在导出阶段检查边界组 |
+| 体网格范围 | 尺寸列表保留 `missile` 的 25 mm 设置，将历史 enclosure 条目替换为区域更新结果的第一个区域名并使用 500 mm；生成后必须报告唯一非空流体区域，且与更新结果一致 |
+| 运行限制 | 默认 16 进程、启动超时 300 秒、工作进程时限 900 秒；独立文件核验另有 600 秒时限 |
+| 数据位置 | 读取父目录的 `workspace.json`；默认运行目录为 `data_lib/runs/<run-id>/fluent_meshing/`，失败记录及产物归 `feedback/fluent_meshing/<run-id>/`；路径均相对工作区根目录 |
+| 输出约束 | 默认网格为本次运行目录下的 `missile_mesh.msh.h5`；`--run-dir` 必须为新目录，`--out` 文件必须不存在；运行数据保存在代码仓库外 |
+| 环境隔离 | PyFluent 使用 `_deps/`；导出核验使用独立解释器与 `.mesh_inspect_deps_313/`；旧 `.mesh_inspect_deps/` 保留，三者不合并、不混用 Python/NumPy 环境 |
+
+当前执行沿用历史编号 1–7，其中第 4 步含共享拓扑和创建区域两个子步骤；随后执行网格检查、
+原生正交质量读取、导出和独立 HDF5 文件核验。当前检查要求最小单元体积为正、最小正交质量大于 0.01，
+导出为本次生成的非空三维毫米网格，包含 `inlet`、`outlet`、`wall`、非空 missile 壁面和唯一非空流体单元区域，
+并与原生质量报告的单元数交叉核对。这些检查不等同于逐处测量边界层层数或完成求解器边界条件设置。
+
+结果以新运行的 `run.json` 为准：`PASSED` 表示完整流程及独立核验通过；`STOPPED` 表示按 `--stop-after`
+主动停止，即使退出码为 0 也未完成验收；`FAILED` 保留失败证据。质量证据见 `validation.trn`、`quality-native.json`、
+`quality.json`，独立文件读取结果见 `mesh-inspection.json` 和 `verification.exportedMesh`。
+完整、主动停止及失败时分别尝试保存 `completed_workflow.wft`、`stopped_workflow.wft` 和 `failed_workflow.wft`。
+
+当前参数比较工具 `tools/compare_with_reference.py` 默认比较历史归档；比较新运行时需显式传入新的 `.wft`。
+工具归一数值表示和控制别名，只忽略按任务列明的记录字段；`DrawSizeControl` 等未列为忽略项的参数仍参与比较。
+
+## 历史数据来源与读取说明
+
+以下归档路径相对工作区根目录，替代迁移前的机器绝对路径；文件大小、时间和版本信息保留历史提取结果。
 
 | 项目 | 记录 |
 | --- | --- |
-| 主文件 | `D:\2_my_sci_train\fluent\mesh\missile.msh.h5` |
+| 主文件（当前归档） | `data_lib/legacy/fluent_meshing/reference/missile.msh.h5` |
 | 文件大小 | 516,167,042 字节 |
-| 文件最后修改时间 | 2026-09-20 11:27:39（本机时间） |
+| 文件最后修改时间（历史记录） | 2026-09-20 11:27:39（原记录本机时间） |
 | 写出软件 | ANSYS FLUENT MESHING 2024 R1 |
 | 版本字段 | `24.1` |
 | 工作流 | `Watertight Geometry` |
 | 维度 | 三维 |
 | 长度 / 面积 / 体积单位 | `mm` / `mm^2` / `mm^3` |
 | 参数主来源 | HDF5 的 `/settings/TGrid Variables` → `workflow/state` → 各任务的 `Arguments` |
-| 辅助工作流文件 | `D:\2_my_sci_train\fluent\mesh\missile_workflow_files\missile.wft` |
-| 辅助运行日志 | `D:\2_my_sci_train\fluent\mesh\fluent-20260920-105954-19336.trn` |
+| 辅助工作流文件（当前归档） | `data_lib/legacy/fluent_meshing/reference/missile_workflow_files/missile.wft` |
+| 辅助运行日志（当前归档） | `data_lib/legacy/fluent_meshing/reference/fluent-20260920-105954-19336.trn` |
 
 工作台截图用于核对步骤名称和顺序，具体数值来自文件。本文以最终网格内嵌的工作流状态为准；辅助 `.wft` 中任务状态为 `Out-of-date`，不能据此覆盖最终网格内的 `Up-to-date` 状态。尺寸数值均按保存单位 mm 展示，角度按度展示，增长率无量纲。浮点存储值 `0.07000000000000001` 在正文简写为 `0.07`。
 
-文件中未显式保存的界面项标为“未显式保存”，不补成默认值。任务中保存的字段可能包含界面保留值；保存了某个值，不等于该值在所选方法下实际参与计算。本次为只读提取，未重新执行工作流或修改源文件。
+文件中未显式保存的界面项标为“未显式保存”，不补成默认值。任务中保存的字段可能包含界面保留值；保存了某个值，不等于该值在所选方法下实际参与计算。历史提取为只读操作，未重新执行工作流或修改源文件。
 
-## 工作流顺序
+## 历史工作流顺序
 
 ```text
 Watertight Geometry
@@ -45,7 +90,7 @@ Watertight Geometry
 └─ 7. 生成体网格
 ```
 
-以上活动任务在最终 `.msh.h5` 中均为 `Up-to-date`，其 `Errors` 列表均为空。共享拓扑和创建区域任务各有一条保存的警告，见对应章节。
+历史提取记录中，以上活动任务在最终 `.msh.h5` 中均为 `Up-to-date`，其 `Errors` 列表均为空。共享拓扑和创建区域任务各有一条保存的警告，见对应章节；新运行的任务状态须由新记录确认。
 
 ## 1. 导入几何模型（Import Geometry）
 
@@ -53,18 +98,21 @@ Watertight Geometry
 
 | 配置项 | 保存值 | 原字段 |
 | --- | --- | --- |
-| 原始几何文件 | `D:/2_my_sci_train/scdoc_file/missile.scdoc` | `FileName` |
+| 原始几何文件（历史路径仅保留文件名） | `missile.scdoc` | `FileName` |
 | 长度单位 | mm | `LengthUnit` |
 | 部件数量字段 | 3 | `NumParts` |
 | 最大离散面片长度字段 | 0 | `ImportCadPreferences.MaxFacetLength` |
 
 `MaxFacetLength = 0` 是文件中的原始设置值，不表示实际生成了零长度网格。
 
+当前脚本将 `FileName` 设置为显式传入的 `--geometry` 绝对路径，不沿用历史输入位置，也不固定 `NumParts=3`。
+下表的底层导入选项保留历史记录，当前脚本只显式设置上表的长度单位、最大面片长度和输入文件，不保证其余选项逐项复现。
+
 底层 `cad/import-options`、`cad/adv-options` 还保存了以下导入记录，与上述工作流字段分开列示：
 
 | 配置项 | 保存值 |
 | --- | --- |
-| 中间几何文件 | `D:/2_my_sci_train/fluent/mesh/missile_workflow_files\missile.scdoc.pmdb` |
+| 中间几何文件（历史路径简写） | `missile_workflow_files/missile.scdoc.pmdb` |
 | 特征角 `feature-angle` | 40 |
 | 缩放系数 `scale-factor` | 1 |
 | `one-zone-per` | `program-controlled` |
@@ -116,11 +164,11 @@ Watertight Geometry
 
 ### 2.3 missile_nose_tip
 
-任务：`TaskObject14`。文档中的控制名称为 `missile_nose_tip`，实际选择的标签为 `missile_nose_tip`。
+历史任务：`TaskObject14`，原控制名为 `curvature_1`。本文和当前脚本使用 `missile_nose_tip`，作用标签仍为 `missile_nose_tip`。
 
 | 配置项 | 保存值 | 原字段 |
 | --- | --- | --- |
-| 控制名称 | `missile_nose_tip` | `BOIControlName` |
+| 控制名称（文档及当前脚本） | `missile_nose_tip`（历史名 `curvature_1`） | `BOIControlName` |
 | 尺寸方法 | Curvature（曲率） | `BOIExecution` |
 | 作用标签 | `missile_nose_tip` | `BOIFaceLabelList` |
 | 最小尺寸 | 1.6 mm | `BOIMinSize` |
@@ -177,6 +225,9 @@ Watertight Geometry
 | 任务状态 | `Up-to-date` |
 | `Errors` / `Warnings` | 均为空 |
 
+以上为历史共同字段。当前脚本显式使用标签选择并在创建子任务时传入 `AddChild=yes`；
+`DrawSizeControl` 默认 `true`，可由 `--draw-size-control false` 关闭。`CompleteFaceLabelList`、任务状态和错误列表由新会话返回，不直接从历史记录复制。
+
 ## 3. 生成面网格（Generate the Surface Mesh）
 
 任务：`TaskObject3`；命令：`GenerateTheSurfaceMeshWTM`。
@@ -192,6 +243,8 @@ Watertight Geometry
 | 曲率法向角 | 本任务参数块未显式保存 | `CFDSurfaceMeshControls.CurvatureNormalAngle` |
 
 `OriginalZones` 保存的列表为：`outlet`、`wall`、`inlet`、`missile_nose`、`missile_fin`、`missile_nose_tip`、`missile_body`。
+
+该列表是历史会话记录，当前脚本不显式设置 `OriginalZones`，新会话的实际区域以本次导入和后续检查为准。
 
 底层 `size-controls` 中另有 `import_curvature_0` 和 `import_proximity_0`，两者均保存数值序列 `15, 300, 1.2, 18, 2, 12`，完整原文见附录。其中的 `18` 作为底层记录保留，不补写成该任务中显式保存的字段。当前参数块也未显式保存完整的尺寸函数模式选项。
 
@@ -261,6 +314,9 @@ One or more fluid regions could not be detected. Verify the names and types of y
 
 区域名称未改变，保存记录中的类型由 solid 改为 fluid。最终文件的 `/settings/Thread Variables` 也将体区域 `zone----enclosure----` 记录为 `fluid`。
 
+当前脚本按任务报告的区域列表更新类型；只有未报告名称时才尝试上述历史参考名。
+新网格的唯一流体区域必须与区域更新结果一致，历史区域名及下表的区域 ID、面数不作为新模型的固定验收值。
+
 ### 最终保存的面区域类型
 
 以下是最终网格区域记录，不是截图中另一个已执行的“更新边界”任务。
@@ -293,6 +349,10 @@ One or more fluid regions could not be detected. Verify the names and types of y
 
 `CompleteBLRegionList`、`CompleteBLZoneList`、`CompleteRegionScope` 分别与对应列表相同。`RegionScope` 与 `BLRegionList` 是两个不同字段，本文保留两者，不将它们合并成一个区域名。
 
+上述对应关系来自历史保存状态。当前脚本保留 `RegionScope=["missile"]`，用区域更新结果设置 `BLRegionList`；
+若 Fluent 提供完整面区域列表，则按精确匹配优先、唯一子串匹配其次的规则核对 `BLZoneList`，多义或缺失报错。
+若未提供该列表，则保留配置并检查最终导出边界组，不能据此认定已逐面验证边界层作用范围。
+
 底层相关记录为：
 
 ```scheme
@@ -303,6 +363,8 @@ One or more fluid regions could not be detected. Verify the names and types of y
 ```
 
 工作流 `Arguments` 未显式保存增长率或最后一层比例的命名字段。底层具名变量 `prism/last-aspect-ratio` 为 `27.2`，控制元组中还保存了 `1.2` 和 `only-walls`。由于元组位置本身没有字段名，这里保留原记录，不将 `1.2` 当成已核实的界面增长率字段。
+
+当前脚本也未显式设置 `prism/last-aspect-ratio=27.2` 或复写上述底层元组，不能仅凭历史记录断言新会话使用了这些底层值。
 
 上面的 12 层是设置值，不是对最终所有位置实际层数的测量；面区域列表也不等同于对各处实际生成边界层的逐面验证。
 
@@ -323,16 +385,17 @@ One or more fluid regions could not be detected. Verify the names and types of y
 
 以下按 `RegionTetNameList`、`RegionTetMaxCellLengthList`、`RegionTetGrowthRateList` 的同一索引配对：
 
-| 区域名称 | 当前最大单元长度（mm） | 当前增长率 | Old 字段保存的最大单元长度（mm） | Old 字段保存的增长率 |
+| 历史区域名称 | 保存的最大单元长度（mm） | 保存的增长率 | Old 字段保存的最大单元长度（mm） | Old 字段保存的增长率 |
 | --- | ---: | ---: | ---: | ---: |
 | `missile` | 25 | 1.2 | 15.68 | 1.2 |
 | `zone----enclosure----` | 500 | 1.2 | 393.28 | 1.2 |
 
-当前方法明确为 `Region-based`，因此不能只摘录全局控制块中的 `80 mm` 来代表全部体网格设置。`OldRegionTetMaxCellLengthList`、`OldRegionTetGrowthRateList` 是文件中单独保存的旧值字段。
+历史保存的方法和当前脚本均为 `Region-based`，因此不能只摘录全局控制块中的 `80 mm` 来代表全部体网格设置。
+`OldRegionTetMaxCellLengthList`、`OldRegionTetGrowthRateList` 是历史文件中单独保存的旧值字段，当前脚本不将它们作为尺寸输入。
 
 `missile` 出现在区域尺寸列表中，但 `MeshSolidRegions = false`，最终文件仅有一个 fluid 体单元区域 `zone----enclosure----`；不能据尺寸表中的两行认定生成了两个体单元区域。
 
-### 7.2 最终网格规模
+### 7.2 历史最终网格规模
 
 来源：`/meshes/1` 属性和区域拓扑。
 
@@ -347,9 +410,9 @@ One or more fluid regions could not be detected. Verify the names and types of y
 | 体区域名称 | `zone----enclosure----` |
 | 体区域类型 | fluid |
 
-### 7.3 对应运行日志中的质量记录
+### 7.3 历史运行日志中的质量记录
 
-日志包含多次生成过程。下表引用最后一次生成并写出本文件的记录：日志第 508–524 行的体区域 ID `1964`、单元数 `2,518,996` 与最终文件相同；第 749–758 行明确写出了本次源文件。
+历史日志包含多次生成过程。下表引用其中最后一次生成并写出源文件的记录：日志第 508–524 行的体区域 ID `1964`、单元数 `2,518,996` 与历史最终文件相同；第 749–758 行明确写出了该历史源文件。
 
 | 项目 | 日志记录 |
 | --- | --- |
@@ -359,13 +422,15 @@ One or more fluid regions could not be detected. Verify the names and types of y
 | 正交质量低于 0.05 的单元数 | 0 |
 | 体网格生成耗时 | 4.63 分钟 |
 
-最小、最大、平均值来自日志第 724–725 行；生成摘要中的 `0.06` 是四舍五入后的显示值。以上为已有日志结果，本次没有重新计算质量。
+最小、最大、平均值来自历史日志第 724–725 行；生成摘要中的 `0.06` 是四舍五入后的显示值。以上为已有日志结果，未作为本次文档更新的新质量验收。
 
 日志第 482 行还保存了 `region dead0 cannot be deleted as it is completely enclosed by other regions` 的提示，含义是 `dead0` 区域因被其他区域完全包围而无法删除。最终网格中仍只记录一个体单元区域。体网格任务自身的 `Warnings` 列表为空，与日志中存在运行过程提示是不同记录层级。
 
-## 附录 A：底层局部尺寸记录原文
+## 附录 A：历史底层局部尺寸记录（控制名已统一）
 
 来源：`/settings/TGrid Variables` → `size-controls`。以下元组除文首说明的控制名称调整外，其余内容及数值顺序保持不变，不将无字段名的位置值自动替换为界面字段。
+
+当前脚本通过工作流参数设置尺寸，不直接复写这些底层元组；尤其不能据此认定新会话的 `import_curvature_0`、`import_proximity_0` 与历史记录逐项一致。
 
 ```scheme
 (size-controls (
@@ -383,7 +448,8 @@ BOI 的工作流另存 `BOIMinSize = 15`，底层 BOI 元组中的首个数值�
 
 ## 附录 B：读取边界
 
-- 本文覆盖截图中的全部活动步骤及其保存参数，同时保留了明确的旧值、底层记录和任务警告。
-- 参数来源是本次提供的 `missile.msh.h5` 及其同目录辅助文件；当前文件夹已有的其他网格说明未作为本次参数来源。
+- 第 1–7 节覆盖历史截图中的全部活动步骤及其保存参数，同时保留了明确的旧值、底层记录和任务警告；底层记录不等同于当前脚本显式传参。
+- 历史参数来源为现归档在 `data_lib/legacy/fluent_meshing/reference/` 的 `missile.msh.h5` 及辅助文件；本次新增的实现说明来源于当前脚本，未用其他网格替换历史证据。
 - 缺失的界面选项、未保存的手工选择和完整点击历史无法仅凭这些参数逐项还原；本文不将缺失项补成默认值。
 - 本文未计算边界层总厚度、实际逐处层数，也未重新测量网格质量或执行求解器设置。
+- 新生成模型的标签、区域、网格数量、质量和任务状态以对应新运行证据为准；历史 `Up-to-date`、空错误列表和质量数值不能替代完整运行的 `PASSED` 核验。

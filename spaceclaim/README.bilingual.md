@@ -1,267 +1,158 @@
 # ansys-scdmdoc-mcp
 
-![ANSYS SpaceClaim MCP](docs/assets/circular-pattern-hero.png)
+[中文完整说明](README.md) · [Full English guide](README.en.md)
 
-用 MCP 更快找到 SpaceClaim 的 Python 建模命令。  
-Use MCP to find SpaceClaim Python modeling commands faster.
+本项目是 Windows 本地 stdio MCP 服务：检索用户已安装的官方 SpaceClaim/SCDM API CHM，并提供有限的 Python 候选模板和参数化建模入口。标准输出只承载 JSON-RPC。
 
-## 你是否遇到过这些问题？ / Problems this project addresses
+This Windows-local stdio MCP server searches the official SpaceClaim/SCDM API CHM already installed on the user's computer. It also provides a limited set of Python candidate templates and a parameterized model workflow. Server stdout is reserved for JSON-RPC.
 
-在 SpaceClaim 中进行几何建模时，很多操作并不是“知道功能名称”就能直接写出 Python：  
-When modeling geometry in SpaceClaim, knowing the feature name is often not enough to write Python directly:
+## 功能与边界 / Capabilities and limits
 
-- 不知道“几何体命名”“共享拓扑”“圆周阵列”等功能对应哪个命令；  
-  You may not know which command implements named geometry, shared topology, or a circular pattern.
-- 除了打开脚本录制器，不知道还有什么方法可以获取可用脚本；  
-  You may not know how to discover usable scripts beyond opening the script recorder.
-- 官方提供了 CHM 帮助文档，但 CHM 只是汇总了大量 HTML 页面；  
-  The official help is provided as a CHM file, which is essentially a large collection of HTML pages.
-- API 文档通常以 C#/.NET 签名为主，类型、命名空间、参数和返回值不容易理解；  
-  API documentation is usually expressed as C#/.NET signatures, making types, namespaces, parameters, and return values difficult to interpret.
-- 即使搜到了一个方法，也很难判断它能否组合成真正可运行的 SCDM Python 脚本。  
-  Even after finding a method, it can be difficult to tell whether it can be combined into a runnable SCDM Python script.
-
-如果不是经验非常丰富的 SpaceClaim 二次开发用户，直接阅读 CHM 往往需要花费大量时间。  
-Unless you are an experienced SpaceClaim automation developer, searching the CHM directly can take considerable time.
-
-## 我们的解决方法：用 MCP 做 SpaceClaim API 助手 / Our approach: an MCP assistant for the SpaceClaim API
-
-MCP（Model Context Protocol，模型上下文协议）是一种让 AI 应用安全调用外部工具和数据源的标准协议。它可以把本地的文档、数据库、代码工具或业务服务，以结构化工具的形式提供给 AI。  
-MCP (Model Context Protocol) is a standard protocol that lets AI applications call external tools and data sources. It can expose local documentation, databases, code tools, or business services as structured tools.
-
-在本项目中，MCP 连接的是用户电脑上 ANSYS SpaceClaim/SCDM 安装目录中的官方 API CHM。AI 不需要凭记忆猜命令，而是可以通过 MCP：  
-This project connects MCP to the official API CHM installed with ANSYS SpaceClaim/SCDM on the user’s computer. Instead of guessing from memory, an AI can use MCP to:
-
-1. 搜索官方 SpaceClaim API 文档；  
-   Search the official SpaceClaim API documentation;
-2. 读取对应的类、方法或属性说明；  
-   Read the relevant class, method, or property documentation;
-3. 根据你的建模意图整理相关 API；  
-   Organize related APIs around your modeling intent;
-4. 返回一段带有证据边界的 SCDM Python 候选代码；  
-   Return an SCDM Python candidate with an explicit evidence boundary;
-5. 在需要时继续生成有顺序的几何建模步骤。  
-   Generate ordered geometry-modeling steps when needed.
-
-这样可以把“翻阅大量 CHM 页面”变成“用自然语言快速定位命令”，减少 SpaceClaim 几何建模中的试错时间。  
-This turns “searching through many CHM pages” into “locating commands with natural language” and reduces trial and error in SpaceClaim geometry modeling.
-
-![MCP setup and search flow](docs/assets/setup-flow.svg)
-
-## 两种主要使用方式 / Two main usage patterns
-
-### 方式一：直接向 MCP 提问功能对应的命令 / Ask MCP which command implements a feature
-
-当你只知道想实现什么功能，但不知道 SpaceClaim 命令时，可以直接描述目标。  
-When you know the desired outcome but not the SpaceClaim command, describe the goal directly.
-
-例如 / Examples:
-
-```text
-SpaceClaim 中如何给几何体创建命名选择？
-How do I create a named selection for geometry in SpaceClaim?
-```
-
-```text
-SpaceClaim 中如何创建共享拓扑？请给出相关 API 和 Python 候选。
-How do I create shared topology in SpaceClaim? Please provide the relevant API and a Python candidate.
-```
-
-```text
-先创建一个 0° 的实体，再用圆周阵列每隔 60° 生成共 6 个实体，最后合并，应该使用哪些命令？
-Create a 0-degree solid, make six instances at 60-degree intervals with a circular pattern, and merge them. Which commands should I use?
-```
-
-MCP 会优先检索官方 CHM 中的相关 API，例如：  
-MCP first searches the relevant APIs in the official CHM, such as:
-
-```text
-Pattern.CreateCircular
-CircularPatternData
-Combine.Merge
-```
-
-然后返回命令含义、官方文档页面、参数信息和可进一步验证的 Python 候选。  
-It then returns the command meaning, official documentation page, parameter information, and a Python candidate for further verification.
-
-这种方式适合 / This pattern is useful for:
-
-- 查询某个 SpaceClaim 功能对应的 API； / Finding the API for a SpaceClaim feature;
-- 了解一个命令需要哪些输入； / Understanding a command’s required inputs;
-- 快速比较多个可能的建模方法； / Comparing possible modeling approaches;
-- 让 AI 帮你把多个 API 组织成建模步骤。 / Asking AI to organize several APIs into modeling steps.
-
-### 方式二：提供完整建模输入，让 AI 按参数复现 / Provide complete modeling inputs for parameter-based reproduction
-
-如果你已经有明确的建模任务，可以把输入参数、几何约束、参考图片和目标结果一起提供给 AI，让它按照这些信息生成复现脚本。  
-For a defined modeling task, provide the AI with input parameters, geometric constraints, reference images, and target results so it can generate a reproduction script.
-
-建议提供 / Recommended inputs:
-
-- 几何尺寸和单位； / Geometry dimensions and units;
-- 点、线、面、轴、坐标系等基准信息； / Datum information such as points, lines, faces, axes, and coordinate systems;
-- 阵列数量、角度、间距和旋转方向； / Pattern count, angle, spacing, and rotation direction;
-- 拉伸、倒角、圆角、布尔运算等操作顺序； / The order of extrusions, chamfers, fillets, Boolean operations, and other operations;
-- 命名选择、共享拓扑或装配关系要求； / Requirements for named selections, shared topology, or assembly relationships;
-- 输入图片、草图、截图或目标几何示意图； / Input images, sketches, screenshots, or target-geometry diagrams;
-- 最终验收标准，例如实体数量、角度、尺寸和输出文件。 / Acceptance criteria such as body count, angles, dimensions, and output files.
-
-这种方式适合 / This pattern is useful for:
-
-- 根据图片或已有设计复现几何体； / Reproducing geometry from images or existing designs;
-- 生成参数化建模脚本； / Generating parametric modeling scripts;
-- 把复杂建模任务拆分成可验证的阶段； / Breaking complex modeling tasks into verifiable stages;
-- 对已有 SpaceClaim 脚本进行补全、重构或排错。 / Completing, refactoring, or debugging existing SpaceClaim scripts.
-
-## 这个 MCP 提供什么工具？ / Tools provided by this MCP
-
-| 工具 / Tool | 用途 / Purpose |
+| 工具 / Tool | 输入与功能 / Inputs and behavior |
 | --- | --- |
-| `search_api` | 搜索官方 CHM 中的类、方法、属性、事件和几何关键词 / Search classes, methods, properties, events, and geometry keywords in the official CHM |
-| `get_doc` | 读取搜索结果对应的单个官方 API 页面 / Read the official API page for one search result |
-| `find_python_command` | 根据自然语言建模意图返回 API 关联的 Python 候选 / Return Python candidates associated with a natural-language modeling intent |
-| `get_geometry_recipe` | 将几何任务整理为有顺序的建模步骤 / Organize a geometry task into ordered modeling steps |
+| `search_api` | `query`；`kind=all`（`all/class/method/property/event`）；`limit=25`，最大 / max 100。搜索官方索引。 / Search the official index. |
+| `get_doc` | `docPath`；`maxChars=50000`，最大 / max 100000。读取搜索结果中的相对 HTML 路径。 / Read a relative HTML path from search results. |
+| `find_python_command` | `intent`；`parameters={}`；`limit=5`，最大 / max 20。返回关联文档和 `inferred` 候选。 / Return related documentation and an inferred candidate. |
+| `get_geometry_recipe` | `task`；`parameters={}`。拉伸任务返回“矩形轮廓 → 拉伸”两步，其余任务返回一步。 / Extrusion tasks receive rectangle-profile and extrusion steps; other tasks receive one step. |
+| `validate_missile_params` | 可选模型字段；返回有效参数、来源、错误、警告、修正和优化参数池，不执行建模。 / Optional model fields; return effective values, sources, errors, warnings, corrections, and optimization fields without building. |
+| `generate_model_script` | 模型字段，以及 `outputDir`、`fileName`。生成请求和 IronPython 脚本，不启动 SpaceClaim。 / Model fields plus output controls; generate the request and script without launching SpaceClaim. |
+| `build_missile_model` | 同上，另有 / same plus `timeoutMs=300000`（最大 / max 1800000）、`execute=true`。运行并验收；`execute:false` 仅生成。 / Execute and grade fresh artifacts, or generate only. |
 
-示例意图 / Example intent:
+`parameters` 的值限于字符串、数字和布尔值。意图模板覆盖圆周阵列、圆柱、拉伸、矩形、布尔差、球和平面；多数模板是注释提示，圆周阵列候选也需要调用方提供基体和上下文。未匹配的意图返回检索结果和提示。它们不支持通用自然语言建模或从图片重建几何；固定 `V261` 提示不证明兼容性。
 
-```text
-圆周阵列 6 个，每隔 60 度，生成后合并
-Circular pattern: 6 instances at 60-degree intervals, then merge
-```
+`parameters` values may be strings, numbers, or booleans. Intent templates cover circular patterns, cylinders, extrusion, rectangles, subtraction, spheres, and planes. Most are comment-level guidance; circular-pattern candidates also need a seed and surrounding context. Unmatched intents receive search results and guidance. This is not a general natural-language or image-to-geometry engine; fixed `V261` text is not compatibility evidence.
 
-该意图会关联圆周阵列和合并操作，并返回：  
-This intent associates circular-pattern and merge operations and returns:
+## 安装与配置 / Installation and setup
 
-```python
-Pattern.CreateCircular(...)
-Combine.Merge(...)
-```
+要求 Windows、Node.js 18+。MCP 启动时解析并缓存官方 CHM，因此所有 MCP 工具均依赖有效 CHM，包括参数校验和脚本生成。独立 CLI 的 `--generate-only` 可以在未安装 ANSYS 的机器上运行。
 
-## 安装与首次配置 / Installation and first-run setup
-
-要求：Windows、Node.js 18+，以及本机已经安装 ANSYS SpaceClaim/SCDM。  
-Requirements: Windows, Node.js 18+, and ANSYS SpaceClaim/SCDM installed locally.
+Windows and Node.js 18+ are required. The MCP server resolves and caches the official CHM at startup, so every MCP tool requires a usable CHM, including validation and script generation. Standalone CLI `--generate-only` works without ANSYS installed.
 
 ```powershell
-git clone <your-github-repository-url>
-cd ansys-scdmdoc-mcp
 npm ci
 npm run setup
 node server.mjs
 ```
 
-首次执行 `npm run setup` 会打开本地浏览器配置页。配置页提供两种选择：  
-The first `npm run setup` opens a local browser configuration page with two choices:
+`npm run setup` 打开回环地址配置页，列出所有非空 `AWP_ROOT<number>`，也允许手动输入 `SpaceClaim.exe` 路径以查找对应 CHM。AWP 确认失败时必须显示下列原文，并仅保留手动输入恢复路径：
 
-1. 根据 `AWP_ROOT<number>` 自动检测； / Detect an installation through `AWP_ROOT<number>`;
-2. 手动输入 `SpaceClaim.exe` 的应用程序路径。 / Enter the `SpaceClaim.exe` application path manually.
-
-在自动检测模式下，程序会扫描当前环境变量中所有版本化的 AWP_ROOT，并通过下拉框让用户选择。点击确认后，程序会验证所选版本对应的官方 CHM。如果验证失败，会显示下面的固定错误，并只允许手动输入路径：  
-In automatic-detection mode, the program scans all versioned AWP_ROOT environment variables and lets the user choose one from a drop-down list. After confirmation, it validates the official CHM for that version. If validation fails, it shows the fixed error below and allows only manual path entry:
+`npm run setup` opens a loopback page listing every nonempty `AWP_ROOT<number>`, or accepts a manual `SpaceClaim.exe` path to discover its CHM. Failed AWP confirmation displays exactly this message and leaves manual entry as the recovery path:
 
 ```text
 无法根据 AWP 确定环境变量的路径，无法确定 SpaceClaim 的路径
-Unable to determine the environment-variable path from AWP; unable to determine the SpaceClaim path.
 ```
 
-配置保存在 / Configuration is stored at:
+配置位于 `%LOCALAPPDATA%\ansys-scdmdoc-mcp\config.json`。CHM 解析顺序：`SCDM_CHM`、已保存配置、按版本降序的 `AWP_ROOT<number>`、通用 `AWP_ROOT`（可配合 `SCDM_API_VERSION`，并探测已安装 API 目录）。`hh.exe` 将文档解包到用户缓存，通常为 `%LOCALAPPDATA%\ansys-scdmdoc-mcp\cache`；配置和缓存根目录在缺少 `LOCALAPPDATA` 时依次回退到 `TEMP` 和当前目录，应确保它们位于仓库外。
+
+Configuration lives at `%LOCALAPPDATA%\ansys-scdmdoc-mcp\config.json`. CHM resolution tries `SCDM_CHM`, saved setup, versioned AWP roots in descending order, then generic `AWP_ROOT` with optional `SCDM_API_VERSION` and installed API-directory detection. Windows `hh.exe` extracts documentation to the user cache, normally `%LOCALAPPDATA%\ansys-scdmdoc-mcp\cache`. Configuration and cache roots fall back to `TEMP`, then the current directory when `LOCALAPPDATA` is absent; keep them outside the repository.
+
+执行程序依次从 `SCDM_EXECUTABLE`、手动配置、版本化 AWP 和通用 AWP 查找。脚本 API 版本由安装目录、所选 CHM 或安装中的 API 目录自动探测；当前 `scdm_api_version` 输入不覆盖该结果。
+
+Executable discovery tries `SCDM_EXECUTABLE`, saved manual setup, versioned AWP roots, then generic AWP. Script API versions are detected from the executable layout, selected CHM, or installed API directories; the current `scdm_api_version` input does not override detection.
+
+## 参数模型 / Parameterized model
+
+字段与默认值以 [missile-schema.mjs](lib/missile-schema.mjs) 为准，完整说明见 [中文指南](README.md) 和 [English guide](README.en.md)。主要默认值如下；长度单位为米。
+
+[missile-schema.mjs](lib/missile-schema.mjs) defines fields and defaults. See the full [Chinese](README.md) and [English](README.en.md) guides for details. Main defaults below use meters for lengths.
+
+| 类别 / Category | 默认值 / Defaults |
+| --- | --- |
+| 主体 / Body | `L_N=0.49`, `L=3.69`, `D=0.18` |
+| 前舵 / Front fins | `L_W=1.72`, `C_RW=0.23`, `C_TW=0.06`, `B_W=0.23` |
+| 后舵 / Rear fins | `L_F=3.2`, `C_RF=0.38`, `C_TF=0.19`, `B_F=0.22` |
+| 厚度、倒圆 / Thickness, fillets | `t_fin=0.012`, `k_nose=0.005`, `k_tip=0.002`, `fillet_location=both` |
+| 舵面约定 / Fin conventions | `fin_phase=+`, `root_overlap=0.005`, `le_mode=trailing_aligned`, `cruciform_count=4` |
+| 外壳 / Enclosure | `enclosure_shape=cylinder`, `enclosure_radius=2.7`, `enclosure_front=3.69`, `enclosure_back=16.45`, `enclosure_name=Enclosure` |
+| 加密区 / BOI | `boi_radius=0.45`, `boi_front=0.5`, `boi_back=2.5`, `boi_name=BOI` |
+| 定位 / Placement | `model_placement=ensemble`, `model_offset=-4`; 默认弹尖站位 / default nose-tip station `x=1.38` |
+
+优先级为显式字段 > JSON 预设 > 默认值。优化区间仅产生警告；梢弦 `[0, 0.001)` 自动抬至 `0.001 m`。仅实现 `le_mode=trailing_aligned` 和圆柱外壳；相位支持 `+`、`x`，每级舵面数须为不小于 2 的偶数。倒圆位置支持 `cone_cylinder`、`nose_tip`、`both`，定位支持 `ensemble`、`missile`、`offset`。
+
+Precedence is explicit fields > JSON preset > defaults. Optimization ranges are advisory; tip chords in `[0, 0.001)` are corrected to `0.001 m`. Only `le_mode=trailing_aligned` and cylindrical enclosures are implemented. Phase supports `+` and `x`; fin counts must be even and at least 2. Fillet locations are `cone_cylinder`, `nose_tip`, and `both`; placement modes are `ensemble`, `missile`, and `offset`.
+
+```powershell
+node scripts/missile.mjs --list
+node scripts/missile.mjs --generate-only
+node scripts/missile.mjs --preset ..\data_lib\inputs\missile_params_example.json --generate-only
+node scripts/missile.mjs --k_nose 0.006 --timeout 300000 --json
+node scripts/missile.mjs --out ..\data_lib\runs --name custom.scdoc --generate-only
+```
+
+CLI 输出开关是 `--out`、`--name`，不是 schema 字段 `--output_dir`、`--file_name`。预设可为参数对象，或读取已生成 `params.json` 的 `params` 对象。MCP 使用 `outputDir`、`fileName`，默认文件名 `missile.scdoc`。
+
+CLI output switches are `--out` and `--name`, not schema fields `--output_dir` and `--file_name`. Presets may be parameter objects or the `params` object from generated `params.json`. MCP uses `outputDir` and `fileName`, with default filename `missile.scdoc`.
+
+执行后单一 `.scdoc` 包含合并后的 `Missile`、圆柱外壳和独立 `BOI`。舵面使用 `Pattern.CreateCircular` 与 `Combine.Merge`；外壳使用 `Enclosure.Create`，轴向沿 X，`Subtract=False`、`CreateShareTopology=False`，名称设在组件上；BOI 通过回转生成。流程不执行网格划分或 CFD 求解。
+
+One `.scdoc` contains the merged `Missile`, cylindrical enclosure, and independent `BOI`. Fins use `Pattern.CreateCircular` and `Combine.Merge`; the enclosure uses `Enclosure.Create` aligned with X, with `Subtract=False` and `CreateShareTopology=False`, and is identified by its component name. BOI is revolved. The workflow does not mesh or solve CFD.
+
+通常创建 `inlet`、`wall`、`outlet`、`missile_nose_tip`、`missile_nose`、`missile_body`、`missile_fin` 七组；无球面弹尖时省略 `missile_nose_tip`。脚本删除已确认为空的阵列组件，并对保留对象之外的结构对象调用物理抑制。验收检查调用报告，不能回读证明宿主的抑制状态。
+
+Normally seven named selections are created: `inlet`, `wall`, `outlet`, `missile_nose_tip`, `missile_nose`, `missile_body`, and `missile_fin`. The tip group is omitted without a spherical tip cap. The script deletes verified-empty pattern components and requests physics suppression outside the keep set. Acceptance checks call reports; it cannot read back the host's suppression state.
+
+## 运行与证据 / Runs and evidence
+
+入口按脚本位置读取上一级 `workspace.json`。默认运行目录是 `../data_lib/runs/<run-id>/spaceclaim`，失败时尝试移至 `../feedback/spaceclaim/<run-id>`；文件系统或权限错误可能中断移动和清单收尾。`--out`、MCP `outputDir` 或 `SCDM_MISSILE_OUTPUT` 可指定输出父目录，其下仍新建唯一运行目录；失败留存目标仍为配置的反馈目录。
+
+Entrypoints resolve the parent `workspace.json` relative to the scripts. Default runs live at `../data_lib/runs/<run-id>/spaceclaim`; failed runs attempt relocation to `../feedback/spaceclaim/<run-id>`. Filesystem or permission errors may interrupt relocation and manifest finalization. `--out`, MCP `outputDir`, or `SCDM_MISSILE_OUTPUT` selects an output parent with a unique run child; failed retention still targets the configured feedback directory.
+
+每次写入 `request.json`、`run.json`；有效请求增加 `params.json`、`model.py`。执行增加模型、`result.json` 和可选诊断、`preview.png`、`preview-assembly.png`。清单记录状态、时间、检查、产物大小和 SHA-256。预览图是辅助产物，不是验收门槛。
+
+Every run writes `request.json` and `run.json`; valid requests add `params.json` and `model.py`. Execution adds the model, `result.json`, and optional diagnostics and previews. The manifest records status, timestamps, checks, artifact sizes, and SHA-256 hashes. Previews are advisory, not acceptance gates.
+
+| `run.json` 状态 / Status | 含义 / Meaning |
+| --- | --- |
+| `GENERATED` | 仅生成；`runtimeVerified=false`。 / Generation only; no runtime verification. |
+| `PASSED` | 本次进程和新产物验收通过；`runtimeVerified=true`。 / The current process and fresh artifacts passed. |
+| `FAILED` | 参数、执行或验收失败并完成收尾。 / Parameter, execution, or acceptance failure with finalization completed. |
+
+CLI 和 `generate_model_script` 的生成结果为 `status=script-generated`；`build_missile_model` 将其显示为 `GENERATED`。执行结果使用 `PASS` / `FAIL`，与清单词汇不同。
+
+CLI generation and `generate_model_script` return `status=script-generated`; `build_missile_model` presents it as `GENERATED`. Executed model results use `PASS` / `FAIL`, distinct from manifest statuses.
+
+`official-doc` 表示 CHM 文档事实，`inferred` 表示推导候选，`runtime-verified` 只用于目标安装实际执行且新产物验收通过。历史记录不是本次验收；退出码 0、HTTP 成功、缓存或文件存在均不足以单独证明正确。
+
+`official-doc` denotes CHM facts; `inferred` denotes candidates; `runtime-verified` requires execution and fresh accepted artifacts in the target installation. Historical records are not current acceptance. Exit code 0, HTTP success, a cache, or file existence alone does not prove correctness.
+
+参数模型验收覆盖新产物、单一主体、尺寸、回转体体积与面积、质心、舵面站位、区域位置、命名选择覆盖和结构清理，项数随参数与报告变化。独立圆周夹具必须执行以下流程，另检查新模型与 PASS 结果新鲜且非空、合并拓扑面数非零：
+
+Model acceptance covers fresh artifacts, one merged main body, dimensions, revolved volume and areas, center of mass, fin stations, region placement, named-selection coverage, and cleanup. Counts vary with parameters and reports. The separate circular fixture must follow this workflow and check fresh nonempty model and PASS results plus nonzero merged face topology:
 
 ```text
-%LOCALAPPDATA%\ansys-scdmdoc-mcp\config.json
+0° seed → Pattern.CreateCircular(CircularPatternData, count=6, angle=360°)
+→ 0/60/120/180/240/300°, step=60°, coverage=360°
+→ Combine.Merge → 1 merged body, merged_face_count > 0
 ```
 
-程序不会把用户电脑上的 ANSYS 安装路径写入代码或 README。手动模式保存的是应用程序路径，CHM 会从对应的 SCDM 安装目录自动查找。  
-The program does not write a user’s ANSYS installation path into source code or the README. Manual mode stores the application path, and the CHM is discovered from the corresponding SCDM installation directory.
-
-## 路径和文档来源 / Path resolution and documentation source
-
-路径解析优先级如下 / Path resolution uses this priority order:
-
-1. 显式 `SCDM_CHM`； / Explicit `SCDM_CHM`;
-2. 首次配置保存的 AWP 或 SpaceClaim 路径； / The saved AWP or SpaceClaim path from first-run setup;
-3. 所有可用 `AWP_ROOT<number>` 中版本号最高者； / The highest-version available `AWP_ROOT<number>`;
-4. 通用 `AWP_ROOT` + `SCDM_API_VERSION`。 / Generic `AWP_ROOT` plus `SCDM_API_VERSION`.
-
-首次读取 CHM 时，程序使用 Windows 的 `hh.exe` 将帮助文档解包到用户缓存目录，并建立搜索索引：  
-On the first CHM read, the program uses Windows `hh.exe` to unpack the help content into the user cache and build a search index:
-
-```text
-%LOCALAPPDATA%\ansys-scdmdoc-mcp\cache
-```
-
-项目只查询用户本机的官方 CHM，不在仓库中分发或保存 ANSYS 专有文档。  
-The project queries only the official CHM on the user’s computer; it does not distribute or store ANSYS proprietary documentation in the repository.
-
-## 如何理解返回结果？ / How to interpret results
-
-本项目明确区分三类证据 / This project distinguishes three evidence levels:
-
-- `official-doc`：来自官方 SpaceClaim CHM 的页面、类型、方法或属性；  
-  `official-doc`: a page, type, method, or property from the official SpaceClaim CHM;
-- `inferred`：根据官方 API 签名和建模意图推导出的 Python 候选；  
-  `inferred`: a Python candidate inferred from an official API signature and modeling intent;
-- `runtime-verified`：已经在目标 SpaceClaim/SCDM 安装中实际执行，并检查过模型结果。  
-  `runtime-verified`: executed in the target SpaceClaim/SCDM installation and checked against model results.
-
-CHM 中常见的是 C#/.NET 签名。它可以证明 API 文档存在，但不能单独证明某段 IronPython 代码已经运行成功。因此，MCP 返回的 Python 代码仍应在目标 SCDM 版本中执行验证。  
-The CHM commonly contains C#/.NET signatures. That proves the API documentation exists, but does not by itself prove that an IronPython snippet runs successfully. Python returned by MCP must therefore still be executed and verified in the target SCDM version.
-
-## 真实几何验收案例 / Real geometry acceptance example
-
-项目提供了一个真实 SpaceClaim 验收脚本：[spaceclaim-circular-repeat-smoke.py](scripts/spaceclaim-circular-repeat-smoke.py)。它验证的是完整的圆周阵列与合并流程，而不是简单循环 `Copy` 和 `Move.Rotate`：  
-The project provides a real SpaceClaim acceptance script: [spaceclaim-circular-repeat-smoke.py](scripts/spaceclaim-circular-repeat-smoke.py). It validates the complete circular-pattern and merge workflow rather than a simple loop of `Copy` and `Move.Rotate`:
-
-```text
-创建 0° 基体 → Pattern.CreateCircular → CircularPatternData：6 个实例、360° 总角度
-→ 检查 0/60/120/180/240/300° → Combine.Merge → 最终 1 个合并实体
-
-Create a 0-degree seed → Pattern.CreateCircular → CircularPatternData: 6 instances, 360-degree total angle
-→ Check 0/60/120/180/240/300 degrees → Combine.Merge → One final merged body
-```
-
-验收必须同时检查 / Acceptance must verify all of the following:
-
-- 阵列实体数量为 6； / six patterned bodies;
-- 角度间隔为 60°； / 60-degree spacing;
-- 覆盖完整 360°； / full 360-degree coverage;
-- `Combine.Merge` 成功； / successful `Combine.Merge`;
-- 合并后的实体数量为 1； / one merged body;
-- 模型文件和 `status=PASS` 结果文件都是本次运行新生成的。 / a fresh model file and a fresh result file with `status=PASS`.
-
-MCP 查询成功、缓存建立成功或 SpaceClaim 进程返回码为 0，都不能单独替代真实几何验收。  
-Successful MCP queries, a populated cache, or a SpaceClaim process exit code of 0 cannot replace real geometry acceptance on their own.
-
-## 开发与测试 / Development and testing
+## 开发与目录 / Development and directories
 
 ```powershell
 npm ci
 npm test
 npm run smoke
+npm run verify:real
+npm run verify:geometry
 ```
 
-如果需要在本机验证真实 CHM / To verify the real CHM locally:
+测试不执行 SpaceClaim；存在 CHM/AWP 环境变量时，协议用例会自动连接真实 CHM 并验证仅生成模式。`SCDM_RUN_REAL_CHM_TEST=1` 另可启用真实 CHM 解包测试。`verify:real` 仅检查文档和索引；`verify:geometry` 执行圆周夹具。`smoke` 启动实际 MCP 服务检查工具和 CHM，但其预检查要求存在 `SCDM_CHM`、非空版本化 AWP 或通用 `AWP_ROOT`；仅有 setup 配置不能通过该项预检查。
 
-```powershell
-$env:SCDM_RUN_REAL_CHM_TEST = "1"
-npm test
-```
+Tests do not launch SpaceClaim. With CHM/AWP environment variables present, the protocol case automatically connects to a real CHM and checks generation-only behavior. `SCDM_RUN_REAL_CHM_TEST=1` separately enables real CHM extraction testing. `verify:real` checks documentation and indexing only; `verify:geometry` executes the circular fixture. `smoke` starts the actual MCP service and checks tools and CHM, but its precheck requires `SCDM_CHM`, a nonempty versioned AWP root, or generic `AWP_ROOT`; saved setup alone does not satisfy it.
 
-真实 SpaceClaim 几何验收需要目标电脑安装有效的 ANSYS SpaceClaim/SCDM，并且输出文件应保存到仓库之外的临时目录。  
-Real SpaceClaim geometry acceptance requires a valid ANSYS SpaceClaim/SCDM installation on the target computer. Save its output files in a temporary directory outside the repository.
+| 根目录子目录 / Direct child | 用途 / Purpose |
+| --- | --- |
+| [`.github/`](.github/README.md) | GitHub 工作流与协作配置。 / GitHub workflows and collaboration configuration. |
+| `.vscode/` | 本机编辑器配置，不纳入版本控制。 / Local editor configuration, not version-controlled. |
+| [`docs/`](docs/README.md) | 文档、资源和历史设计记录。 / Documentation, assets, and historical design records. |
+| [`lib/`](lib/README.md) | CHM、配置、参数、几何与运行记录实现。 / CHM, setup, parameters, geometry, and run records. |
+| `node_modules/` | 安装生成的依赖，不纳入版本控制，不手动编辑。 / Installed dependencies; not version-controlled, do not edit by hand. |
+| [`scripts/`](scripts/README.md) | 配置、CLI、smoke 与真实验收入口。 / Setup, CLI, smoke, and real acceptance entrypoints. |
+| [`tests/`](tests/README.md) | 自动测试和夹具。 / Automated tests and fixtures. |
 
-## 发布和版权边界 / Release and copyright boundaries
+每次代码修改必须同步修改对应 README，使功能、接口、默认值、运行方式、目录说明及所有语言版本保持一致。具体要求见 [AGENTS.md](AGENTS.md)。
 
-发布到 GitHub 前，请确认以下内容没有被提交：  
-Before publishing to GitHub, confirm that none of the following are committed:
+Every code change must update its corresponding README so behavior, interfaces, defaults, execution instructions, directory descriptions, and all language editions stay consistent. See [AGENTS.md](AGENTS.md).
 
-- ANSYS 或 SpaceClaim CHM 文件； / ANSYS or SpaceClaim CHM files;
-- CHM 解包后的 HTML、HHK、HHC 文件； / extracted CHM HTML, HHK, or HHC files;
-- 用户本地缓存和索引； / local user caches and indexes;
-- SpaceClaim 模型和运行日志； / SpaceClaim models and runtime logs;
-- 用户配置、凭据和机器专属安装路径。 / user configuration, credentials, and machine-specific installation paths.
+官方 CHM、解包内容、缓存、本机配置、模型和日志不进入版本库。项目使用 [MIT License](LICENSE)，不代表 ANSYS 官方；发布、推送和外部 GitHub 修改须取得当次明确授权。
 
-本项目只发布 MCP 实现、测试和说明文档，不发布 ANSYS 专有文档。ANSYS、SpaceClaim、SCDM 及相关产品名称属于各自权利人。本项目不代表 ANSYS 官方，也不声明与 ANSYS 存在授权或隶属关系。  
-This project publishes only the MCP implementation, tests, and documentation; it does not publish ANSYS proprietary documentation. ANSYS, SpaceClaim, SCDM, and related product names belong to their respective owners. This project is not official ANSYS software and does not claim authorization, affiliation, or endorsement by ANSYS.
-
-项目代码使用 MIT License，详见 [LICENSE](LICENSE)。  
-The project code is released under the MIT License; see [LICENSE](LICENSE).
+Keep official CHM files, extracted content, caches, local configuration, models, and logs out of version control. The project uses the [MIT License](LICENSE) and is not official ANSYS software. Publishing, pushing, or changing external GitHub state requires explicit authorization in the current turn.
