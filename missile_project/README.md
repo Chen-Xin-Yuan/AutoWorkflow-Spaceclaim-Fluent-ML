@@ -56,10 +56,15 @@ Jupyter 交互式调试笔记本（`.ipynb`）。
 | --- | --- |
 | `for005.dat` | 本次实际喂给 DATCOM 的输入卡片（可复查、可直接复现） |
 | `for006.dat` | DATCOM 原始输出 |
+| `for022.dat` | **DATCOM 自己写出的 Tecplot ASCII 几何外形**（`VARIABLES=X,Y,Z` + `ZONE T="FUSELAGE"` / `ZONE T="FINSET n"`，坐标单位英尺）；用 Tecplot 360 直接打开即可看到真实外表面 |
 | `aero_coefficients.csv` | 气动系数表：**中文表头**，来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 升力系数 `CL` / 阻力系数 `CD` / 俯仰力矩系数 `CM`，一行一个工况 |
-| `geometry_check.txt` | 几何模型核对报告：输入尺寸 → 派生站位 / 弦长 / 展长 / 后掠角 → 实际写入的 DATCOM 卡片 → 逐项自检 → 与 README 基准几何的差异 |
-| `geometry_check.png` | 几何三视图（侧视 / 俯视 / 前视），用来肉眼核对建模是否正确（含 `L`、`L_N`、`D`、`B_W`/`B_F`、`C_RW`/`C_RF`、`C_TW`/`C_TF` 标注） |
+| `geometry_check.txt` | 几何模型核对报告：输入尺寸 → 派生站位 / 弦长 / 展长 / 后掠角 → 实际写入的 DATCOM 卡片 → **拿 `for022.dat` 反查外形** → 逐项自检 → 与 README 基准几何的差异 |
+| `geometry_check.png` | 脚本按同一套参数自绘的三视图，仅供速查；权威外形以 `for022.dat` 为准 |
 | `case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
+
+看外形的最直接方式：Tecplot 360 → *File → Load Data File(s)* → 选 `runs/<算例名>/for022.dat`，
+会得到 9 个区（1 个 `FUSELAGE` + 前舵 4 片 `FINSET 1` + 后舵 4 片 `FINSET 2`）。
+注意文件长度单位是**英尺**（DATCOM 几何输出固定用英尺，与输入卡片里的英寸无关）。
 
 `aero_coefficients.csv` 只输出上面 3 个系数，需要别的系数（例如 `CNA`、`XCP`）时在脚本顶部
 `OUTPUT_COEFFICIENTS` 里加一行即可。注意：CSV 若正被 Excel 打开，Windows 会拒绝覆盖写入，
@@ -111,8 +116,18 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 3. 运行 `python scripts/01_batch_datcom.py`，脚本自动生成 `for005.dat`、
    调用 `datcom_bin/datcom.exe`，把结果写到 `runs/<算例名>/` 并解析成
    `aero_coefficients.csv`（中文表头，含输入参数与 `CL`/`CD`/`CM`）；
-   同时输出几何核对报告 `geometry_check.txt` 和三视图 `geometry_check.png`，
-   可先用它们确认几何建对了再看系数。
+   同时保留 DATCOM 自己写出的 `for022.dat`（Tecplot 几何外形），并生成
+   `geometry_check.txt`（含拿 `for022.dat` 反查外形的结果）。
+
+几条实测到的模型约定（改输入卡片前务必知道）：
+
+- 本机 DATCOM 的 `$FINSET` **`SWEEP` 以后缘为基准**：梢部后缘 = 根部后缘 +
+  展长 × tan(SWEEP)，梢弦长度不变。所以 README 的“后缘对齐”几何对应 `SWEEP = 0`，
+  而不是 `atan((C_root - C_tip) / 展长)`；脚本已按此自动换算（前缘对齐 / 对称写负角度）。
+- 数字卡片必须带小数点（`ALPHA = 4` 会报语法错）；参考长度变量名是 `LREF`（`CBAR` 会报未知变量）。
+- 数字统一保留 5 位小数：本机 datcom.exe 对过长的数字串会在内部几何计算里报
+  `sqrt DOMAIN` 且完全不输出结果。
+- 第二个舵面组 `STA` 写 2.0 会让本机 datcom 直接终止，脚本固定写 1.0。
 
 常用命令：
 

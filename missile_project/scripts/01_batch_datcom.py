@@ -4,8 +4,8 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
 ================================================
 输入：README「参数化方式与来流条件」里的 11 个主尺寸（单位 m）与来流条件
       （马赫数列表 + 攻角列表 + 飞行高度）。
-输出：runs\\<算例名>\\ 下的 DATCOM 原始输出、气动系数 CSV（中文表头，含输入参数）
-      以及几何模型核对产物（geometry_check.txt / .png），输出路径不变。
+输出：runs\\<算例名>\\ 下的 DATCOM 原始输出（含 Tecplot 几何外形 for022.dat）、
+      气动系数 CSV（中文表头，含输入参数）与几何模型核对产物，输出路径不变。
 
 默认算例（改本文件顶部配置区即可）：
     几何 = 11 个主尺寸基准值：L_N / L / D / L_W / C_RW / C_TW / B_W /
@@ -32,22 +32,31 @@ DATCOM 建模约定（改动前务必读）：
     3. 每个十字舵建模为 4 片舵（NPANEL = 4），PHIF 在 "+" 布局下为
        0/90/180/270，"x" 布局为 45/135/225/315。
     4. 翼面梯形：SSPAN 为距弹轴的回转半径站（根部 = D/2，梢部 = D/2 + 展长），
-       CHORD 为对应站的弦长，XLE 为舵根前缘轴向位置；前缘后掠角由
-       后缘对齐（LE_MODE）的几何关系反算：atan((C_root - C_tip) / 展长)。
-    5. 参考量按导弹惯例取机身横截面与直径：SREF = π(D/2)²，LREF = D，
+       CHORD 为对应站的弦长，XLE 为舵根前缘轴向位置。
+    5. SWEEP 卡片**以后缘为基准**（实测，用 for022.dat 反推）：梢部后缘 =
+       根部后缘 + 展长 × tan(SWEEP)，梢弦长度不变。所以后缘对齐
+       （LE_MODE = trailing_aligned）时 SWEEP 写 0；前缘对齐 / 对称写负角度，
+       由 _fin_sweep_card_deg 自动换算。
+    6. DATCOM 会写出 Tecplot ASCII 的几何外形文件 for022.dat（单位英尺，含
+       FUSELAGE 与每个舵面 4 片的 FINSET 区）。脚本把它拷进算例目录，并用它
+       反查建模是否正确 —— 这比只看输入卡片更硬。
+    7. 参考量按导弹惯例取机身横截面与直径：SREF = π(D/2)²，LREF = D，
        力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
-    6. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
+    8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    7. 翼型剖面沿用 datcom_bin/for005.dat 历史模板的 HEX 参数
+    9. 翼型剖面沿用 datcom_bin/for005.dat 历史模板的 HEX 参数
        （默认按弦长归一的薄翼剖面），一般无需改动。
 
 运行产物（runs\\<算例名>\\，产物不入 git）：
     for005.dat             本次实际喂给 DATCOM 的输入（可复查 / 复现）
     for006.dat             DATCOM 原始输出
+    for022.dat             DATCOM 写出的 Tecplot ASCII 几何外形（英尺），
+                           可直接拖进 Tecplot 360 看表面
     aero_coefficients.csv  气动系数表：来流 + 11 个几何输入（中文表头）+ 升力 / 阻力 /
                            俯仰力矩系数，一行一个工况
-    geometry_check.txt     几何模型核对报告：输入尺寸 → 派生站位 → 实际卡片 → 自检
-    geometry_check.png     几何三视图（侧视 / 俯视 / 前视），用于肉眼核对建模是否正确
+    geometry_check.txt     几何模型核对报告：输入尺寸 → 派生站位 → 实际卡片 →
+                           for022.dat 外形反查 → 自检
+    geometry_check.png     几何三视图（脚本用同一套参数自绘，仅供速查）
     case_params.json       本算例的几何、来流与派生量快照
 
 输出哪几个系数由顶部 OUTPUT_COEFFICIENTS 决定（默认只要 CL / CD / CM）。
@@ -191,6 +200,7 @@ FOR005_NAME = "for005.dat"        # DATCOM 输入文件名
 INPUT_REDIRECT = "_input.txt"     # shell 重定向应答文件
 FOR006_NAME = "for006.dat"        # DATCOM 输出（首选）
 DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
+FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形（单位英尺）
 
 CSV_NAME = "aero_coefficients.csv"
 PARAMS_NAME = "case_params.json"
@@ -358,10 +368,35 @@ def _fin_le_offset(chord_root, chord_tip, le_mode):
     )
 
 
-def _fin_sweep_deg(chord_root, chord_tip, span, le_mode):
-    """由根/梢弦与展长反算舵面前缘后掠角（度，正值后掠）。"""
+def _fin_le_sweep_deg(chord_root, chord_tip, span, le_mode):
+    """舵面真实前缘后掠角（度，正值后掠）—— 报告与示意图用。"""
     offset = _fin_le_offset(chord_root, chord_tip, le_mode)
     return math.degrees(math.atan2(offset, span))
+
+
+def _fin_sweep_card_deg(chord_root, chord_tip, span, le_mode):
+    """
+    计算 $FINSET 的 SWEEP 卡片值（度）。
+
+    实测约定（本机 DATCOM REV 03/11，用 for022.dat 的 Tecplot 几何输出反推）：
+    DATCOM 的 SWEEP 是**以后缘为基准**的旋转量 ——
+        梢部后缘 = 根部后缘 + 展长 × tan(SWEEP)，梢弦长度不变，
+    也就是说 SWEEP = 0 得到的是"后缘对齐"的梯形舵面，而不是"前缘对齐"。
+
+    设 le_mode 要求的梢前缘相对根前缘轴向偏移为 offset，DATCOM 实际画出来的偏移是
+        (C_root - C_tip) + 展长 × tan(SWEEP)，
+    因此
+        tan(SWEEP) = (offset - (C_root - C_tip)) / 展长。
+
+    实测数据（C_root = 0.23 m, C_tip = 0.06 m, 展长 = 0.23 m, 根部后缘 1.95 m）：
+        SWEEP = 0      -> 梢部 X = 1.89 ~ 1.95 m（后缘对齐，符合预期）
+        SWEEP = 36.47  -> 梢部 X = 2.06 ~ 2.12 m（多扫了一段）
+        SWEEP = 45     -> 梢部 X = 2.12 ~ 2.18 m
+        SWEEP = 60     -> 梢部 X = 2.29 ~ 2.35 m
+    """
+    base_offset = chord_root - chord_tip          # SWEEP = 0 时的梢前缘偏移
+    desired = _fin_le_offset(chord_root, chord_tip, le_mode)
+    return math.degrees(math.atan2(desired - base_offset, span))
 
 
 def _fin_roll_angles(fin_phase, count):
@@ -456,7 +491,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         同时返回该组的派生几何 detail，供几何核对报告 / 三视图使用
         （全部为 m / 度，与输入口径一致）。
         """
-        sweep = _fin_sweep_deg(chord_root, chord_tip, span_m, le_mode)
+        sweep = _fin_sweep_card_deg(chord_root, chord_tip, span_m, le_mode)
+        le_sweep = _fin_le_sweep_deg(chord_root, chord_tip, span_m, le_mode)
         tip_le = le_m + _fin_le_offset(chord_root, chord_tip, le_mode)
         block = [
             f"$FINSET{index}",
@@ -486,7 +522,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             "root_chord_m": chord_root,
             "tip_chord_m": chord_tip,
             "span_m": span_m,
-            "sweep_deg": sweep,
+            "sweep_deg": le_sweep,           # 真实前缘后掠角（几何量）
+            "sweep_card_deg": sweep,         # 写进 SWEEP 卡片的值（后缘为基准）
             "root_radius_m": radius,
             "tip_radius_m": radius + span_m,
             # 单片外露平面面积（梯形），四片合计算 4 倍
@@ -929,6 +966,186 @@ def build_output_table(df, meta):
     return pd.DataFrame(rows, columns=columns)
 
 
+_TECPLOT_ZONE = re.compile(r'ZONE\s+T\s*=\s*"([^"]*)"\s*(.*)$', re.IGNORECASE)
+_TECPLOT_DIM = re.compile(r'([IJK])\s*=\s*(\d+)', re.IGNORECASE)
+
+
+def parse_tecplot_geometry(text):
+    """
+    解析 DATCOM 写出的 Tecplot ASCII 几何文件（for022.dat）。
+
+    实测结构（坐标单位英尺）::
+
+        VARIABLES=X,Y,Z
+        ZONE T="FUSELAGE" I=21 J=49 K=1 F=BLOCK
+        <X 数据块 I*J*K 个，再 Y 块，再 Z 块>
+        ZONE T="FINSET  1" I=21 J=2 K=1 F=BLOCK
+        ...（每道舵 4 片 -> 4 个 zone）
+
+    Returns
+    -------
+    list[dict] : 每项含 title / i / j / k / coords（{"X": [...], "Y": [...], "Z": [...]}）；
+                 解析失败时返回空列表。
+    """
+    zones = []
+    current = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] in "*#":
+            continue
+        upper = stripped.upper()
+        if upper.startswith("VARIABLES") or upper.startswith("TITLE"):
+            continue
+        match = _TECPLOT_ZONE.match(stripped)
+        if match:
+            dims = {key.upper(): int(val) for key, val in _TECPLOT_DIM.findall(match.group(2))}
+            current = {
+                "title": re.sub(r"\s+", " ", match.group(1)).strip(),
+                "i": dims.get("I", 1),
+                "j": dims.get("J", 1),
+                "k": dims.get("K", 1),
+                "values": [],
+            }
+            zones.append(current)
+            continue
+        if current is None:
+            continue
+        for token in stripped.replace(",", " ").split():
+            try:
+                current["values"].append(float(token))
+            except ValueError:
+                pass
+
+    for zone in zones:
+        count = zone["i"] * zone["j"] * zone["k"]
+        values = zone.pop("values")
+        zone["coords"] = {
+            axis: values[start * count:(start + 1) * count]
+            for start, axis in enumerate(("X", "Y", "Z"))
+        }
+    return zones
+
+
+def _zone_sections(zone):
+    """把 zone 的数据按 J 方向切成截面（每个截面 I 个点），返回 [(截面序号, {X,Y,Z 列表})]。"""
+    i_count = zone["i"]
+    sections = []
+    for j in range(zone["j"]):
+        chunk = slice(j * i_count, (j + 1) * i_count)
+        sections.append((j, {axis: zone["coords"][axis][chunk] for axis in ("X", "Y", "Z")}))
+    return sections
+
+
+def check_tecplot_geometry(meta, zones, tol=0.003):
+    """
+    用 DATCOM 自己写出的几何文件（for022.dat）反查"建模是否正确"。
+
+    这是最硬的核对：文件里画出来的就是 DATCOM 真正拿去算的表面。
+    文件坐标单位是英尺，这里统一换成米再比对。
+
+    Returns
+    -------
+    (checks, rows) : checks 为 [(bool, str)]；rows 为每个区的外形摘要（报告用）。
+    """
+    ft = 0.3048
+    g = meta["geometry_m"]
+    d = meta["derived"]
+    radius = d["body_radius_m"]
+    checks = []
+    rows = []
+
+    if not zones:
+        return [(False, "DATCOM 没有给出可解析的 Tecplot 几何内容")], rows
+
+    def near(label, expected, actual):
+        ok = actual is not None and abs(actual - expected) <= tol
+        text = f"{label}：期望 {expected:.5f} m，外形文件 {actual:.5f} m" \
+            if actual is not None else f"{label}：外形文件里没有可用的数据"
+        checks.append((ok, text if ok else text + "  ← 不一致"))
+
+    # 1) 弹体
+    body_zones = [z for z in zones if "FUSELAGE" in z["title"].upper()]
+    if not body_zones:
+        checks.append((False, "外形文件里没有 FUSELAGE 区"))
+    for zone in body_zones:
+        xs = [value * ft for value in zone["coords"]["X"]]
+        radii = [math.hypot(y, z) * ft
+                 for y, z in zip(zone["coords"]["Y"], zone["coords"]["Z"])]
+        rows.append(f"FUSELAGE（{zone['i']}×{zone['j']}）: X {min(xs):.5f} ~ {max(xs):.5f} m，"
+                    f"最大半径 {max(radii):.5f} m")
+        near("FUSELAGE 头部起点 X", 0.0, min(xs))
+        near("FUSELAGE 尾端 X（= L）", g["L"], max(xs))
+        near("FUSELAGE 最大半径（= D/2）", radius, max(radii))
+
+    # 2) 舵面：每道舵应有 NPANEL 个 zone
+    groups = {}
+    for zone in zones:
+        match = re.search(r"FINSET\s*(\d+)", zone["title"], re.IGNORECASE)
+        if match:
+            groups.setdefault(int(match.group(1)), []).append(zone)
+    expected_panels = d["panels_per_fin_set"]
+
+    for fin in d["fins"]:
+        index = fin["set_index"]
+        fin_zones = groups.get(index, [])
+        checks.append((
+            len(fin_zones) == expected_panels,
+            f"$FINSET{index}（{fin['name']}）片数：外形文件 {len(fin_zones)} 片，"
+            f"期望 {expected_panels} 片",
+        ))
+        signatures = []
+        for zone in fin_zones:
+            sections = _zone_sections(zone)
+            root = sections[0][1]
+            tip = sections[-1][1]
+            root_x = [value * ft for value in root["X"]]
+            tip_x = [value * ft for value in tip["X"]]
+            root_r = [math.hypot(y, z) * ft for y, z in zip(root["Y"], root["Z"])]
+            tip_r = [math.hypot(y, z) * ft for y, z in zip(tip["Y"], tip["Z"])]
+            signatures.append((min(root_x), max(root_x), min(root_r),
+                               min(tip_x), max(tip_x), max(tip_r)))
+        if not signatures:
+            continue
+
+        root_le, root_te, root_radius, tip_le, tip_te, tip_radius = signatures[0]
+        rows.append(
+            f"$FINSET{index}（{fin['name']}，{len(fin_zones)} 片）: "
+            f"根部 X {root_le:.5f} ~ {root_te:.5f} m（半径 {root_radius:.5f}），"
+            f"梢部 X {tip_le:.5f} ~ {tip_te:.5f} m（半径 {tip_radius:.5f}）")
+        near(f"$FINSET{index} 根部前缘 X", fin["root_le_m"], root_le)
+        near(f"$FINSET{index} 根部后缘 X", fin["root_te_m"], root_te)
+        near(f"$FINSET{index} 根部回转半径", fin["root_radius_m"], root_radius)
+        near(f"$FINSET{index} 梢部前缘 X", fin["tip_le_m"], tip_le)
+        near(f"$FINSET{index} 梢部后缘 X", fin["tip_te_m"], tip_te)
+        near(f"$FINSET{index} 梢部回转半径", fin["tip_radius_m"], tip_radius)
+        max_dev = max(max(abs(a - b) for a, b in zip(sig, signatures[0]))
+                      for sig in signatures)
+        checks.append((
+            max_dev <= tol,
+            f"$FINSET{index} 各片几何一致（{len(signatures)} 片互差 {max_dev:.5f} m，"
+            f"即十字布局对称）",
+        ))
+    return checks, rows
+
+
+def append_tecplot_geometry_check(txt_path, checks, rows):
+    """把 for022.dat（DATCOM 原生 Tecplot 几何输出）的反查结果追加到核对报告。"""
+    bad = [msg for ok, msg in checks if not ok]
+    state = "OK" if not bad else "NG"
+    section = ["七、DATCOM 原生几何外形核对（for022.dat，Tecplot ASCII，坐标单位英尺）"]
+    section += [f"  · {row}" for row in rows]
+    section += [f"  [{('OK' if ok else 'NG')}] {msg}" for ok, msg in checks]
+    section += [f"  合计 {len(checks) - len(bad)}/{len(checks)} 项通过"
+                + ("" if not bad else "，外形与输入不一致，先查上面的 NG 项"),
+                ""]
+    try:
+        with open(txt_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(section) + "\n")
+    except OSError as exc:
+        print(f"[WARN] 追加 for022.dat 核对段落失败：{exc}")
+    return f"外形反查 [{state}] {len(checks) - len(bad)}/{len(checks)} 项通过"
+
+
 def _card_value(lines, block, var, index=0):
     """读 for005 文本里某个 namelist 块内数值变量的第 index 个值；读不到返回 None。"""
     start, end = _find_namelist_region(lines, block)
@@ -997,7 +1214,7 @@ def geometry_self_checks(meta, for005_text):
               _card_value(lines, block, "SSPAN", 0))
         check(f"${block} SSPAN(梢)", fin["tip_radius_m"] * inch,
               _card_value(lines, block, "SSPAN", 1))
-        check(f"${block} SWEEP", fin["sweep_deg"], _card_value(lines, block, "SWEEP"))
+        check(f"${block} SWEEP", fin["sweep_card_deg"], _card_value(lines, block, "SWEEP"))
         checks.append((
             fin["tip_radius_m"] > fin["root_radius_m"] + 1e-6,
             f"${block} 展长：梢部半径 {fin['tip_radius_m']:.5f} m > 根部半径 "
@@ -1069,8 +1286,11 @@ def render_geometry_report(case_name, meta, for005_text, checks):
         add("    " + _pad_display("梢部回转半径", 18)
             + f"{fin['tip_radius_m']:>9.5f}   ← D/2 + {fin['span_key']}")
         add("    " + _pad_display("前缘后掠角", 18)
-            + f"{fin['sweep_deg']:>9.5f} 度  ← atan(("
+            + f"{fin['sweep_deg']:>9.5f} 度  ← atan2(("
             f"{fin['root_key']} - {fin['tip_key']}) / {fin['span_key']})")
+        add("    " + _pad_display("$FINSET SWEEP 卡片", 18)
+            + f"{fin['sweep_card_deg']:>9.5f} 度  ← DATCOM 的 SWEEP 以后缘为基准，"
+            "后缘对齐时写 0")
         add("    " + _pad_display("单片外露平面面积", 18)
             + f"{fin['panel_area_m2']:>9.6f} m² ← (("
             f"{fin['root_key']} + {fin['tip_key']}) / 2) × {fin['span_key']}")
@@ -1110,10 +1330,13 @@ def render_geometry_report(case_name, meta, for005_text, checks):
     else:
         add("  · 无（本算例就是 README 基准几何）")
     add("")
-    add("六、图形")
-    add(f"  三视图见同目录 {GEOMETRY_PNG_NAME}：侧视图 / 俯视图看舵面的轴向站位、根梢弦长、"
-        "外露展长与后掠角；")
-    add("  前视图看十字布局（PHIF）以及展长确实是从弹体表面向外量的。")
+    add("六、外形文件与图形")
+    add(f"  · {FOR022_NAME}：DATCOM 自己写出的 Tecplot ASCII 几何外形（FUSELAGE + 每道舵 4 片），")
+    add("    坐标单位英尺。可直接用 Tecplot 360 打开（Load Data → 选该文件），"
+        "即得到真实外表面；")
+    add("    本报告第七节就是拿这个文件反查建模正确性的。")
+    add(f"  · {GEOMETRY_PNG_NAME}：脚本按同一套参数自绘的三视图，只用于速查，"
+        "权威外形以 for022.dat 为准。")
     add("")
     return "\n".join(out) + "\n"
 
@@ -1150,7 +1373,7 @@ def append_coefficient_check(txt_path, df):
               f"{worst:.5f}（容差 {tol:.5f}）")
 
     section = [
-        "七、系数换算复核（CL / CD 由 CN / CA 按攻角旋转）",
+        "八、系数换算复核（CL / CD 由 CN / CA 按攻角旋转）",
         "  CL = CN·cosα − CA·sinα，CD = CA·cosα + CN·sinα",
         f"  [{state}] {len(df)} 行最大偏差 {worst:.5f}（容差 {tol:.5f}）"
         + ("" if ok else "，请检查解析结果与 DATCOM 原始输出"),
@@ -1453,6 +1676,27 @@ def run_one_case(case, work_dir):
             f"请检查工作目录 {work_dir} 中的 for005.dat"
         )
 
+    # 4.1) DATCOM 原生几何外形（Tecplot ASCII）：拷进算例目录，并反过来核对建模
+    tecplot_path = None
+    tecplot_src = os.path.join(work_dir, FOR022_NAME)
+    if os.path.exists(tecplot_src):
+        tecplot_path = os.path.join(out_dir, FOR022_NAME)
+        shutil.copyfile(tecplot_src, tecplot_path)
+        try:
+            with open(tecplot_src, "r", encoding="utf-8", errors="replace") as f:
+                zones = parse_tecplot_geometry(f.read())
+        except OSError as exc:
+            print(f"[WARN] 算例 '{name}': 读取 {FOR022_NAME} 失败（{exc}）")
+            zones = []
+        geo_checks, geo_rows = check_tecplot_geometry(meta, zones)
+        print(f"    {append_tecplot_geometry_check(geom_txt, geo_checks, geo_rows)}"
+              f" → {FOR022_NAME}（可拖进 Tecplot 360）")
+        for ok, msg in geo_checks:
+            if not ok:
+                print(f"    [NG] {msg}")
+    else:
+        print(f"[WARN] 算例 '{name}': DATCOM 没有写出 {FOR022_NAME}（Tecplot 几何外形）")
+
     # 5) 解析
     df = parse_datcom_output(result_text)
     expected = len(mach_list) * len(alpha_list)
@@ -1515,6 +1759,7 @@ def run_one_case(case, work_dir):
         "csv_path": csv_path if csv_written else None,
         "geometry_txt": geom_txt,
         "geometry_png": geom_png,
+        "geometry_tecplot": tecplot_path,
         "checks_failed": len(bad),
         "raw_result": os.path.basename(result_path),
     }
@@ -1613,9 +1858,9 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="按 README 的几何参数与来流条件批量调用 Missile DATCOM 求气动参数。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="结果写入 runs/<算例名>/：for005.dat、for006.dat、"
-               "aero_coefficients.csv（中文表头）、geometry_check.txt、"
-               "geometry_check.png、case_params.json。",
+        epilog="结果写入 runs/<算例名>/：for005.dat、for006.dat、for022.dat"
+               "（Tecplot 几何外形）、aero_coefficients.csv（中文表头）、"
+               "geometry_check.txt、geometry_check.png、case_params.json。",
     )
     parser.add_argument("--params", nargs="+", metavar="JSON",
                         help="几何参数 JSON 文件（11 个主尺寸，单位 m），每个文件一个算例，"
@@ -1743,9 +1988,9 @@ def main(argv=None):
               f"  原始输出: {raw}{note}")
     print(f"\n[INFO] 结果目录: {RESULT_ROOT}")
     print(f"[INFO] 每个算例一个子目录：{FOR005_NAME}（实际输入）+ {FOR006_NAME}（原始输出）"
-          f" + {CSV_NAME}（中文表头系数表）")
-    print(f"[INFO] 另外还有 {GEOMETRY_TXT_NAME}（几何核对报告）+ {GEOMETRY_PNG_NAME}"
-          f"（几何三视图）+ {PARAMS_NAME}（参数快照）")
+          f" + {FOR022_NAME}（Tecplot 几何外形）")
+    print(f"[INFO] 系数表 {CSV_NAME}（中文表头，含输入参数）+ 几何核对 {GEOMETRY_TXT_NAME} / "
+          f"{GEOMETRY_PNG_NAME} + 参数快照 {PARAMS_NAME}")
     return 0 if failed == 0 else 1
 
 
