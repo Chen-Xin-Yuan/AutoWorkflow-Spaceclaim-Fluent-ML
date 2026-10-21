@@ -112,7 +112,7 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 1. 几何：脚本顶部 `MISSILE_GEOMETRY` 的 11 个主尺寸（m，字段名与建模程序一致）：
    `L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`。
 2. 来流：`MACH_LIST` / `ALPHA_LIST` / `ALTITUDE_M`，默认即 README 的 6 个马赫 ×
-   5 个攻角 = 30 个工况（高度按英尺写入 DATCOM）。
+   5 个攻角 = 30 个工况（高度按英尺写入 DATCOM）；`ALTITUDE_M` 默认 **5000 m**。
 3. 运行 `python scripts/01_batch_datcom.py`，脚本自动生成 `for005.dat`、
    调用 `datcom_bin/datcom.exe`，把结果写到 `runs/<算例名>/` 并解析成
    `aero_coefficients.csv`（中文表头，含输入参数与 `CL`/`CD`/`CM`）；
