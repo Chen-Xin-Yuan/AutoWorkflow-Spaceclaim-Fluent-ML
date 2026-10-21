@@ -19,7 +19,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 | 文件 | 用途 |
 | --- | --- |
-| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入 README 的 11 个主尺寸与来流条件，自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数 |
+| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入 README 的 11 个主尺寸与来流条件，自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数；同时输出几何核对报告与三视图，便于确认建模是否正确 |
 | `02_ml_train.py` | MLP 神经网络训练 |
 | `03_plot_result.py` | 画图、误差分析、对比 DATCOM/Fluent |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
@@ -56,8 +56,14 @@ Jupyter 交互式调试笔记本（`.ipynb`）。
 | --- | --- |
 | `for005.dat` | 本次实际喂给 DATCOM 的输入卡片（可复查、可直接复现） |
 | `for006.dat` | DATCOM 原始输出 |
-| `aero_coefficients.csv` | 解析后的气动系数：`MACH`、`ALPHA` + `CN`/`CM`/`CA`/`CL`/`CD`/`CNA`/`CMA`/`CNQ`/… 各表合并成一行一个工况 |
+| `aero_coefficients.csv` | 气动系数表：**中文表头**，来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 升力系数 `CL` / 阻力系数 `CD` / 俯仰力矩系数 `CM`，一行一个工况 |
+| `geometry_check.txt` | 几何模型核对报告：输入尺寸 → 派生站位 / 弦长 / 展长 / 后掠角 → 实际写入的 DATCOM 卡片 → 逐项自检 → 与 README 基准几何的差异 |
+| `geometry_check.png` | 几何三视图（侧视 / 俯视 / 前视），用来肉眼核对建模是否正确（含 `L`、`L_N`、`D`、`B_W`/`B_F`、`C_RW`/`C_RF`、`C_TW`/`C_TF` 标注） |
 | `case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
+
+`aero_coefficients.csv` 只输出上面 3 个系数，需要别的系数（例如 `CNA`、`XCP`）时在脚本顶部
+`OUTPUT_COEFFICIENTS` 里加一行即可。注意：CSV 若正被 Excel 打开，Windows 会拒绝覆盖写入，
+脚本会给出警告并保留其余产物，关闭 Excel 后重跑即可。
 
 建议命名方式：`readme_baseline` / `longer_nose` 等，便于区分（算例名由脚本配置决定）。
 
@@ -104,13 +110,15 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
    5 个攻角 = 30 个工况（高度按英尺写入 DATCOM）。
 3. 运行 `python scripts/01_batch_datcom.py`，脚本自动生成 `for005.dat`、
    调用 `datcom_bin/datcom.exe`，把结果写到 `runs/<算例名>/` 并解析成
-   `aero_coefficients.csv`。
+   `aero_coefficients.csv`（中文表头，含输入参数与 `CL`/`CD`/`CM`）；
+   同时输出几何核对报告 `geometry_check.txt` 和三视图 `geometry_check.png`，
+   可先用它们确认几何建对了再看系数。
 
 常用命令：
 
 ```powershell
 python scripts/01_batch_datcom.py --list          # 只看算例与工况组合
-python scripts/01_batch_datcom.py --dry-run       # 只生成 for005.dat，不调用 DATCOM
+python scripts/01_batch_datcom.py --dry-run       # 只出 for005.dat 与几何核对图，不调用 DATCOM
 python scripts/01_batch_datcom.py                 # 跑顶部 CASES 的算例
 python scripts/01_batch_datcom.py --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 python scripts/01_batch_datcom.py --params D:\...\missile_params_example.json

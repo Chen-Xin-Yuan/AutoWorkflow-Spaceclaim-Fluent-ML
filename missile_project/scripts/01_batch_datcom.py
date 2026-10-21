@@ -4,7 +4,8 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
 ================================================
 输入：README「参数化方式与来流条件」里的 11 个主尺寸（单位 m）与来流条件
       （马赫数列表 + 攻角列表 + 飞行高度）。
-输出：runs\\<算例名>\\ 下的 DATCOM 原始输出与解析后的气动系数 CSV（路径不变）。
+输出：runs\\<算例名>\\ 下的 DATCOM 原始输出、气动系数 CSV（中文表头，含输入参数）
+      以及几何模型核对产物（geometry_check.txt / .png），输出路径不变。
 
 默认算例（改本文件顶部配置区即可）：
     几何 = 11 个主尺寸基准值：L_N / L / D / L_W / C_RW / C_TW / B_W /
@@ -43,8 +44,13 @@ DATCOM 建模约定（改动前务必读）：
 运行产物（runs\\<算例名>\\，产物不入 git）：
     for005.dat             本次实际喂给 DATCOM 的输入（可复查 / 复现）
     for006.dat             DATCOM 原始输出
-    aero_coefficients.csv  解析出的气动系数（MACH / ALPHA + 各系数列）
+    aero_coefficients.csv  气动系数表：来流 + 11 个几何输入（中文表头）+ 升力 / 阻力 /
+                           俯仰力矩系数，一行一个工况
+    geometry_check.txt     几何模型核对报告：输入尺寸 → 派生站位 → 实际卡片 → 自检
+    geometry_check.png     几何三视图（侧视 / 俯视 / 前视），用于肉眼核对建模是否正确
     case_params.json       本算例的几何、来流与派生量快照
+
+输出哪几个系数由顶部 OUTPUT_COEFFICIENTS 决定（默认只要 CL / CD / CM）。
 """
 
 from __future__ import annotations
@@ -57,6 +63,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime
 
 import pandas as pd
@@ -146,6 +153,26 @@ CASES = [
     },
 ]
 
+# -----------------------------------------------------------------------------
+# 1.5 输出内容配置（CSV 表头用中文，方便直接看懂）
+# -----------------------------------------------------------------------------
+# 需要输出到 aero_coefficients.csv 的气动系数：(DATCOM 输出列名, CSV 中文表头)。
+# 默认只要升力 / 阻力 / 俯仰力矩；想要更多系数在这里加一行即可（列名见 for006.dat
+# 表头），例如 ("CNA", "升力系数斜率CNA")、("XCP", "压心位置XCP")。
+# 注：滚转力矩 CLL、偏航力矩 CLN 在无侧滑的对称来流下恒为 0，故默认不输出。
+OUTPUT_COEFFICIENTS = (
+    ("CL", "升力系数CL"),
+    ("CD", "阻力系数CD"),
+    ("CM", "俯仰力矩系数CM"),
+)
+
+# 来流输入参数在 CSV 里的表头
+CSV_FLOW_NAMES = {
+    "mach": "马赫数",
+    "alpha": "攻角(度)",
+    "alt": "飞行高度(m)",
+}
+
 # =============================================================================
 # 2. 常量与内部命名
 # =============================================================================
@@ -167,6 +194,41 @@ DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
 
 CSV_NAME = "aero_coefficients.csv"
 PARAMS_NAME = "case_params.json"
+GEOMETRY_TXT_NAME = "geometry_check.txt"   # 几何模型核对报告
+GEOMETRY_PNG_NAME = "geometry_check.png"   # 几何三视图（侧视 / 俯视 / 前视）
+
+# 11 个主尺寸的 CSV 表头（中文名 + 符号 + 单位）
+GEOMETRY_CN_NAMES = {
+    "L_N": "鼻锥长度L_N(m)",
+    "L": "轴向总长L(m)",
+    "D": "机身直径D(m)",
+    "L_W": "前舵轴向位置L_W(m)",
+    "C_RW": "前舵根弦C_RW(m)",
+    "C_TW": "前舵梢弦C_TW(m)",
+    "B_W": "前舵展长B_W(m)",
+    "L_F": "后舵轴向位置L_F(m)",
+    "C_RF": "后舵根弦C_RF(m)",
+    "C_TF": "后舵梢弦C_TF(m)",
+    "B_F": "后舵展长B_F(m)",
+}
+
+# 每个主尺寸最终落到 DATCOM 的哪个卡片变量（核对报告里逐项标注，方便对照 for005.dat）
+GEOMETRY_CARD_HINT = {
+    "L_N": "$AXIBOD LNOSE",
+    "L": "$AXIBOD LCENTR = L - L_N",
+    "D": "$AXIBOD DNOSE/DCENTR、$REFQ LREF",
+    "L_W": "$FINSET1 XLE",
+    "C_RW": "$FINSET1 CHORD(根)",
+    "C_TW": "$FINSET1 CHORD(梢)",
+    "B_W": "$FINSET1 SSPAN(梢 - 根)",
+    "L_F": "$FINSET2 XLE",
+    "C_RF": "$FINSET2 CHORD(根)",
+    "C_TF": "$FINSET2 CHORD(梢)",
+    "B_F": "$FINSET2 SSPAN(梢 - 根)",
+}
+
+# 两道舵面的中文名（$FINSET1 = 前舵，$FINSET2 = 后舵）
+FIN_DISPLAY_NAME = {1: "前舵", 2: "后舵"}
 
 # namelist 数组变量 -> 计数器变量 的自动联动（仅用于 overrides 高级改写）
 ARRAY_COUNTERS = {
@@ -175,7 +237,7 @@ ARRAY_COUNTERS = {
     "ALT": "NALT",
 }
 
-# CSV 列的输出顺序；DATCOM 额外给出的列会追加在后面
+# 解析结果的内部列顺序（CSV 只输出 OUTPUT_COEFFICIENTS 里列出的系数）
 PREFERRED_COLUMNS = [
     "MACH", "ALPHA",
     "CN", "CM", "CA", "CY", "CLN", "CLL",
@@ -283,18 +345,22 @@ def normalize_geometry(raw):
     return geometry, notes
 
 
-def _fin_sweep_deg(chord_root, chord_tip, span, le_mode):
-    """按前后缘对齐方式，由根/梢弦与展长反算舵面前缘后掠角（度，正值后掠）。"""
+def _fin_le_offset(chord_root, chord_tip, le_mode):
+    """按前后缘对齐方式，返回梢弦前缘相对根弦前缘的轴向偏移（m）。"""
     if le_mode == "trailing_aligned":
-        offset = chord_root - chord_tip
-    elif le_mode == "leading_aligned":
-        offset = 0.0
-    elif le_mode == "symmetric":
-        offset = (chord_root - chord_tip) / 2.0
-    else:
-        raise ValueError(
-            f"不支持的 le_mode {le_mode!r}，仅支持 trailing_aligned / leading_aligned / symmetric。"
-        )
+        return chord_root - chord_tip
+    if le_mode == "leading_aligned":
+        return 0.0
+    if le_mode == "symmetric":
+        return (chord_root - chord_tip) / 2.0
+    raise ValueError(
+        f"不支持的 le_mode {le_mode!r}，仅支持 trailing_aligned / leading_aligned / symmetric。"
+    )
+
+
+def _fin_sweep_deg(chord_root, chord_tip, span, le_mode):
+    """由根/梢弦与展长反算舵面前缘后掠角（度，正值后掠）。"""
+    offset = _fin_le_offset(chord_root, chord_tip, le_mode)
     return math.degrees(math.atan2(offset, span))
 
 
@@ -384,8 +450,14 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     ]
 
     def fin_block(index, le_m, chord_root, chord_tip, span_m):
-        """生成一个舵面组（前十字舵 / 后十字舵）的 $FINSET 块。"""
+        """
+        生成一个舵面组（前十字舵 / 后十字舵）的 $FINSET 块。
+
+        同时返回该组的派生几何 detail，供几何核对报告 / 三视图使用
+        （全部为 m / 度，与输入口径一致）。
+        """
         sweep = _fin_sweep_deg(chord_root, chord_tip, span_m, le_mode)
+        tip_le = le_m + _fin_le_offset(chord_root, chord_tip, le_mode)
         block = [
             f"$FINSET{index}",
             f" SECTYP = {section['SECTYP']},",
@@ -403,12 +475,33 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             f" LFLATU = {_num_list([section['LFLATU']] * cruciform_count)},",
             "$END",
         ]
-        return block, sweep
+        detail = {
+            "name": FIN_DISPLAY_NAME.get(index, f"舵面{index}"),
+            "set_index": index,
+            "xle_m": le_m,
+            "root_le_m": le_m,
+            "root_te_m": le_m + chord_root,
+            "tip_le_m": tip_le,
+            "tip_te_m": tip_le + chord_tip,
+            "root_chord_m": chord_root,
+            "tip_chord_m": chord_tip,
+            "span_m": span_m,
+            "sweep_deg": sweep,
+            "root_radius_m": radius,
+            "tip_radius_m": radius + span_m,
+            # 单片外露平面面积（梯形），四片合计算 4 倍
+            "panel_area_m2": (chord_root + chord_tip) / 2.0 * span_m,
+        }
+        return block, detail
 
-    front_block, front_sweep = fin_block(
+    front_block, front_fin = fin_block(
         1, g["L_W"], g["C_RW"], g["C_TW"], g["B_W"])
-    rear_block, rear_sweep = fin_block(
+    rear_block, rear_fin = fin_block(
         2, g["L_F"], g["C_RF"], g["C_TF"], g["B_F"])
+    front_fin.update({"pos_key": "L_W", "root_key": "C_RW",
+                      "tip_key": "C_TW", "span_key": "B_W"})
+    rear_fin.update({"pos_key": "L_F", "root_key": "C_RF",
+                     "tip_key": "C_TF", "span_key": "B_F"})
     lines += front_block + rear_block
     # ---- $EXPR / 控制卡 ----
     lines += [
@@ -443,12 +536,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             "phif_deg": phif,
             "le_mode": le_mode,
             "body_radius_m": radius,
-            "front_tip_radius_m": radius + g["B_W"],
-            "rear_tip_radius_m": radius + g["B_F"],
-            "front_sweep_deg": front_sweep,
-            "rear_sweep_deg": rear_sweep,
-            "front_te_m": g["L_W"] + g["C_RW"],
-            "rear_te_m": g["L_F"] + g["C_RF"],
+            "fins": [front_fin, rear_fin],
         },
     }
     return text, meta
@@ -805,7 +893,490 @@ def parse_datcom_output(text):
 
 
 # =============================================================================
-# 7. 单算例执行
+# 7. 产物输出（中文表头 CSV + 几何模型核对）
+# =============================================================================
+
+def build_output_table(df, meta):
+    """
+    把解析结果整理成最终输出的 CSV 表（一行一个工况）。
+
+    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + OUTPUT_COEFFICIENTS
+    里的气动系数，输入参数一律用中文表头，便于直接对照 README 参数。
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    geometry = meta["geometry_m"]
+    altitude_m = meta["flow"]["altitude_m"]
+
+    rows = []
+    for _, row in df.iterrows():
+        record = {
+            CSV_FLOW_NAMES["mach"]: row.get("MACH"),
+            CSV_FLOW_NAMES["alpha"]: row.get("ALPHA"),
+            CSV_FLOW_NAMES["alt"]: altitude_m,
+        }
+        for key in REQUIRED_GEOMETRY_KEYS:
+            record[GEOMETRY_CN_NAMES[key]] = geometry[key]
+        for datcom_name, cn_name in OUTPUT_COEFFICIENTS:
+            record[cn_name] = row.get(datcom_name, float("nan"))
+        rows.append(record)
+
+    columns = [CSV_FLOW_NAMES[key] for key in ("mach", "alpha", "alt")]
+    columns += [GEOMETRY_CN_NAMES[key] for key in REQUIRED_GEOMETRY_KEYS]
+    columns += [cn_name for _datcom_name, cn_name in OUTPUT_COEFFICIENTS]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _card_value(lines, block, var, index=0):
+    """读 for005 文本里某个 namelist 块内数值变量的第 index 个值；读不到返回 None。"""
+    start, end = _find_namelist_region(lines, block)
+    if start is None:
+        return None
+    pattern = re.compile(r"^(\s*)" + re.escape(var) + r"\s*=(.*)$", re.IGNORECASE)
+    for idx in range(start + 1, end):
+        match = pattern.match(lines[idx])
+        if not match:
+            continue
+        values = []
+        for token in match.group(2).replace("'", " ").split(","):
+            token = token.strip()
+            if re.fullmatch(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", token):
+                values.append(float(token))
+        return values[index] if index < len(values) else None
+    return None
+
+
+def geometry_self_checks(meta, for005_text):
+    """
+    逐项比对"实际写进 for005.dat 的卡片值"与"由 11 个主尺寸算出的期望值"。
+
+    卡片值 = DATCOM 真正读到的几何，期望值 = README 参数按建模口径换算的结果，
+    两者一致才算建模没错；另外复核展长为正、梢弦落在弹体范围内。
+
+    Returns
+    -------
+    list[(bool, str)] : (是否通过, 说明)
+    """
+    g = meta["geometry_m"]
+    d = meta["derived"]
+    ref = meta["reference"]
+    lines = for005_text.splitlines()
+    checks = []
+
+    def check(label, expected, actual, tol=0.002):
+        if actual is None:
+            checks.append((False, f"{label}：卡片里没读到该变量（期望 {expected:.5f}）"))
+            return
+        ok = abs(actual - expected) <= tol
+        text = f"{label}：期望 {expected:.5f}，卡片 {actual:.5f}"
+        checks.append((ok, text if ok else text + "  ← 不一致"))
+
+    inch = M_TO_IN
+
+    # 1) 弹体：圆锥头部 + 等直径圆柱段
+    check("$AXIBOD LNOSE", g["L_N"] * inch, _card_value(lines, "AXIBOD", "LNOSE"))
+    check("$AXIBOD DNOSE", g["D"] * inch, _card_value(lines, "AXIBOD", "DNOSE"))
+    check("$AXIBOD LCENTR", (g["L"] - g["L_N"]) * inch,
+          _card_value(lines, "AXIBOD", "LCENTR"))
+    check("$AXIBOD DCENTR", g["D"] * inch, _card_value(lines, "AXIBOD", "DCENTR"))
+    # 2) 参考量
+    check("$REFQ SREF (in²)", ref["sref_in2"], _card_value(lines, "REFQ", "SREF"))
+    check("$REFQ LREF (= D)", ref["lref_in"], _card_value(lines, "REFQ", "LREF"))
+    check("$REFQ XCG", ref["xcg_m"] * inch, _card_value(lines, "REFQ", "XCG"))
+    # 3) 舵面
+    for fin in d["fins"]:
+        block = f"FINSET{fin['set_index']}"
+        check(f"${block} XLE", fin["xle_m"] * inch, _card_value(lines, block, "XLE"))
+        check(f"${block} CHORD(根)", fin["root_chord_m"] * inch,
+              _card_value(lines, block, "CHORD", 0))
+        check(f"${block} CHORD(梢)", fin["tip_chord_m"] * inch,
+              _card_value(lines, block, "CHORD", 1))
+        check(f"${block} SSPAN(根)", fin["root_radius_m"] * inch,
+              _card_value(lines, block, "SSPAN", 0))
+        check(f"${block} SSPAN(梢)", fin["tip_radius_m"] * inch,
+              _card_value(lines, block, "SSPAN", 1))
+        check(f"${block} SWEEP", fin["sweep_deg"], _card_value(lines, block, "SWEEP"))
+        checks.append((
+            fin["tip_radius_m"] > fin["root_radius_m"] + 1e-6,
+            f"${block} 展长：梢部半径 {fin['tip_radius_m']:.5f} m > 根部半径 "
+            f"{fin['root_radius_m']:.5f} m（{fin['span_key']} = {fin['span_m']:.5f} m）",
+        ))
+        checks.append((
+            0.0 <= fin["tip_le_m"] <= fin["tip_te_m"] <= g["L"] + 1e-6,
+            f"${block} 梢弦落在弹体范围内：{fin['tip_le_m']:.5f} … {fin['tip_te_m']:.5f} m"
+            f"（总长 {g['L']:.5f} m）",
+        ))
+    return checks
+
+
+def _pad_display(text, width):
+    """按"显示宽度"左对齐补空格（中文占 2 列），让核对报告里的文字列对得齐。"""
+    used = sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+    return text + " " * max(width - used, 0)
+
+
+def render_geometry_report(case_name, meta, for005_text, checks):
+    """生成几何模型核对报告（纯文本），供人工确认建模是否正确。"""
+    g = meta["geometry_m"]
+    d = meta["derived"]
+    ref = meta["reference"]
+    flow = meta["flow"]
+    lines = for005_text.splitlines()
+    out = []
+    add = out.append
+    rule = "=" * 78
+
+    add(rule)
+    add(f"几何模型核对报告：算例 {case_name}")
+    add(f"脚本 {os.path.basename(__file__)}    "
+        f"生成时间 {datetime.now().isoformat(timespec='seconds')}")
+    add(rule)
+    add("")
+    add("【建模口径】与建模程序 spaceclaim/lib/missile-geometry.mjs 的定义一致")
+    add("  · 几何单位 m，轴向坐标 x 自弹尖(0)指向弹尾；DATCOM 卡片按英寸写入(DIM IN)。")
+    add("  · L_W / L_F = 弹尖 → 舵根前缘（弹体表面）的轴向距离。")
+    add("  · C_RW / C_RF = 舵根弦长（弹体表面）；C_TW / C_TF = 舵梢弦长。")
+    add("  · B_W / B_F = 舵面外露展长，从弹体表面向外量，不是全展长。")
+    add(f"  · 前后缘对齐 {d['le_mode']}；滚转布局 {d['fin_phase']}，"
+        f"PHIF = {', '.join(f'{a:g}' for a in d['phif_deg'])} 度。")
+    add("  · 弹体 = 圆锥头部 + 等直径圆柱段；每道舵按 NPANEL = "
+        f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
+    add("")
+    add("一、输入的 11 个主尺寸（README 参数，单位 m）")
+    for key in REQUIRED_GEOMETRY_KEYS:
+        add(f"  {key:<4s} "
+            + _pad_display(GEOMETRY_CN_NAMES[key], 20)
+            + f"{g[key]:>9.5f} m ={g[key] * M_TO_IN:>11.5f} in   → {GEOMETRY_CARD_HINT[key]}")
+    add("")
+    add("二、脚本派生的几何量（人工复核用，单位 m）")
+    add("  " + _pad_display("弹体：头部 / 圆柱段 / 半径", 28)
+        + f"{g['L_N']:.5f} / {g['L'] - g['L_N']:.5f} / {d['body_radius_m']:.5f}"
+        "（半径 = D/2）")
+    for fin in d["fins"]:
+        add(f"  {fin['name']}（$FINSET{fin['set_index']}）")
+        add("    " + _pad_display("舵根前缘站位", 18)
+            + f"{fin['root_le_m']:>9.5f}   ← {fin['pos_key']}")
+        add("    " + _pad_display("舵根后缘站位", 18)
+            + f"{fin['root_te_m']:>9.5f}   ← {fin['pos_key']} + {fin['root_key']}")
+        add("    " + _pad_display("舵梢前缘站位", 18)
+            + f"{fin['tip_le_m']:>9.5f}   ← 由前后缘对齐方式决定")
+        add("    " + _pad_display("舵梢后缘站位", 18)
+            + f"{fin['tip_te_m']:>9.5f}")
+        add("    " + _pad_display("根部回转半径", 18)
+            + f"{fin['root_radius_m']:>9.5f}   ← D/2")
+        add("    " + _pad_display("梢部回转半径", 18)
+            + f"{fin['tip_radius_m']:>9.5f}   ← D/2 + {fin['span_key']}")
+        add("    " + _pad_display("前缘后掠角", 18)
+            + f"{fin['sweep_deg']:>9.5f} 度  ← atan(("
+            f"{fin['root_key']} - {fin['tip_key']}) / {fin['span_key']})")
+        add("    " + _pad_display("单片外露平面面积", 18)
+            + f"{fin['panel_area_m2']:>9.6f} m² ← (("
+            f"{fin['root_key']} + {fin['tip_key']}) / 2) × {fin['span_key']}")
+    add("  " + _pad_display("参考面积 SREF = π(D/2)²", 26)
+        + f"{ref['sref_m2']:.7f} m² = {ref['sref_in2']:.5f} in²")
+    add("  " + _pad_display("参考长度 LREF = D", 26)
+        + f"{ref['lref_m']:.5f} m = {ref['lref_in']:.5f} in")
+    add("  " + _pad_display("力矩参考点 XCG", 26)
+        + f"{ref['xcg_m']:.5f} m（默认弹身中点 L/2，可用 XCG_M 覆盖）")
+    add("  " + _pad_display("飞行高度 ALT", 26)
+        + f"{flow['altitude_m']:g} m = {flow['altitude_ft']:.5f} ft")
+    add("")
+    add("三、实际写入 for005.dat 的几何 / 参考量卡片（DATCOM 读到的就是这些数）")
+    for block in ("REFQ", "AXIBOD", "FINSET1", "FINSET2"):
+        start, end = _find_namelist_region(lines, block)
+        if start is None:
+            continue
+        add(f"  ${block}")
+        for idx in range(start + 1, end):
+            add(f"  {lines[idx].strip()}")
+        add("  $END")
+    add("")
+    add("四、几何自检（卡片值 vs 11 个主尺寸的期望值）")
+    for ok, msg in checks:
+        add(f"  [{'OK' if ok else 'NG'}] {msg}")
+    bad = [msg for ok, msg in checks if not ok]
+    add(f"  合计 {len(checks) - len(bad)}/{len(checks)} 项通过"
+        + ("" if not bad else "，存在不一致，请先检查上面的 NG 项"))
+    add("")
+    add("五、与 README 基准几何（脚本顶部 MISSILE_GEOMETRY）的差异")
+    changed = [f"{key}：基准 {float(MISSILE_GEOMETRY[key]):g} m → 本算例 {g[key]:g} m"
+               for key in REQUIRED_GEOMETRY_KEYS
+               if abs(g[key] - float(MISSILE_GEOMETRY[key])) > 1e-9]
+    if changed:
+        for item in changed:
+            add(f"  · {item}")
+    else:
+        add("  · 无（本算例就是 README 基准几何）")
+    add("")
+    add("六、图形")
+    add(f"  三视图见同目录 {GEOMETRY_PNG_NAME}：侧视图 / 俯视图看舵面的轴向站位、根梢弦长、"
+        "外露展长与后掠角；")
+    add("  前视图看十字布局（PHIF）以及展长确实是从弹体表面向外量的。")
+    add("")
+    return "\n".join(out) + "\n"
+
+
+def append_coefficient_check(txt_path, df):
+    """
+    把"CL / CD 与 CN / CA 的三角关系复核"追加到核对报告末尾。
+
+    DATCOM 的 CL / CD 是 CN / CA 按攻角旋转后的结果：
+        CL = CN·cosα − CA·sinα，CD = CA·cosα + CN·sinα
+    逐行复算即可确认解析出的系数列没有串位（同时校验系数定义口径）。
+
+    Returns
+    -------
+    str | None : 一行结论（也打印到控制台）；数据不足时返回 None。
+    """
+    needed = {"CN", "CA", "CL", "CD"}
+    if df.empty or not needed.issubset(df.columns):
+        return None
+
+    worst, worst_row = 0.0, None
+    for _, row in df.iterrows():
+        angle = math.radians(float(row["ALPHA"]))
+        cl = float(row["CN"]) * math.cos(angle) - float(row["CA"]) * math.sin(angle)
+        cd = float(row["CA"]) * math.cos(angle) + float(row["CN"]) * math.sin(angle)
+        err = max(abs(cl - float(row["CL"])), abs(cd - float(row["CD"])))
+        if err > worst:
+            worst, worst_row = err, row
+    scale = max(abs(float(worst_row["CL"])), abs(float(worst_row["CD"])), 1.0)
+    tol = max(0.01, 0.03 * scale)
+    ok = worst <= tol
+    state = "OK" if ok else "NG"
+    status = (f"系数换算复核 [{state}] {len(df)} 行，CL/CD 与 CN/CA 最大偏差 "
+              f"{worst:.5f}（容差 {tol:.5f}）")
+
+    section = [
+        "七、系数换算复核（CL / CD 由 CN / CA 按攻角旋转）",
+        "  CL = CN·cosα − CA·sinα，CD = CA·cosα + CN·sinα",
+        f"  [{state}] {len(df)} 行最大偏差 {worst:.5f}（容差 {tol:.5f}）"
+        + ("" if ok else "，请检查解析结果与 DATCOM 原始输出"),
+        "",
+    ]
+    try:
+        with open(txt_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(section) + "\n")
+    except OSError as exc:
+        print(f"[WARN] 追加系数复核段落失败：{exc}")
+    return status
+
+
+def plot_geometry(meta, path):
+    """
+    按 meta 里的几何画导弹三视图（侧视 / 俯视 / 前视），存成 PNG 供人工核对。
+
+    matplotlib 不可用或绘图出错时只打印警告并返回 None —— 绘图只是辅助产物，
+    不影响 DATCOM 计算与 CSV 输出。
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle, Polygon
+    except Exception as exc:  # noqa: BLE001 —— 缺绘图库不影响主流程
+        print(f"[WARN] 无法使用 matplotlib 画几何示意图（{exc}），跳过 {GEOMETRY_PNG_NAME}")
+        return None
+
+    g = meta["geometry_m"]
+    d = meta["derived"]
+    ref = meta["reference"]
+    radius = d["body_radius_m"]
+    length = g["L"]
+    fins = d["fins"]
+    colors = ("#1f77b4", "#d62728")
+    fig = None
+    try:
+        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        fig = plt.figure(figsize=(13.0, 11.0))
+        grid = fig.add_gridspec(3, 2, height_ratios=(1.0, 1.0, 1.1),
+                                hspace=0.45, wspace=0.22)
+        ax_side = fig.add_subplot(grid[0, :])
+        ax_top = fig.add_subplot(grid[1, :])
+        ax_front = [fig.add_subplot(grid[2, 0]), fig.add_subplot(grid[2, 1])]
+        tip_max = max(fin["tip_radius_m"] for fin in fins)
+        arrow = dict(arrowstyle="<->", color="black", lw=0.9)
+        body_color = "#e8e8e8"
+        # 标注统一加白底，避免压在舵面填充色或尺寸线上看不清
+        bbox_label = dict(facecolor="white", edgecolor="none", alpha=0.85, pad=0.8)
+
+        # ---- 侧视图（X-Z）：竖直的两片舵可见，水平的两片与弹体轮廓重合 ----
+        ax_side.add_patch(Polygon(
+            [(0.0, 0.0), (g["L_N"], radius), (length, radius),
+             (length, -radius), (g["L_N"], -radius)],
+            closed=True, facecolor=body_color, edgecolor="black", lw=1.2, zorder=1))
+        for idx, fin in enumerate(fins):
+            color = colors[idx % len(colors)]
+            for sign in (1.0, -1.0):
+                ax_side.add_patch(Polygon(
+                    [(fin["root_le_m"], sign * fin["root_radius_m"]),
+                     (fin["root_te_m"], sign * fin["root_radius_m"]),
+                     (fin["tip_te_m"], sign * fin["tip_radius_m"]),
+                     (fin["tip_le_m"], sign * fin["tip_radius_m"])],
+                    closed=True, facecolor=color, edgecolor=color,
+                    alpha=0.8, lw=1.0, zorder=3))
+            for station in (fin["root_le_m"], fin["root_te_m"]):
+                ax_side.plot([station, station],
+                             [-fin["tip_radius_m"], fin["tip_radius_m"]],
+                             ls=":", color=color, lw=0.8, zorder=2)
+            ax_side.text(
+                fin["root_te_m"] if fin["root_le_m"] > length / 2.0 else fin["root_le_m"],
+                fin["tip_radius_m"] + (0.06 + 0.85 * idx) * tip_max,
+                f"{fin['name']}  {fin['pos_key']} = {g[fin['pos_key']]:.3f} m\n"
+                f"展长 {fin['span_key']} = {fin['span_m']:.3f} m，"
+                f"后掠 {fin['sweep_deg']:.2f}°",
+                color=color, fontsize=8, va="bottom", bbox=bbox_label,
+                ha="right" if fin["root_le_m"] > length / 2.0 else "left")
+
+        ax_side.annotate("", xy=(0.0, tip_max * 1.75), xytext=(g["L_N"], tip_max * 1.75),
+                         arrowprops=arrow)
+        ax_side.text(g["L_N"] / 2.0, tip_max * 1.75, f" L_N = {g['L_N']:.3f} m ",
+                     ha="center", va="bottom", fontsize=8, bbox=bbox_label)
+        ax_side.annotate("", xy=(0.0, -tip_max * 1.18), xytext=(length, -tip_max * 1.18),
+                         arrowprops=arrow)
+        ax_side.text(length / 2.0, -tip_max * 1.18, f" L = {g['L']:.3f} m ",
+                     ha="center", va="top", fontsize=8, bbox=bbox_label)
+        ax_side.annotate("", xy=(-0.06 * length, -radius), xytext=(-0.06 * length, radius),
+                         arrowprops=arrow)
+        ax_side.text(-0.06 * length, 0.0, f"D = {g['D']:.3f} m ", rotation=90,
+                     ha="right", va="center", fontsize=8, bbox=bbox_label)
+        ax_side.axvline(ref["xcg_m"], color="#2ca02c", ls="--", lw=1.0, zorder=0)
+        ax_side.text(ref["xcg_m"], -tip_max * 1.55, f"XCG = {ref['xcg_m']:.3f} m",
+                     color="#2ca02c", fontsize=8, ha="center", va="top",
+                     bbox=bbox_label)
+        ax_side.set_xlim(-0.14 * length, 1.04 * length)
+        ax_side.set_ylim(-tip_max * 1.75, tip_max * 2.25)
+        ax_side.set_aspect("equal")
+        ax_side.set_title("侧视图（X-Z，单位 m）：竖直两片舵面的投影，水平两片与弹体重合",
+                          fontsize=10)
+        ax_side.set_xlabel("x：自弹尖(0)向弹尾 (m)")
+        ax_side.set_ylabel("z (m)")
+
+        # ---- 俯视图（X-Y）：水平的两片舵可见 ----
+        ax_top.add_patch(Polygon(
+            [(0.0, 0.0), (g["L_N"], radius), (length, radius),
+             (length, -radius), (g["L_N"], -radius)],
+            closed=True, facecolor=body_color, edgecolor="black", lw=1.2, zorder=1))
+        for idx, fin in enumerate(fins):
+            color = colors[idx % len(colors)]
+            for sign in (1.0, -1.0):
+                ax_top.add_patch(Polygon(
+                    [(fin["root_le_m"], sign * fin["root_radius_m"]),
+                     (fin["root_te_m"], sign * fin["root_radius_m"]),
+                     (fin["tip_te_m"], sign * fin["tip_radius_m"]),
+                     (fin["tip_le_m"], sign * fin["tip_radius_m"])],
+                    closed=True, facecolor=color, edgecolor=color,
+                    alpha=0.8, lw=1.0, zorder=3))
+            band = fin["tip_radius_m"] - fin["root_radius_m"]
+            ax_top.annotate("", xy=(fin["root_te_m"], fin["root_radius_m"]),
+                            xytext=(fin["root_te_m"], fin["tip_radius_m"]),
+                            arrowprops=dict(arrowstyle="<->", color=color, lw=0.9))
+            ax_top.text(fin["root_te_m"], fin["tip_radius_m"] + 0.12 * tip_max,
+                        f"{fin['span_key']} = {fin['span_m']:.3f} m", color=color,
+                        fontsize=8, ha="center", va="bottom", bbox=bbox_label)
+            ax_top.text((fin["root_le_m"] + fin["root_te_m"]) / 2.0,
+                        fin["root_radius_m"] + 0.30 * band,
+                        f"{fin['root_key']} = {fin['root_chord_m']:.3f}",
+                        color=color, fontsize=7, ha="center", va="center",
+                        bbox=bbox_label)
+            ax_top.text((fin["tip_le_m"] + fin["tip_te_m"]) / 2.0,
+                        fin["tip_radius_m"] - 0.10 * band,
+                        f"{fin['tip_key']} = {fin['tip_chord_m']:.3f}",
+                        color=color, fontsize=7, ha="center", va="center",
+                        bbox=bbox_label)
+        ax_top.annotate("", xy=(0.0, -tip_max * 1.2), xytext=(length, -tip_max * 1.2),
+                        arrowprops=arrow)
+        ax_top.text(length / 2.0, -tip_max * 1.2, f" L = {g['L']:.3f} m ",
+                    ha="center", va="top", fontsize=8, bbox=bbox_label)
+        ax_top.set_xlim(-0.04 * length, 1.04 * length)
+        ax_top.set_ylim(-tip_max * 1.55, tip_max * 1.55)
+        ax_top.set_aspect("equal")
+        ax_top.set_title("俯视图（X-Y，单位 m）：水平两片舵面的平面形状", fontsize=10)
+        ax_top.set_xlabel("x：自弹尖(0)向弹尾 (m)")
+        ax_top.set_ylabel("y (m)")
+
+        # ---- 前视图（Y-Z）：十字布局与"展长自弹体表面量起" ----
+        for ax_front_ax, fin, color in zip(ax_front, fins, colors):
+            ax_front_ax.add_patch(Circle((0.0, 0.0), radius, facecolor=body_color,
+                                        edgecolor="black", lw=1.2, zorder=2))
+            for angle in d["phif_deg"]:
+                rad = math.radians(angle)
+                ax_front_ax.plot(
+                    [radius * math.cos(rad), fin["tip_radius_m"] * math.cos(rad)],
+                    [radius * math.sin(rad), fin["tip_radius_m"] * math.sin(rad)],
+                    color=color, lw=5, solid_capstyle="butt", zorder=3)
+            ax_front_ax.plot([0.0], [0.0], marker="+", color="black", ms=8)
+            span_lim = fin["tip_radius_m"] * 1.25
+            ax_front_ax.annotate(
+                "", xy=(radius, 0.12 * span_lim),
+                xytext=(fin["tip_radius_m"], 0.12 * span_lim),
+                arrowprops=dict(arrowstyle="<->", color="#555555", lw=0.9))
+            ax_front_ax.text((radius + fin["tip_radius_m"]) / 2.0, 0.19 * span_lim,
+                             f"{fin['span_key']} = {fin['span_m']:.3f} m",
+                             fontsize=8, ha="center", va="bottom", color="#333333",
+                             bbox=bbox_label)
+            ax_front_ax.set_xlim(-span_lim, span_lim)
+            ax_front_ax.set_ylim(-span_lim, span_lim)
+            ax_front_ax.set_aspect("equal")
+            ax_front_ax.set_title(
+                f"{fin['name']}前视图：{d['panels_per_fin_set']} 片，PHIF = "
+                + "/".join(f"{a:g}°" for a in d["phif_deg"]), fontsize=10)
+            ax_front_ax.set_xlabel("y (m)")
+            ax_front_ax.set_ylabel("z (m)")
+
+        fig.suptitle(
+            f"几何模型核对：L = {g['L']:.3f} m，D = {g['D']:.3f} m，"
+            f"L_N = {g['L_N']:.3f} m，SREF = {ref['sref_m2']:.6f} m²，"
+            f"LREF = {ref['lref_m']:.3f} m，XCG = {ref['xcg_m']:.3f} m",
+            fontsize=11)
+        fig.savefig(path, dpi=140, bbox_inches="tight", facecolor="white")
+        return path
+    except Exception as exc:  # noqa: BLE001 —— 绘图失败不影响计算
+        print(f"[WARN] 绘制几何示意图失败（{exc}），已跳过 {GEOMETRY_PNG_NAME}")
+        return None
+    finally:
+        if fig is not None:
+            plt.close(fig)
+
+
+def print_geometry_brief(meta):
+    """在控制台打印几何摘要（详细核对见 geometry_check.txt / .png）。"""
+    g = meta["geometry_m"]
+    d = meta["derived"]
+    ref = meta["reference"]
+    print(f"    几何: L = {g['L']:.3f} m, D = {g['D']:.3f} m, L_N = {g['L_N']:.3f} m, "
+          f"SREF = {ref['sref_m2']:.6f} m², LREF = {ref['lref_m']:.3f} m, "
+          f"XCG = {ref['xcg_m']:.3f} m")
+    for fin in d["fins"]:
+        print(f"    {fin['name']}: XLE = {fin['root_le_m']:.3f} m, "
+              f"根弦 {fin['root_chord_m']:.3f} m, 梢弦 {fin['tip_chord_m']:.3f} m, "
+              f"展长 {fin['span_m']:.3f} m, 后掠 {fin['sweep_deg']:.2f}°, "
+              f"梢部半径 {fin['tip_radius_m']:.3f} m")
+
+
+def write_geometry_outputs(out_dir, case_name, meta, for005_text):
+    """
+    把几何核对产物写到算例目录：geometry_check.txt + geometry_check.png。
+
+    Returns
+    -------
+    (txt_path, png_path, checks) : png_path 在无法绘图时为 None。
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    checks = geometry_self_checks(meta, for005_text)
+    txt_path = os.path.join(out_dir, GEOMETRY_TXT_NAME)
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(render_geometry_report(case_name, meta, for005_text, checks))
+    png_path = plot_geometry(meta, os.path.join(out_dir, GEOMETRY_PNG_NAME))
+    return txt_path, png_path, checks
+
+
+# =============================================================================
+# 8. 单算例执行
 # =============================================================================
 
 def clear_dir(path):
@@ -855,6 +1426,17 @@ def run_one_case(case, work_dir):
     for warn in check_fltcon_warnings(for005_text):
         print(f"[WARN] 算例 '{name}': {warn}")
 
+    # 2.2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
+    out_dir = os.path.join(RESULT_ROOT, name)
+    os.makedirs(out_dir, exist_ok=True)
+    print_geometry_brief(meta)
+    geom_txt, geom_png, checks = write_geometry_outputs(out_dir, name, meta, for005_text)
+    bad = [msg for ok, msg in checks if not ok]
+    print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过 → "
+          f"{GEOMETRY_TXT_NAME}" + (f" + {GEOMETRY_PNG_NAME}" if geom_png else ""))
+    for msg in bad:
+        print(f"    [NG] {msg}")
+
     # 3) 落盘并运行（工作目录先清空，保证每次从干净状态开始）
     clear_dir(work_dir)
     for005_path = os.path.join(work_dir, FOR005_NAME)
@@ -886,15 +1468,31 @@ def run_one_case(case, work_dir):
     elif len(df) < expected:
         print(f"[WARN] 算例 '{name}': 预期 {expected} 个工况，实际解析到 {len(df)} 行。")
 
-    # 6) 拷贝产物到 runs\<name>\
-    out_dir = os.path.join(RESULT_ROOT, name)
-    os.makedirs(out_dir, exist_ok=True)
+    # 6) 拷贝原始产物到 runs\<name>\
     shutil.copyfile(for005_path, os.path.join(out_dir, FOR005_NAME))
     shutil.copyfile(result_path, os.path.join(out_dir, os.path.basename(result_path)))
 
+    # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数
     csv_path = os.path.join(out_dir, CSV_NAME)
+    csv_written = False
     if not df.empty:
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        table = build_output_table(df, meta)
+        try:
+            table.to_csv(csv_path, index=False, encoding="utf-8-sig",
+                         float_format="%.6g")
+            csv_written = True
+        except OSError as exc:
+            # 常见原因：CSV 正被 Excel 等程序打开，Windows 上会拒绝写入
+            print(f"[WARN] 算例 '{name}': 写 {CSV_NAME} 失败（{exc}）。"
+                  f"若该文件正被 Excel 打开，关闭后重跑本脚本即可。")
+        missing = [cn for datcom_name, cn in OUTPUT_COEFFICIENTS
+                   if datcom_name not in df.columns]
+        if missing:
+            print(f"[WARN] 算例 '{name}': DATCOM 输出里没有这些系数，CSV 对应列留空: "
+                  + "、".join(missing))
+        status = append_coefficient_check(geom_txt, df)
+        if status:
+            print(f"    {status}")
 
     # 7) 参数快照：以后想复现某个算例，看这个文件即可
     params = {
@@ -914,13 +1512,16 @@ def run_one_case(case, work_dir):
         "n_records": len(df),
         "expected": expected,
         "out_dir": out_dir,
-        "csv_path": csv_path if os.path.exists(csv_path) else None,
+        "csv_path": csv_path if csv_written else None,
+        "geometry_txt": geom_txt,
+        "geometry_png": geom_png,
+        "checks_failed": len(bad),
         "raw_result": os.path.basename(result_path),
     }
 
 
 # =============================================================================
-# 8. 命令行与主流程
+# 9. 命令行与主流程
 # =============================================================================
 
 def _case_from_geometry(name, geometry, case=None, strict=False):
@@ -1013,7 +1614,8 @@ def parse_args(argv=None):
         description="按 README 的几何参数与来流条件批量调用 Missile DATCOM 求气动参数。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="结果写入 runs/<算例名>/：for005.dat、for006.dat、"
-               "aero_coefficients.csv、case_params.json。",
+               "aero_coefficients.csv（中文表头）、geometry_check.txt、"
+               "geometry_check.png、case_params.json。",
     )
     parser.add_argument("--params", nargs="+", metavar="JSON",
                         help="几何参数 JSON 文件（11 个主尺寸，单位 m），每个文件一个算例，"
@@ -1081,7 +1683,7 @@ def main(argv=None):
 
     if args.dry_run:
         for case in cases:
-            text, _meta = build_for005(
+            text, meta = build_for005(
                 case["geometry"], case["mach"], case["alpha"], case["alt"],
                 xcg_m=case.get("xcg", XCG_M),
                 le_mode=case.get("le_mode", LE_MODE),
@@ -1093,7 +1695,16 @@ def main(argv=None):
             os.makedirs(out_dir, exist_ok=True)
             with open(os.path.join(out_dir, FOR005_NAME), "w", encoding="utf-8") as f:
                 f.write(text)
-            print(f"[DRY-RUN] 已生成 {os.path.join(out_dir, FOR005_NAME)}")
+            print_geometry_brief(meta)
+            geom_txt, geom_png, checks = write_geometry_outputs(
+                out_dir, case["name"], meta, text)
+            bad = [msg for ok, msg in checks if not ok]
+            print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过")
+            for msg in bad:
+                print(f"    [NG] {msg}")
+            print(f"[DRY-RUN] 已生成 {os.path.join(out_dir, FOR005_NAME)}"
+                  f" + {GEOMETRY_TXT_NAME}"
+                  + (f" + {GEOMETRY_PNG_NAME}" if geom_png else ""))
         return 0
 
     summary = []
@@ -1105,10 +1716,12 @@ def main(argv=None):
         try:
             info = run_one_case(case, work_dir)
             print(f"[OK] {name}: {info['n_records']} 条气动系数记录 → {info['out_dir']}")
-            summary.append((name, info["n_records"], info["expected"], info["raw_result"]))
+            summary.append((name, info["n_records"], info["expected"],
+                            info["raw_result"], bool(info.get("csv_path"))))
         except Exception as exc:  # noqa: BLE001 —— 单算例失败不中断批量
             print(f"[ERROR] 算例 '{name}' 运行失败: {exc}")
-            summary.append((name, None, len(case["mach"]) * len(case["alpha"]), "FAILED"))
+            summary.append((name, None, len(case["mach"]) * len(case["alpha"]),
+                            "FAILED", False))
 
     # 清理临时工作目录
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -1117,7 +1730,7 @@ def main(argv=None):
     print("批量运行汇总:")
     print("=" * 70)
     failed = 0
-    for name, n_records, expected, raw in summary:
+    for name, n_records, expected, raw, csv_ok in summary:
         if n_records is None:
             failed += 1
             print(f"  [FAIL] {name:<24s} {'-':>6s} 条  原始输出: {raw}")
@@ -1125,10 +1738,14 @@ def main(argv=None):
         ok = n_records == expected
         failed += 0 if ok else 1
         state = "OK  " if ok else "WARN"
-        print(f"  [{state}] {name:<24s} {n_records:>6d} 条（预期 {expected}）  原始输出: {raw}")
+        note = "" if csv_ok else f"  ← {CSV_NAME} 未更新（文件被其它程序占用？）"
+        print(f"  [{state}] {name:<24s} {n_records:>6d} 条（预期 {expected}）"
+              f"  原始输出: {raw}{note}")
     print(f"\n[INFO] 结果目录: {RESULT_ROOT}")
-    print("[INFO] 每个算例一个子目录：for005.dat（实际输入）+ for006.dat（原始输出）"
-          f" + {CSV_NAME} + {PARAMS_NAME}")
+    print(f"[INFO] 每个算例一个子目录：{FOR005_NAME}（实际输入）+ {FOR006_NAME}（原始输出）"
+          f" + {CSV_NAME}（中文表头系数表）")
+    print(f"[INFO] 另外还有 {GEOMETRY_TXT_NAME}（几何核对报告）+ {GEOMETRY_PNG_NAME}"
+          f"（几何三视图）+ {PARAMS_NAME}（参数快照）")
     return 0 if failed == 0 else 1
 
 
