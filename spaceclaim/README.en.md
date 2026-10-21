@@ -96,6 +96,25 @@ The third request is for `build_missile_model`: it generates files only. A retur
 
 ## Parametric model contract
 
+### How the CLI and MCP build the same model
+
+The [CLI](scripts/missile.mjs) and [MCP tool](server.mjs) both call `buildMissile()` in [lib/spaceclaim-runner.mjs](lib/spaceclaim-runner.mjs). The CLI follows the existing parameterized code without AI: it validates inputs, computes geometry, and writes `params.json` and `model.py` using the existing [script template](lib/missile-template.mjs). A language model does not write a new modeling script on each run.
+
+```mermaid
+flowchart TD
+    A["Terminal<br/>node scripts/missile.mjs"] --> C["CLI entry point<br/>scripts/missile.mjs"]
+    B["AI application<br/>MCP: build_missile_model"] --> D["MCP entry point<br/>server.mjs"]
+    C --> E["Shared buildMissile()<br/>lib/spaceclaim-runner.mjs"]
+    D --> E
+    E --> F["Validate parameters and compute geometry<br/>Generate params.json + model.py from template"]
+    F --> G["SpaceClaim<br/>Execute model.py"]
+    G --> H["Save .scdoc + result.json<br/>Node.js validates fresh artifacts"]
+```
+
+An AI application can interpret natural-language requests, choose [parameters](lib/missile-schema.mjs), and select MCP tools. Ordinary MCP clients can invoke the same tool without AI. Both paths cover the currently implemented parametric geometry; adding a new geometry type requires extending the code.
+
+The diagram shows normal execution, which defaults to `execute:true`. CLI `--generate-only` or MCP `execute:false` stops after file generation: SpaceClaim is not launched, no model is built, and geometry is not runtime-verified.
+
 All lengths are in metres. The model axis is X; the nose points toward −X. `L_W` and `L_F` measure from the nose tip to the visible fin leading edge at the body surface. Root chords are defined at that surface, spans extend outward from it, and `root_overlap` extends fins inward to support merging.
 
 | Geometry input | Default | Meaning |

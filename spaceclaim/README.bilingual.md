@@ -52,6 +52,27 @@ Executable discovery tries `SCDM_EXECUTABLE`, saved manual setup, versioned AWP 
 
 ## 参数模型 / Parameterized model
 
+### CLI 与 MCP 的共同建模流程 / Shared CLI and MCP workflow
+
+[CLI 入口](scripts/missile.mjs) 和 [MCP 工具](server.mjs) 最终调用同一个 [buildMissile()](lib/spaceclaim-runner.mjs)。CLI 按已有参数化代码执行，无需 AI：校验参数、计算几何，再使用现有[脚本模板](lib/missile-template.mjs)生成 `params.json` 和 `model.py`，并非每次运行都由大模型编写一份新建模脚本。
+
+The [CLI](scripts/missile.mjs) and [MCP tool](server.mjs) call the same [buildMissile()](lib/spaceclaim-runner.mjs). The CLI follows the existing parameterized code without AI: it validates inputs, computes geometry, and generates `params.json` and `model.py` from the existing [script template](lib/missile-template.mjs). A language model does not write a new modeling script on each run.
+
+```mermaid
+flowchart TD
+    A["终端 / Terminal<br/>node scripts/missile.mjs"] --> C["CLI 入口 / CLI entry point<br/>scripts/missile.mjs"]
+    B["AI 应用 / AI application<br/>MCP: build_missile_model"] --> D["MCP 入口 / MCP entry point<br/>server.mjs"]
+    C --> E["共同调用 / Shared buildMissile()<br/>lib/spaceclaim-runner.mjs"]
+    D --> E
+    E --> F["校验参数、计算几何 / Validate inputs, compute geometry<br/>模板生成 / Template writes params.json + model.py"]
+    F --> G["SpaceClaim<br/>执行 / Execute model.py"]
+    G --> H["保存 / Save .scdoc + result.json<br/>Node.js 验收新产物 / Validate fresh artifacts"]
+```
+
+AI 应用可理解自然语言、选择[参数](lib/missile-schema.mjs)及 MCP 工具；普通 MCP 客户端也能在不使用 AI 的情况下调用同一工具。两条入口均受当前已实现参数化几何的限制，新几何类型需要扩展代码。图中是默认 `execute:true` 的执行流程；CLI `--generate-only` 或 MCP `execute:false` 在生成文件后停止，不启动 SpaceClaim、不生成已建好的模型，也不构成运行验证。
+
+An AI application can interpret natural language, choose [parameters](lib/missile-schema.mjs), and select MCP tools; ordinary MCP clients can invoke the same tool without AI. Both paths cover only implemented parametric geometry; a new geometry type requires code changes. The diagram shows default `execute:true` execution. CLI `--generate-only` or MCP `execute:false` stops after file generation, without launching SpaceClaim, building a model, or establishing runtime verification.
+
 字段与默认值以 [missile-schema.mjs](lib/missile-schema.mjs) 为准，完整说明见 [中文指南](README.md) 和 [English guide](README.en.md)。主要默认值如下；长度单位为米。
 
 [missile-schema.mjs](lib/missile-schema.mjs) defines fields and defaults. See the full [Chinese](README.md) and [English](README.en.md) guides for details. Main defaults below use meters for lengths.

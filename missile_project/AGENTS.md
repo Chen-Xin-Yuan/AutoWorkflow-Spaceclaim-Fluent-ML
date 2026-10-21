@@ -4,7 +4,7 @@
 
 ## 布局速览
 - `scripts/`：Python 代码。主脚本 `01_batch_datcom.py`（DATCOM 批量运行），另有 02/03/datcom_parser 占位模块。
-- `datcom_bin/`（datcom.exe、for005.dat 模板）、`runs/`（DATCOM 运行结果，每算例一子目录）、`outputs/` `docs/` `fluent_case/` `notebook/` 等：数据/产物，**不入 git**（runs/*、outputs/* 已在 .gitignore 忽略）。
+- `datcom_bin/`（datcom.exe、for005.dat 模板）、`runs/`（DATCOM 运行结果，每算例一子目录）、`outputs/` `docs/` `fluent_case/` `notebook/` 等：数据/产物，**不入 git**。
 - 版本管理：当前 `missile_project/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 
 ## 路径约定：禁止写死绝对路径（项目文件夹可整体移动）

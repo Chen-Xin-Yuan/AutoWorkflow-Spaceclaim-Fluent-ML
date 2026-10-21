@@ -1,17 +1,65 @@
 # 自动化工作区
 
-本工作区按建模、网格、求解、数据、机器学习和异常反馈组织。`missile_project` 独立保留，不参与重构。
+几何参数与计算工况按以下约定设置。
+
+## 参数化方式与来流条件
+
+### 几何参数定义与范围
+
+按照[参数化方式原图](docx/参数化方式.png)，使用下列 11 个主尺寸描述几何，长度单位统一为米（m）。参数名与建模输入 JSON 的字段一致。
+
+| 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
+|---|---|---|---|---|
+| `L_N` | 鼻锥长度 | — | — | 0.49 |
+| `L` | 轴向长度 | — | — | 3.69 |
+| `D` | 机身直径 | — | — | 0.18 |
+| `L_W` | 前十字舵轴向位置 | 1.2 | 1.8 | 1.72 |
+| `C_RW` | 前十字舵根弦长 | 0.1 | 0.4 | 0.23 |
+| `C_TW` | 前十字舵梢弦长 | 0 | 0.09 | 0.06 |
+| `B_W` | 前十字舵展长 | 0.1 | 0.3 | 0.23 |
+| `L_F` | 后十字舵轴向位置 | 3.0 | 3.2 | 3.2 |
+| `C_RF` | 后十字舵根弦长 | 0.1 | 0.4 | 0.38 |
+| `C_TF` | 后十字舵梢弦长 | 0 | 0.25 | 0.19 |
+| `B_F` | 后十字舵展长 | 0.1 | 0.3 | 0.22 |
+
+`—` 表示原图未给出上下限；图中对 `L_N`、`L`、`D` 仅列出基准值，对其余 8 项给出设计范围。`L_W`、`L_F` 在当前建模程序中均指从弹尖到弹体表面处舵面可见前缘的轴向距离。
+
+表中保留原图的设计范围。当前建模程序会将小于 0.001 m 的非负梢弦长自动修正为 0.001 m，具体建模约定见 [SpaceClaim 参数化建模说明](spaceclaim/README.md#参数化建模)。
+
+### 来流参数与工况组合
+
+来流条件由马赫数 `Ma` 和攻角 `α` 两个参数确定，采用以下离散取值的全部组合：
+
+- 马赫数：`Ma = {2.00, 2.04, 2.08, 2.12, 2.16, 2.20}`，无量纲。
+- 攻角：`α = {4.0°, 4.5°, 5.0°, 5.5°, 6.0°}`。
+
+每组几何参数对应 `6 × 5 = 30` 个来流工况。下表每个单元格代表其所在行的马赫数与所在列的攻角组成的一个工况，按马赫数优先、攻角递增编号：
+
+| 马赫数 Ma / 攻角 α | 4.0° | 4.5° | 5.0° | 5.5° | 6.0° |
+|---|---|---|---|---|---|
+| 2.00 | C01 | C02 | C03 | C04 | C05 |
+| 2.04 | C06 | C07 | C08 | C09 | C10 |
+| 2.08 | C11 | C12 | C13 | C14 | C15 |
+| 2.12 | C16 | C17 | C18 | C19 | C20 |
+| 2.16 | C21 | C22 | C23 | C24 | C25 |
+| 2.20 | C26 | C27 | C28 | C29 | C30 |
+
+例如，C01 为 `(Ma, α) = (2.00, 4.0°)`，C30 为 `(2.20, 6.0°)`。以上为后续计算采用的工况定义，自动求解模块仍处于预留状态。
+
+## 工作区组织
+
+围绕上述几何参数和来流工况，本工作区按建模、网格、求解、数据、机器学习和异常反馈组织。`missile_project` 独立保留，不参与重构。
 
 | 目录 | 用途 |
 |---|---|
-| spaceclaim | SpaceClaim 建模代码及独立 Git 仓库 |
+| spaceclaim | SpaceClaim 建模代码 |
 | fluent_meshing | Fluent 网格代码及隔离依赖 |
 | fluent_solution | 自动求解预留，目前没有已验证的求解流程 |
 | data_lib | 输入、历史产物、新运行及来源索引 |
 | ML_training | 机器学习预留 |
 | feedback | 异常日志、参数快照和失败产物，大输入通过校验值引用 |
 | docx | 文献、汇报、提示词、通用 skill 和资料导航 |
-| experiments/autoCFD | 保留的独立研究项目，本轮不调试 |
+| experiments/autoCFD | 保留的独立研究项目 |
 | scripts | 统一启动、验收、索引和回退入口 |
 | archive | 完整备份及迁移清单，保留用于回退 |
 
@@ -29,7 +77,7 @@
 
 工作区根目录本身就是一个 Git 仓库（分支 `master`，尚无提交）。`spaceclaim`、`fluent_meshing`、`experiments/autoCFD` 已不再是独立仓库，版本控制集中在根目录，排除规则见 `.gitignore`；迁移前的仓库 bundle 仍保留在 `archive/snapshot-pre-recovery-20261015T084726Z/`。下面每个目录都有自己的 `README.md` 说明其直接下级的作用；目录结构与 README 必须同步更新。
 
-### `spaceclaim/` — SpaceClaim 文档检索 MCP server 与参数化建模（独立 Git 仓库）
+### `spaceclaim/` — SpaceClaim 文档检索 MCP server 与参数化建模
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
@@ -46,7 +94,7 @@
 | `README.md`、`README.en.md`、`README.bilingual.md` | 文件 | 中文、英文、双语说明 |
 | `AGENTS.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore` | 文件 | 协作、安全、变更、许可与忽略规则 |
 
-### `fluent_meshing/` — Fluent 网格生成与校验（独立 Git 仓库）
+### `fluent_meshing/` — Fluent 网格生成与校验
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
@@ -194,7 +242,7 @@ node .\spaceclaim\scripts\missile.mjs --list
 node .\spaceclaim\scripts\missile.mjs --preset .\data_lib\inputs\missile_params_example.json
 ```
 
-`data_lib/inputs/missile_params_example.json` 只填写图中的 11 个主尺寸
+`data_lib/inputs/missile_params_example.json` 填写[几何参数表](#几何参数定义与范围)中的 11 个主尺寸基准值
 （`L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`），其余几何与区域配置沿用旧版默认值，
 仍可逐项覆盖。仅生成脚本的运行记为 `GENERATED`，`runtimeVerified` 恒为 false。
 

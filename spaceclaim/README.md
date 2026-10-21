@@ -56,6 +56,23 @@ AWP 确认失败时，页面显示下面的原文，并在该错误页面禁用 
 
 ## 参数化建模
 
+`node scripts/missile.mjs` 可以直接使用已有的参数化建模程序生成模型，运行过程中不需要 AI 参与。命令行与 MCP 是两个调用入口，最终共用同一个 `buildMissile()` 函数：
+
+```mermaid
+flowchart TD
+    A["终端执行<br/>node scripts/missile.mjs"] --> C["命令行入口<br/>scripts/missile.mjs"]
+    B["AI应用通过MCP调用<br/>build_missile_model"] --> D["MCP入口<br/>server.mjs"]
+    C --> E["共同的建模函数 buildMissile()<br/>lib/spaceclaim-runner.mjs"]
+    D --> E
+    E --> F["读取参数、计算几何<br/>根据模板生成 params.json 和 model.py"]
+    F --> G["SpaceClaim 执行 model.py"]
+    G --> H["保存 .scdoc 模型和结果<br/>Node.js执行验收"]
+```
+
+命令行入口位于 [scripts/missile.mjs](scripts/missile.mjs)，MCP 工具入口位于 [server.mjs](server.mjs)；两者调用 [lib/spaceclaim-runner.mjs](lib/spaceclaim-runner.mjs) 中的建模流程。[lib/missile-template.mjs](lib/missile-template.mjs) 根据预先编写的模板生成 `model.py`。生成的脚本读取 `params.json`，在 SpaceClaim 内调用建模 API；每次建模不需要让大语言模型重新编写脚本。
+
+AI 可以理解自然语言、选择参数和安排工具调用；普通程序也可以作为 MCP 客户端调用这些工具。现有建模算法只覆盖已实现的参数化几何，新增不同的几何结构需要扩展代码。上图展示实际执行的流程；使用 CLI `--generate-only` 或 MCP `execute:false` 时，流程停在参数文件和脚本生成阶段，不启动 SpaceClaim，也不产生已建好的模型。
+
 所有长度使用米，半径系数无量纲。输入优先级为显式参数 > 预设 JSON > schema 默认值；预设可为参数对象，也可为此前生成的 `params.json`。CLI `--list` 输出全部默认值、几何字段和优化区间。
 
 ```powershell
