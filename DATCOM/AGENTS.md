@@ -4,7 +4,7 @@
 
 ## 布局速览
 - `scripts/`：Python 代码。主脚本 `01_batch_datcom.py`（DATCOM 批量运行），另有 02/03/datcom_parser 占位模块。
-- `datcom_bin/`（datcom.exe、for005.dat 模板）、`runs/`（DATCOM 运行结果，每算例一子目录）、`outputs/` `docs/` `fluent_case/` `notebook/` 等：数据/产物，**不入 git**。
+- `datcom_bin/`（datcom.exe、for005.dat 模板）、`outputs/` `docs/` `fluent_case/` `notebook/` 等：数据/产物，**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/datcom_data/<算例名>/`（位置由脚本顶部 `RESULT_ROOT` 决定），本项目的 `runs/` 只是改名前的旧结果目录。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 
 ## 路径约定：禁止写死绝对路径（项目文件夹可整体移动）

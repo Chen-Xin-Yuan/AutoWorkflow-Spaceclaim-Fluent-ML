@@ -1,6 +1,5 @@
-# Missile Project — 项目目录结构说明
+# DATCOM — 项目目录结构说明
 
-项目根目录：`DATCOM/`。用 VS Code / Jupyter 打开此目录即可。
 
 ## 一、核心工作目录（必要）
 
@@ -11,7 +10,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 `for005.dat` 是旧版手工算例模板，现在只作为翼型剖面（HEX）参数的参考，
 `01_batch_datcom.py` 不再改写它，而是按几何/来流参数整份生成 `for005.dat`。
 
-不要把算例结果放在这里，程序输出请放到 `runs/` 或 `outputs/` 下。
+不要把算例结果放在这里，程序输出请放到项目外的 `../data_lib/datcom_data/` 或 `outputs/` 下。
 
 ### `scripts/`
 
@@ -25,12 +24,6 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
 | `datcom_parser.py` | 解析 `for006.dat` 的工具函数 |
 
-### `notebook/`
-
-Jupyter 交互式调试笔记本（`.ipynb`）。
-
-- `demo.ipynb`：单组工况调试、测试解析函数。
-- 其他 `.ipynb` 可按任务自由添加。
 
 ### `outputs/`
 
@@ -46,9 +39,11 @@ Jupyter 交互式调试笔记本（`.ipynb`）。
 
 `pointcloud/` 包含 `missile_8192.ply/xyz`、部件标签、meta、参考网格 obj，以及预览图 `preview_missile.png`；体积小、可复现，已在 `.gitignore` 中单独放行入库。
 
-### `runs/`
+### `../data_lib/datcom_data/`（运行结果，项目外）
 
-每个 DATCOM 算例的独立子文件夹。
+每个 DATCOM 算例一个独立子文件夹，位置由脚本顶部 `RESULT_ROOT` 决定
+（默认 = 项目根的同级 `data_lib/datcom_data`；本项目内的 `runs/` 是改名前的旧结果目录，
+历史算例仍留在那里，可自行清理或搬走）。
 
 子文件夹内自动生成：
 
@@ -62,7 +57,7 @@ Jupyter 交互式调试笔记本（`.ipynb`）。
 | `geometry_check.png` | 脚本按同一套参数自绘的三视图，仅供速查；权威外形以 `for022.dat` 为准 |
 | `case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
 
-看外形的最直接方式：Tecplot 360 → *File → Load Data File(s)* → 选 `runs/<算例名>/for022.dat`，
+看外形的最直接方式：Tecplot 360 → *File → Load Data File(s)* → 选 `../data_lib/datcom_data/<算例名>/for022.dat`，
 会得到 9 个区（1 个 `FUSELAGE` + 前舵 4 片 `FINSET 1` + 后舵 4 片 `FINSET 2`）。
 注意文件长度单位是**英尺**（DATCOM 几何输出固定用英尺，与输入卡片里的英寸无关）。
 
@@ -114,7 +109,7 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 2. 来流：`MACH_LIST` / `ALPHA_LIST` / `ALTITUDE_M`，默认即 README 的 6 个马赫 ×
    5 个攻角 = 30 个工况（高度按英尺写入 DATCOM）；`ALTITUDE_M` 默认 **5000 m**。
 3. 运行 `python scripts/01_batch_datcom.py`，脚本自动生成 `for005.dat`、
-   调用 `datcom_bin/datcom.exe`，把结果写到 `runs/<算例名>/` 并解析成
+   调用 `datcom_bin/datcom.exe`，把结果写到 `../data_lib/datcom_data/<算例名>/` 并解析成
    `aero_coefficients.csv`（中文表头，含输入参数与 `CL`/`CD`/`CM`）；
    同时保留 DATCOM 自己写出的 `for022.dat`（Tecplot 几何外形），并生成
    `geometry_check.txt`（含拿 `for022.dat` 反查外形的结果）。
@@ -145,22 +140,15 @@ python scripts/01_batch_datcom.py --params D:\...\missile_params_example.json
 
 - 多组几何对比：在 `CASES` 里加一项，`"geometry"` 只写要改的参数，其余沿用基准值；
 - 不同来流：算例里可用 `"mach"` / `"alpha"` / `"alt"` 单独覆盖全局来流条件；
-- 一个算例 = 一次 DATCOM 调用 = 一个 `runs/<算例名>/` 目录，互不干扰。
+- 一个算例 = 一次 DATCOM 调用 = 一个 `../data_lib/datcom_data/<算例名>/` 目录，互不干扰。
 
 ### 3. Git 管理
 
-建议根目录加入 `.gitignore`，忽略以下内容：
+结果现在写到项目外的 `../data_lib/datcom_data/`，由上级工作区 `.gitignore` 里的 `/data_lib/datcom_data/` 忽略，
+不需要在本项目里再维护一份忽略规则。本项目 `DATCOM/` 整体被上级 `.gitignore` 忽略，改动源码后
+按 `AGENTS.md` 的说明返回上一级目录、用 `git add -f` 提交具体文件。
 
-```gitignore
-outputs/*
-runs/*
-__pycache__/
-.ipynb_checkpoints/
-.playwright-mcp/
-*.pyc
-```
-
-这样只有源码、模板、文档纳入版本控制，产物不入库。
+`outputs/`、`__pycache__/` 等产物同样不入库（由上级 `.gitignore` 统一覆盖）。
 
 ---
 

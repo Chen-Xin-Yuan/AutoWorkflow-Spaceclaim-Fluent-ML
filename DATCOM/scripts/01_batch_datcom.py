@@ -4,8 +4,9 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
 ================================================
 输入：README「参数化方式与来流条件」里的 11 个主尺寸（单位 m）与来流条件
       （马赫数列表 + 攻角列表 + 飞行高度）。
-输出：runs\\<算例名>\\ 下的 DATCOM 原始输出（含 Tecplot 几何外形 for022.dat）、
-      气动系数 CSV（中文表头，含输入参数）与几何模型核对产物，输出路径不变。
+输出：<数据根>\\datcom_data\\<算例名>\\ 下的 DATCOM 原始输出（含 Tecplot 几何外形
+      for022.dat）、气动系数 CSV（中文表头，含输入参数）与几何模型核对产物。
+      数据根默认 = 项目根的同级 data_lib（结果在项目外，产物不入 git）。
 
 默认算例（改本文件顶部配置区即可）：
     几何 = 11 个主尺寸基准值：L_N / L / D / L_W / C_RW / C_TW / B_W /
@@ -47,7 +48,7 @@ DATCOM 建模约定（改动前务必读）：
     9. 翼型剖面沿用 datcom_bin/for005.dat 历史模板的 HEX 参数
        （默认按弦长归一的薄翼剖面），一般无需改动。
 
-运行产物（runs\\<算例名>\\，产物不入 git）：
+运行产物（<数据根>\\datcom_data\\<算例名>\\，项目外，产物不入 git）：
     for005.dat             本次实际喂给 DATCOM 的输入（可复查 / 复现）
     for006.dat             DATCOM 原始输出
     for022.dat             DATCOM 写出的 Tecplot ASCII 几何外形（英尺），
@@ -87,8 +88,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # datcom.exe 与历史输入模板同目录（模板只读，脚本从不改写它）
 DATCOM_EXE = os.path.join(PROJECT_ROOT, "datcom_bin", "datcom.exe")
 
-# 结果根目录：每个算例保存到 runs\<算例名>\（runs 目录位于项目根，产物不入 git）
-RESULT_ROOT = os.path.join(PROJECT_ROOT, "runs")
+# 结果根目录：每个算例保存到 <结果根>\<算例名>\，中间文件放在 <结果根>\.work\。
+# 默认 = 项目根的同级 data_lib\datcom_data（结果落在项目外，产物不入 git）；
+# 换位置只改这一行，DATCOM_EXE 仍由 PROJECT_ROOT 下的 datcom_bin 决定。
+RESULT_ROOT = os.path.join(os.path.dirname(PROJECT_ROOT), "data_lib", "datcom_data")
 
 # 输入：默认使用下面的 CASES；外部几何 JSON 由命令行 --params 指定，
 # 相对 JSON 路径仍以启动时的当前工作目录为基准，不自动读取历史模板。
@@ -169,7 +172,7 @@ FIN_SECTION = {
 }
 
 # -----------------------------------------------------------------------------
-# 1.4 算例批量配置（每个元素 = 一个算例 = 一个 runs\<name>\ 目录）
+# 1.4 算例批量配置（每个元素 = 一个算例 = 结果根下的一个 <name>\ 目录）
 # -----------------------------------------------------------------------------
 # "geometry" 里只需写要改的项，其余沿用 MISSILE_GEOMETRY；
 # 可选 "mach" / "alpha" / "alt" 覆盖全局来流条件。
@@ -1722,7 +1725,7 @@ def run_one_case(case, work_dir):
     elif len(df) < expected:
         print(f"[WARN] 算例 '{name}': 预期 {expected} 个工况，实际解析到 {len(df)} 行。")
 
-    # 6) 拷贝原始产物到 runs\<name>\
+    # 6) 拷贝原始产物到 <结果根>\<name>\
     shutil.copyfile(for005_path, os.path.join(out_dir, FOR005_NAME))
     shutil.copyfile(result_path, os.path.join(out_dir, os.path.basename(result_path)))
 
@@ -1868,7 +1871,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="按 README 的几何参数与来流条件批量调用 Missile DATCOM 求气动参数。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="结果写入 runs/<算例名>/：for005.dat、for006.dat、for022.dat"
+        epilog="结果写入 <数据根>/datcom_data/<算例名>/（默认 = 项目根同级 data_lib/datcom_data）："
+               "for005.dat、for006.dat、for022.dat"
                "（Tecplot 几何外形）、aero_coefficients.csv（中文表头）、"
                "geometry_check.txt、geometry_check.png、case_params.json。",
     )
@@ -1882,7 +1886,7 @@ def parse_args(argv=None):
                         help=f"覆盖攻角列表（度），例如 --alpha 4.0 5.0 6.0（默认 {ALPHA_LIST}）。")
     parser.add_argument("--alt", type=float, help=f"覆盖飞行高度（m，默认 {ALTITUDE_M}）。")
     parser.add_argument("--dry-run", action="store_true",
-                        help="只生成 for005.dat 到 runs/<算例名>/，不调用 datcom。")
+                        help="只生成 for005.dat 到 <数据根>/datcom_data/<算例名>/，不调用 datcom。")
     parser.add_argument("--list", action="store_true", help="列出算例与工况组合后退出。")
     parser.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS,
                         help=f"单算例超时秒数（默认 {TIMEOUT_SECONDS}）。")

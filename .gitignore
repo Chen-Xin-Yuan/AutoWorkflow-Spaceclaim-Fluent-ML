@@ -13,6 +13,8 @@
 # ---------------------------------------------------------------
 # 每次运行的模型、网格与日志（约 536 MB），由 data_lib/runs 承载
 /data_lib/runs/
+# DATCOM 批量算例结果（每算例一个子目录：for005/for006/for022、CSV、几何核对图）
+/data_lib/datcom_data/
 # 运行期支撑数据
 /data_lib/runtime/
 # 由 scripts/run.ps1 index 生成，可随时重建
