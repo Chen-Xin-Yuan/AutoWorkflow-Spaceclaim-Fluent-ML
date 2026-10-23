@@ -11,7 +11,7 @@
 
 ## 工作区边界
 
-- Preserve `missile_project`: do not read, enumerate, edit, move or delete its contents.
+- Preserve `DATCOM`: do not read, enumerate, edit, move or delete its contents.
 - `spaceclaim` and `fluent_meshing` are independent repositories. Read each repository's own instructions before editing it.
 - Keep folder structure and `README.md` files in sync. Any change that adds, removes, renames or moves a directory must update the corresponding `README.md` in the same change, so that it lists that directory's direct children and their purpose. The workspace root covers the top level and one level below; every other directory documents its own direct children.
 - A structure change without its matching README update is incomplete work. A README entry that no longer matches the tree is a defect, not documentation debt. Dependency, generated and cache directories are documented too, marked as not version-controlled and not to be edited by hand.

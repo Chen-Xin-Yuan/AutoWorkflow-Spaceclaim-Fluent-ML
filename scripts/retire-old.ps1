@@ -1,6 +1,6 @@
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
-$protected=Join-Path $root 'missile_project'
+$protected=Join-Path $root 'DATCOM'
 function Checked([string]$p) {
     $full=[IO.Path]::GetFullPath($p).TrimEnd('\')
     if(-not $full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or $full -eq $protected -or $full.StartsWith($protected+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe retirement path.'}

@@ -29,7 +29,7 @@ export function workspaceFor(projectDir, env = process.env) {
 export function workspacePath(workspace, relative) {
   const file=path.resolve(workspace.root,relative);
   const local=path.relative(workspace.root,file);
-  if(!local || local.startsWith('..') || path.isAbsolute(local) || local.split(path.sep)[0].toLowerCase()==='missile_project') throw new Error('Unsafe workspace data path');
+  if(!local || local.startsWith('..') || path.isAbsolute(local) || local.split(path.sep)[0].toLowerCase()==='datcom') throw new Error('Unsafe workspace data path');
   return file;
 }
 export function relativePath(workspace,file) { return path.relative(workspace.root,path.resolve(file)).replaceAll('\\','/'); }
@@ -41,14 +41,14 @@ export async function hashFile(file) {
 export async function inputRecord(workspace,file) {
   const resolved=path.resolve(file);
   const local=path.relative(workspace.root,resolved).split(path.sep)[0];
-  if(local.toLowerCase()==='missile_project') throw new Error('Protected project input');
+  if(local.toLowerCase()==='datcom') throw new Error('Protected project input');
   return {path:relativePath(workspace,resolved),sha256:await hashFile(resolved),size:(await fs.stat(resolved)).size};
 }
 export async function beginRun(stage, projectDir, {outputDir='',parameters={},inputs=[],env=process.env,fixture=''}={}) {
   const workspace=workspaceFor(projectDir,env);
   const runId='run-'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)+'-'+randomUUID().slice(0,8);
   const dir=outputDir ? path.join(path.resolve(outputDir),runId) : workspacePath(workspace,path.join(workspace.dataRoot,RUNS_DIRECTORY_NAME,runId,stage));
-  const protectedPath=path.join(workspace.root,'missile_project');
+  const protectedPath=path.join(workspace.root,'DATCOM');
   if(dir.toLowerCase()===protectedPath.toLowerCase() || dir.toLowerCase().startsWith((protectedPath+path.sep).toLowerCase())) throw new Error('Protected project output');
   await fs.mkdir(dir,{recursive:false}).catch(async error=>{if(error.code!=='ENOENT')throw error; await fs.mkdir(path.dirname(dir),{recursive:true}); await fs.mkdir(dir);});
   const record={schemaVersion:1,runId,stage,status:'RUNNING',startedAt:new Date().toISOString(),finishedAt:null,fixture,inputs,artifacts:[],verification:{runtimeVerified:false},error:null};

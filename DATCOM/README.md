@@ -1,6 +1,6 @@
 # Missile Project — 项目目录结构说明
 
-项目根目录：`missile_project/`。用 VS Code / Jupyter 打开此目录即可。
+项目根目录：`DATCOM/`。用 VS Code / Jupyter 打开此目录即可。
 
 ## 一、核心工作目录（必要）
 
@@ -100,7 +100,7 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 - 所有脚本 / 代码均不写死绝对路径，项目根目录由代码自动推导：
   - `scripts/` 下脚本用 `__file__` 推导（项目根 = `scripts/` 的上一级）。
   - `notebook/` 无 `__file__`，用“从当前目录向上查找含 `datcom_bin` 的目录”推导。
-- 因此整个 `missile_project` 文件夹可整体移动 / 改名到任意位置，无需修改任何路径配置；直接运行 `scripts/01_batch_datcom.py` 即可。
+- 因此整个 `DATCOM` 文件夹可整体移动 / 改名到任意位置，无需修改任何路径配置；直接运行 `scripts/01_batch_datcom.py` 即可。
 - 新增代码务必遵守同一约定：不要出现 `C:\Users\...` 这类写死的路径。
 
 ## 三、使用建议

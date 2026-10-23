@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$Path)
 $ErrorActionPreference='Stop'
 $target=[IO.Path]::GetFullPath($Path).TrimEnd('\')
 $root=[IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
-if(-not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or $target.StartsWith((Join-Path $root 'missile_project'),[StringComparison]::OrdinalIgnoreCase)){throw 'Diagnostic target must be a non-protected workspace directory.'}
+if(-not $target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or $target.StartsWith((Join-Path $root 'DATCOM'),[StringComparison]::OrdinalIgnoreCase)){throw 'Diagnostic target must be a non-protected workspace directory.'}
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;

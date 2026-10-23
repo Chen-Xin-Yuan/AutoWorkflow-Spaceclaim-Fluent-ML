@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
-$protected = Join-Path $root 'missile_project'
+$protected = Join-Path $root 'DATCOM'
 
 function Checked([string]$path) {
     $full = [IO.Path]::GetFullPath($path).TrimEnd('\')
@@ -114,7 +114,7 @@ $record = [ordered]@{
     createdAt                = [DateTime]::UtcNow.ToString('o')
     workspaceRoot            = $root
     included                 = $Include
-    excluded                 = @('missile_project', 'archive', 'data_lib', 'feedback', 'docx', 'experiments', 'fluent_solution', 'ML_training', '.vscode')
+    excluded                 = @('DATCOM', 'archive', 'data_lib', 'feedback', 'docx', 'experiments', 'fluent_solution', 'ML_training', '.vscode')
     fileCount                = $manifest.Count
     totalBytes               = $totalBytes
     note                     = 'Complete snapshot of both repositories (tracked, untracked, local configuration, dependencies and Git metadata) plus the root entry points and their documentation. Runtime data lives outside these paths and is intentionally not copied.'

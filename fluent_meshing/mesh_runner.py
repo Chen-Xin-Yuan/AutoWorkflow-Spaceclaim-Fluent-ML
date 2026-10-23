@@ -96,7 +96,7 @@ def worker(module, opts):
         run.check_input(opts.geometry)
         (run.directory / REQUEST_NAME).write_text(json.dumps({key: value for key, value in vars(opts).items() if key != 'worker'}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         output = Path(opts.out).resolve() if opts.out else run.directory / module.MESH_NAME
-        protected = run.root / 'missile_project'
+        protected = run.root / 'DATCOM'
         if output == protected or protected in output.parents:
             raise ValueError('Protected output path')
         if output.exists():

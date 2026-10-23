@@ -7,7 +7,7 @@ const config = JSON.parse(await fs.readFile(path.join(root, 'workspace.json'), '
 function safe(relative) {
   const target = path.resolve(root, relative);
   const local = path.relative(root, target);
-  if (!local || local.startsWith('..') || path.isAbsolute(local) || local.split(path.sep)[0].toLowerCase() === 'missile_project') throw new Error('Unsafe data path');
+  if (!local || local.startsWith('..') || path.isAbsolute(local) || local.split(path.sep)[0].toLowerCase() === 'datcom') throw new Error('Unsafe data path');
   return target;
 }
 async function readJson(file) {

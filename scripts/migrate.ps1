@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
 if ($root -ne 'D:\2_my_sci_train') { throw 'Unexpected workspace root.' }
-$protected = Join-Path $root 'missile_project'
+$protected = Join-Path $root 'DATCOM'
 if (Test-Path -LiteralPath (Join-Path $root 'data_lib\legacy\migration-manifest.json')) {
     throw 'Migration has already been verified. Use rollback.ps1 to restore; do not migrate the reorganized folders again.'
 }
@@ -90,7 +90,7 @@ foreach ($candidate in $candidates) {
     }
     Write-Output "Backed up and verified: $candidate"
 }
-$manifest = [ordered]@{ schemaVersion=1; createdAt=[DateTime]::UtcNow.ToString('o'); workspaceRoot=$root; protectedDirectory='missile_project'; roots=$candidates; directories=$directoryRecords.ToArray(); gitStates=$gitStates; fileCount=$records.Count; totalBytes=($records | Measure-Object -Property size -Sum).Sum; files=$records.ToArray(); backupVerified=$true }
+$manifest = [ordered]@{ schemaVersion=1; createdAt=[DateTime]::UtcNow.ToString('o'); workspaceRoot=$root; protectedDirectory='DATCOM'; roots=$candidates; directories=$directoryRecords.ToArray(); gitStates=$gitStates; fileCount=$records.Count; totalBytes=($records | Measure-Object -Property size -Sum).Sum; files=$records.ToArray(); backupVerified=$true }
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $snapshot 'backup-manifest.json') -Encoding utf8
 Write-Output "BACKUP_VERIFIED=$snapshot; files=$($records.Count)"
 }

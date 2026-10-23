@@ -5,7 +5,7 @@ $root=[IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')
 $archive=[IO.Path]::GetFullPath((Join-Path $root 'archive')).TrimEnd('\')
 function Checked([string]$p) {
     $f=[IO.Path]::GetFullPath($p).TrimEnd('\')
-    $protected=Join-Path $root 'missile_project'
+    $protected=Join-Path $root 'DATCOM'
     if (-not $f.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or $f -eq $protected -or $f.StartsWith($protected+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe rollback path.' }
     return $f
 }

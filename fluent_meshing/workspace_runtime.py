@@ -77,7 +77,7 @@ def checked(root, relative):
         local = target.relative_to(root)
     except ValueError:
         raise ValueError('Output path outside workspace')
-    if not local.parts or local.parts[0].lower() == 'missile_project':
+    if not local.parts or local.parts[0].lower() == 'datcom':
         raise ValueError('Protected or root output path')
     return target
 
@@ -97,7 +97,7 @@ class RunRecord:
             return
         run_id = RUN_ID_PREFIX + datetime.now(timezone.utc).strftime(RUN_ID_TIME_FORMAT) + '-' + uuid.uuid4().hex[:8]
         self.directory = Path(run_dir).resolve() if run_dir else checked(self.root, Path(self.config['dataRoot']) / RUNS_SUBDIR / run_id / 'fluent_meshing')
-        protected = self.root / 'missile_project'
+        protected = self.root / 'DATCOM'
         if self.directory == protected or protected in self.directory.parents:
             raise ValueError('Protected output path')
         if self.directory.exists():
@@ -114,7 +114,7 @@ class RunRecord:
 
     def check_input(self, geometry):
         file = Path(geometry).resolve()
-        if self.root / 'missile_project' == file or self.root / 'missile_project' in file.parents:
+        if self.root / 'DATCOM' == file or self.root / 'DATCOM' in file.parents:
             raise ValueError('Protected project input')
         if not file.is_file():
             raise FileNotFoundError('Geometry input does not exist: ' + relative(self.root, file))
