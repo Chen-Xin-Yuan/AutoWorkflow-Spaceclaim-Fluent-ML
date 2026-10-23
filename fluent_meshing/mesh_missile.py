@@ -22,13 +22,14 @@ the previously generated ``missile.msh.h5``):
     7. Generate the Volume Mesh -  polyhedra, region based sizing
                                    (missile 25 mm, enclosure 500 mm, growth 1.2)
 
-The resulting mesh is written into the output directory of this project.
+The managed entry point requires an explicit geometry file and writes each run
+under the workspace data root, unless --run-dir or --out is supplied.
 
 Usage
 -----
-    python mesh_missile.py                 # full run, 16 processes
-    python mesh_missile.py -n 8            # pick the process count
-    python mesh_missile.py --keep-fluent   # do not shut Fluent down at the end
+    python mesh_missile.py --geometry <input.scdoc>
+    python mesh_missile.py --geometry <input.scdoc> -n 8
+    python mesh_missile.py --geometry <input.scdoc> --keep-fluent
 
 Environment notes (this machine / this workspace)
 -------------------------------------------------
@@ -56,13 +57,33 @@ from datetime import datetime
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --------------------------------------------------------------------------
-# Paths
+# 输入 / 输出 / 参数配置
 # --------------------------------------------------------------------------
+# 正式入口：输入 --geometry 必填（相对调用时工作目录），mesh_runner.py 在运行时
+# 覆盖 GEOMETRY_FILE；下列旧路径仅保留供直接调用函数的兼容性，不是 CLI 默认值。
+# 输出：--out 优先，否则 workspace.json 的 dataRoot/runs/<run-id>/fluent_meshing
+# 下的 MESH_NAME；--run-dir 可覆盖运行目录，失败记录由 workspace_runtime.py
+# 保留到 feedbackRoot。以下 LOG_DIR 等是旧辅助函数路径，正式入口的日志名见
+# mesh_runner.py / mesh_validation.py / workspace_runtime.py 前部配置。
+# 参数：P_* 表是工作流参数的唯一来源；CLI 运行默认值在 mesh_runner.py 前部。
+# 保持脚本相对路径；不把本机 ANSYS 安装路径写入此配置。
 GEOMETRY_FILE = os.path.join(PROJECT_DIR, "geometry", "missile.scdoc")
-OUTPUT_DIR = PROJECT_DIR          # the mesh is exported into the project folder
+OUTPUT_DIR = PROJECT_DIR          # legacy helper path; managed CLI uses per-run output
 RUNS_DIR = os.path.join(PROJECT_DIR, "runs")
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 MESH_NAME = "missile_mesh.msh.h5"
+TRANSCRIPT_GLOB = "*.trn"
+TRANSCRIPT_COPY_TEMPLATE = "{run_name}.trn"
+WORKFLOW_GLOB = "*.wft"
+WORKFLOW_FILES_SUFFIX = "_workflow_files"
+MESH_FILE_EXTENSION = ".msh.h5"
+WORKFLOW_FILE_EXTENSION = ".wft"
+WORKFLOW_SUMMARY_EXTENSION = ".json"
+LICENSE_APPDATA_DIR_NAME = "Ansys"
+LICENSE_WRITE_PROBE_NAME = "_dsh_write_probe.tmp"
+FALLBACK_DATA_DIR_NAME = "data_lib"
+FALLBACK_RUNTIME_DIR_NAME = "runtime"
+FALLBACK_APPDATA_DIR_NAME = "_appdata"
 
 # --------------------------------------------------------------------------
 # Workflow parameters -- taken verbatim from fluent_meshing.md
@@ -736,14 +757,14 @@ def report_mesh_statistics(log: Logger, meshing, run_dir: str) -> None:
 def log_transcript_summary(log: Logger, run_dir: str) -> None:
     """Copy the Fluent transcript and log the mesh sizes it reports."""
     try:
-        transcripts = sorted(glob.glob(os.path.join(run_dir, "*.trn")))
+        transcripts = sorted(glob.glob(os.path.join(run_dir, TRANSCRIPT_GLOB)))
     except Exception:  # noqa: BLE001
         transcripts = []
     if not transcripts:
         log("    no Fluent transcript found")
         return
     src = transcripts[-1]
-    dst = os.path.join(LOG_DIR, f"{os.path.basename(run_dir)}.trn")
+    dst = os.path.join(LOG_DIR, TRANSCRIPT_COPY_TEMPLATE.format(run_name=os.path.basename(run_dir)))
     try:
         shutil.copyfile(src, dst)
         log(f"    Fluent transcript copied to {dst}")
@@ -769,9 +790,9 @@ def summarise_workflow(log: Logger, mesh_path: str) -> None:
     """Log the workflow state that was stored next to the written mesh."""
     folder = os.path.join(
         os.path.dirname(mesh_path),
-        os.path.basename(mesh_path).replace(".msh.h5", "") + "_workflow_files",
+        os.path.basename(mesh_path).replace(MESH_FILE_EXTENSION, "") + WORKFLOW_FILES_SUFFIX,
     )
-    wfts = sorted(glob.glob(os.path.join(folder, "*.wft")))
+    wfts = sorted(glob.glob(os.path.join(folder, WORKFLOW_GLOB)))
     if not wfts:
         log(f"    no workflow file found in {folder}")
         return
@@ -796,7 +817,7 @@ def summarise_workflow(log: Logger, mesh_path: str) -> None:
                 "arguments": task.get("Arguments"),
             }
         )
-    dst = os.path.join(LOG_DIR, os.path.basename(src).replace(".wft", ".json"))
+    dst = os.path.join(LOG_DIR, os.path.basename(src).replace(WORKFLOW_FILE_EXTENSION, WORKFLOW_SUMMARY_EXTENSION))
     with open(dst, "w", encoding="utf-8") as fh:
         json.dump(lines, fh, indent=2, ensure_ascii=False)
     log(f"    workflow arguments saved to {dst}")
@@ -843,17 +864,17 @@ def ensure_writable_appdata(log: Logger, run_dir: str = None) -> None:
     context").  The check must happen before Fluent is launched.
     """
     appdata = os.environ.get("APPDATA", "")
-    probe_dir = os.path.join(appdata, "Ansys")
+    probe_dir = os.path.join(appdata, LICENSE_APPDATA_DIR_NAME)
     try:
         os.makedirs(probe_dir, exist_ok=True)
-        probe = os.path.join(probe_dir, "_dsh_write_probe.tmp")
+        probe = os.path.join(probe_dir, LICENSE_WRITE_PROBE_NAME)
         with open(probe, "w", encoding="utf-8") as fh:
             fh.write("probe")
         os.remove(probe)
         log(f"    %APPDATA% is writable: {appdata}")
         return
     except Exception as exc:  # noqa: BLE001
-        fallback = os.path.join(run_dir or os.path.join(os.path.dirname(PROJECT_DIR), "data_lib", "runtime"), "_appdata")
+        fallback = os.path.join(run_dir or os.path.join(os.path.dirname(PROJECT_DIR), FALLBACK_DATA_DIR_NAME, FALLBACK_RUNTIME_DIR_NAME), FALLBACK_APPDATA_DIR_NAME)
         os.makedirs(fallback, exist_ok=True)
         os.environ["APPDATA"] = fallback
         log(f"    WARNING: {appdata} is not writable ({type(exc).__name__}); "

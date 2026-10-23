@@ -4,6 +4,10 @@
  * Field name, unit, default, optimisation range and description are declared exactly once here.
  * The MCP tool schemas, the command line switches, the params.json template, the validators and
  * the documentation table are all derived from this module. Do not redeclare fields anywhere else.
+ *
+ * 输入/输出：本模块只返回内存中的参数定义，不读写文件。
+ * 可修改参数、单位及默认值已集中在文件前部的四个 *_PARAMS 数组；输出目录/文件名见 OUTPUT_PARAMS。
+ * 运行时以调用方显式值 > 预设 > 此处 default 合并，勿另加机器相关绝对路径。
  */
 
 export const MISSILE_SCHEMA_VERSION = 1;

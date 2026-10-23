@@ -4,16 +4,26 @@ import { existsSync, createReadStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 
+// 输入：项目目录上一级的 workspace.json，以及调用方 parameters / inputs / outputDir。
+// 输出：dataRoot/runs/<run-id>/<stage>/；失败产物移至 feedbackRoot/<stage>/<run-id>/。
+// workspace.json 覆盖下面的根目录默认值；outputDir 在运行时覆盖默认产物根目录。
+// 文件名属于运行记录协议，修改时需同步读取这些记录的调用方。
+const WORKSPACE_CONFIG_FILENAME = 'workspace.json';
+const DEFAULT_WORKSPACE_ROOTS = {dataRoot:'data_lib', feedbackRoot:'feedback', inputRoot:'data_lib/inputs', legacyRoot:'data_lib/legacy'};
+const RUNS_DIRECTORY_NAME = 'runs';
+const REQUEST_FILENAME = 'request.json';
+const RUN_MANIFEST_FILENAME = 'run.json';
+
 /** Read the workspace configuration that sits beside the project directory. */
 function requireText(file) { return readFileSync(file,'utf8').replace(/^\uFEFF/,''); }
 
 export function workspaceFor(projectDir, env = process.env) {
   const root = path.resolve(projectDir, '..');
-  const configPath = path.join(root, 'workspace.json');
+  const configPath = path.join(root, WORKSPACE_CONFIG_FILENAME);
   // Run data always lives under the project's workspace, never under the caller's
   // temporary directory: a restricted session may refuse writes to %TEMP%, and the
   // workspace rules require runtime artifacts below the configured data root.
-  if (!existsSync(configPath)) return {root, dataRoot:'data_lib', feedbackRoot:'feedback', inputRoot:'data_lib/inputs', legacyRoot:'data_lib/legacy'};
+  if (!existsSync(configPath)) return {root, ...DEFAULT_WORKSPACE_ROOTS};
   return {root, configPath, ...JSON.parse(requireText(configPath))};
 }
 export function workspacePath(workspace, relative) {
@@ -37,14 +47,14 @@ export async function inputRecord(workspace,file) {
 export async function beginRun(stage, projectDir, {outputDir='',parameters={},inputs=[],env=process.env,fixture=''}={}) {
   const workspace=workspaceFor(projectDir,env);
   const runId='run-'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)+'-'+randomUUID().slice(0,8);
-  const dir=outputDir ? path.join(path.resolve(outputDir),runId) : workspacePath(workspace,path.join(workspace.dataRoot,'runs',runId,stage));
+  const dir=outputDir ? path.join(path.resolve(outputDir),runId) : workspacePath(workspace,path.join(workspace.dataRoot,RUNS_DIRECTORY_NAME,runId,stage));
   const protectedPath=path.join(workspace.root,'missile_project');
   if(dir.toLowerCase()===protectedPath.toLowerCase() || dir.toLowerCase().startsWith((protectedPath+path.sep).toLowerCase())) throw new Error('Protected project output');
   await fs.mkdir(dir,{recursive:false}).catch(async error=>{if(error.code!=='ENOENT')throw error; await fs.mkdir(path.dirname(dir),{recursive:true}); await fs.mkdir(dir);});
   const record={schemaVersion:1,runId,stage,status:'RUNNING',startedAt:new Date().toISOString(),finishedAt:null,fixture,inputs,artifacts:[],verification:{runtimeVerified:false},error:null};
   const run={workspace,dir,record};
-  await fs.writeFile(path.join(dir,'request.json'),JSON.stringify(parameters,null,2)+'\n');
-  await fs.writeFile(path.join(dir,'run.json'),JSON.stringify(record,null,2)+'\n');
+  await fs.writeFile(path.join(dir,REQUEST_FILENAME),JSON.stringify(parameters,null,2)+'\n');
+  await fs.writeFile(path.join(dir,RUN_MANIFEST_FILENAME),JSON.stringify(record,null,2)+'\n');
   return run;
 }
 async function artifactList(run) {
@@ -54,7 +64,7 @@ async function artifactList(run) {
       if(entry.isSymbolicLink()) throw new Error('Unexpected link in run artifacts');
       const file=path.join(directory,entry.name);
       if(entry.isDirectory()) await visit(file);
-      else if(entry.name!=='run.json') artifacts.push({path:relativePath(run.workspace,file),size:(await fs.stat(file)).size,sha256:await hashFile(file)});
+      else if(entry.name!==RUN_MANIFEST_FILENAME) artifacts.push({path:relativePath(run.workspace,file),size:(await fs.stat(file)).size,sha256:await hashFile(file)});
     }
   }
   await visit(run.dir);
@@ -78,7 +88,7 @@ export async function finishRun(run,{status,verification={},error=null}={}) {
   }
   run.record={...run.record,status,finishedAt:new Date().toISOString(),verification:{...verification,runtimeVerified:status==='PASSED'&&verification.runtimeVerified===true},error:error?{type:error.name||error.type||'Error',message:error.message||String(error)}:null};
   run.record.artifacts=await artifactList(run);
-  await fs.writeFile(path.join(run.dir,'run.json'),JSON.stringify(run.record,null,2)+'\n');
+  await fs.writeFile(path.join(run.dir,RUN_MANIFEST_FILENAME),JSON.stringify(run.record,null,2)+'\n');
   return run;
 }
 export function relocateResult(value,from,to) {

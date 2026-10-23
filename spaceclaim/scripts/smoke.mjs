@@ -3,6 +3,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath } from "node:url";
 
+// === 输入 / 输出 / 参数来源 ===
+// 输入：SCDM_CHM / AWP_ROOT<number> / AWP_ROOT；服务再按共享解析器读取 CHM。
+// 输出：检查结论到 stdout；子进程 stdout 保留 JSON-RPC。CHM 提取/索引缓存位置
+// 来自 ../lib/paths.mjs 的 defaultCacheRoot()，不创建模型或本入口专用结果文件。
+// 下文查询、示例参数和断言是固定 smoke 用例；业务默认值应改 server/lib 的配置区。
 const hasVersionedAwpRoot = Object.keys(process.env).some((name) => /^AWP_ROOT\d+$/.test(name) && process.env[name]);
 if (!process.env.SCDM_CHM && !hasVersionedAwpRoot && !process.env.AWP_ROOT) throw new Error("Set SCDM_CHM, an AWP_ROOT<version>, or AWP_ROOT before running the smoke test.");
 const transport = new StdioClientTransport({ command: "node.exe", args: ["server.mjs"], cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env } });

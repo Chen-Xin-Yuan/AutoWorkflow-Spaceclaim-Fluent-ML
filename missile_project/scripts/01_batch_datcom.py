@@ -90,6 +90,25 @@ DATCOM_EXE = os.path.join(PROJECT_ROOT, "datcom_bin", "datcom.exe")
 # 结果根目录：每个算例保存到 runs\<算例名>\（runs 目录位于项目根，产物不入 git）
 RESULT_ROOT = os.path.join(PROJECT_ROOT, "runs")
 
+# 输入：默认使用下面的 CASES；外部几何 JSON 由命令行 --params 指定，
+# 相对 JSON 路径仍以启动时的当前工作目录为基准，不自动读取历史模板。
+# 输出：RESULT_ROOT/<算例名>/；中间文件：RESULT_ROOT/WORK_SUBDIR/。
+# --mach / --alpha / --alt / --timeout 覆盖下方对应默认参数。
+WORK_SUBDIR = ".work"
+
+# 外部程序约定的输入 / 输出名称，修改时必须与 DATCOM 协议保持一致。
+FOR005_NAME = "for005.dat"        # DATCOM 输入文件名
+INPUT_REDIRECT = "_input.txt"     # shell 重定向应答文件
+FOR006_NAME = "for006.dat"        # DATCOM 输出（首选）
+DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
+FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形（单位英尺）
+
+# 本脚本输出文件名（均位于对应算例的输出目录）。
+CSV_NAME = "aero_coefficients.csv"
+PARAMS_NAME = "case_params.json"
+GEOMETRY_TXT_NAME = "geometry_check.txt"   # 几何模型核对报告
+GEOMETRY_PNG_NAME = "geometry_check.png"   # 几何三视图（侧视 / 俯视 / 前视）
+
 # 单算例超时（秒）。一次 30 个工况通常几秒到几十秒。
 TIMEOUT_SECONDS = 300
 
@@ -116,13 +135,13 @@ MISSILE_GEOMETRY = {
 # 1.2 来流条件（README「来流参数与工况组合」）
 # -----------------------------------------------------------------------------
 # 马赫数与攻角取全部组合：len(MACH_LIST) × len(ALPHA_LIST) 个工况。
-MACH_LIST = [2.00, 2.04, 2.08, 2.12, 2.16, 2.20]
+MACH_LIST = [0.80, 0.84, 0.88, 0.92, 0.96, 1.00]
 ALPHA_LIST = [4.0, 4.5, 5.0, 5.5, 6.0]
 
 # 飞行高度（m）。DATCOM 的 ALT 卡片按英尺读，脚本自动换算；
 # 5000 m 会同时改变大气密度 / 音速与雷诺数，进而影响各系数。
 # 0.0 = 海平面。
-ALTITUDE_M = 5000.0
+ALTITUDE_M = 000.0
 
 # -----------------------------------------------------------------------------
 # 1.3 可选建模约定（一般不用改）
@@ -197,17 +216,6 @@ REQUIRED_GEOMETRY_KEYS = (
     "L_W", "C_RW", "C_TW", "B_W",
     "L_F", "C_RF", "C_TF", "B_F",
 )
-
-FOR005_NAME = "for005.dat"        # DATCOM 输入文件名
-INPUT_REDIRECT = "_input.txt"     # shell 重定向应答文件
-FOR006_NAME = "for006.dat"        # DATCOM 输出（首选）
-DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
-FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形（单位英尺）
-
-CSV_NAME = "aero_coefficients.csv"
-PARAMS_NAME = "case_params.json"
-GEOMETRY_TXT_NAME = "geometry_check.txt"   # 几何模型核对报告
-GEOMETRY_PNG_NAME = "geometry_check.png"   # 几何三视图（侧视 / 俯视 / 前视）
 
 # 11 个主尺寸的 CSV 表头（中文名 + 符号 + 单位）
 GEOMETRY_CN_NAMES = {
@@ -1925,7 +1933,7 @@ def main(argv=None):
 
     os.makedirs(RESULT_ROOT, exist_ok=True)
     # 每个算例共用的临时工作目录（运行中间文件都在这，结束后删除）
-    work_dir = os.path.join(RESULT_ROOT, ".work")
+    work_dir = os.path.join(RESULT_ROOT, WORK_SUBDIR)
     clear_dir(work_dir)
 
     if args.dry_run:

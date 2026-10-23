@@ -6,6 +6,16 @@
 
 This Windows-local stdio MCP server searches the official SpaceClaim/SCDM API CHM already installed on the user's computer. It also provides a limited set of Python candidate templates and a parameterized model workflow. Server stdout is reserved for JSON-RPC.
 
+## 修改输入、输出和参数 / Editing inputs, outputs, and parameters
+
+自有源码在必要的 shebang、模块说明和 import 后列出输入/输出与可调默认参数。入口集中修改区为 `server.mjs` 的 `MCP_DEFAULTS`、`scripts/missile.mjs` 的 `DEFAULT_OPTIONS`、`scripts/setup.mjs` 的回环地址/端口/关闭延迟，以及 `scripts/verify-geometry.mjs` 的输出目录默认值、超时和文件名。转发和检查入口说明实际配置来源；固定验收用例的几何数值和断言不作为生产参数修改。
+
+Project-owned source files list inputs, outputs, and adjustable defaults after required shebangs, module documentation, and imports. Entry-point settings are grouped in `MCP_DEFAULTS` in `server.mjs`, `DEFAULT_OPTIONS` in `scripts/missile.mjs`, loopback host/port/close delay in `scripts/setup.mjs`, and output-directory default/timeout/filenames in `scripts/verify-geometry.mjs`. Forwarding and check entrypoints explain their configuration sources. Fixed acceptance geometry and assertions are not production parameters.
+
+几何参数仍统一在 `lib/missile-schema.mjs`；输入文件用 CLI `--preset`，输出覆盖用 `--out`/`--name` 或 MCP `outputDir`/`fileName`。优先级仍为显式参数 > 预设 > schema 默认值。空目录保留执行器和 `workspace.json` 的运行时解析；不把某次 run 的编号、目录或失败留存路径写成源码绝对路径。安装继续通过 AWP 或受支持的本机配置发现。入口与产物详见 [scripts/README.md](scripts/README.md)。
+
+Model parameters remain in `lib/missile-schema.mjs`; choose input files with CLI `--preset` and override outputs with `--out`/`--name` or MCP `outputDir`/`fileName`. Precedence remains explicit fields > preset > schema defaults. Empty directories defer to the runner and `workspace.json` at runtime; do not hard-code one run's IDs, resolved directories, or failed-artifact paths. Installations still come from AWP or supported local setup. See [scripts/README.md](scripts/README.md) for entrypoints and artifacts.
+
 ## 功能与边界 / Capabilities and limits
 
 | 工具 / Tool | 输入与功能 / Inputs and behavior |

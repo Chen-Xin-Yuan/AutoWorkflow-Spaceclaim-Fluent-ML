@@ -6,7 +6,7 @@
 
 ### 几何参数定义与范围
 
-按照[参数化方式原图](docx/参数化方式.png)，使用下列 11 个主尺寸描述几何，长度单位统一为米（m）。参数名与建模输入 JSON 的字段一致。
+本文使用下列 11 个主尺寸描述几何，长度单位统一为米（m）。参数名与建模输入 JSON 的字段一致。
 
 | 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
 |---|---|---|---|---|
@@ -88,8 +88,6 @@
 | `docs/` | 目录 | 文档配图与设计规划记录 |
 | `.github/` | 目录 | GitHub Actions CI 工作流 |
 | `node_modules/` | 依赖 | npm 安装产物 |
-| `.git/` | 依赖 | 本仓库 Git 元数据，与工作区根目录分开管理 |
-| `.vscode/` | 目录 | 本仓库编辑器配置 |
 | `package.json`、`package-lock.json` | 文件 | 依赖声明与锁定版本 |
 | `README.md`、`README.en.md`、`README.bilingual.md` | 文件 | 中文、英文、双语说明 |
 | `AGENTS.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore` | 文件 | 协作、安全、变更、许可与忽略规则 |
@@ -112,8 +110,6 @@
 | `.mesh_inspect_deps/`、`.mesh_inspect_deps_313/` | 依赖 | 网格检查工具各自的隔离依赖，**两者与环境不可混用** |
 | `.mesh-inspect-python`、`.python-path` | 生成 | 本机解释器路径记录，属于本地配置 |
 | `__pycache__/` | 生成 | Python 字节码缓存，可安全删除 |
-| `.git/` | 依赖 | 本仓库 Git 元数据 |
-| `.vscode/`、`.gitignore` | 目录 / 文件 | 编辑器配置与忽略规则 |
 
 ### `scripts/` — 统一启动、验收、索引与回退
 
@@ -121,7 +117,7 @@
 |---|---|---|
 | `run.ps1` | 文件 | 唯一入口：`spaceclaim`、`fluent_meshing`、`verify-spaceclaim`、`verify-meshing`、`spaceclaim-mcp`、`index` |
 | `index.mjs` | 文件 | 扫描运行与反馈记录，生成 `data_lib/index.json` |
-| `snapshot.ps1` | 文件 | 新建完整快照（含 Git、未跟踪文件、本地配置与依赖）并写出 SHA-256 清单 |
+| `snapshot.ps1` | 文件 | 新建完整快照（含未跟踪文件、本地配置与依赖）并写出 SHA-256 清单 |
 | `rollback.ps1` | 文件 | 从指定快照恢复旧布局，保留新数据与反馈 |
 | `migrate.ps1` | 文件 | 目录布局迁移 |
 | `retire-old.ps1` | 文件 | 旧文件下线归档 |
@@ -153,7 +149,7 @@
 | 下级 | 类型 | 作用 |
 |---|---|---|
 | `reference_papers/` | 目录 | 原文献目录，文件保留原样 |
-| `skills/` | 目录 | 独立保留的 Fluent skill 项目（含自身 Git） |
+| `skills/` | 目录 | 独立保留的 Fluent skill 项目 |
 | `prompts/` | 目录 | 项目提示词 |
 | `dependency-inventory.json` | 文件 | 依赖清单 |
 | `task_note.md`、`workspace_restructure_report.md` | 文件 | 任务笔记与重构报告 |

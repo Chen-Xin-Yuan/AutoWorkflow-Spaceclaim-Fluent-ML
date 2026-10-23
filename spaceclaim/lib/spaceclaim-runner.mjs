@@ -13,12 +13,57 @@ import { discoverAwpRoots, readSetupConfig } from "./setup.mjs";
 import { buildModelRequest } from "./missile-params.mjs";
 import { buildRequestDocument, renderModelScript } from "./missile-template.mjs";
 
+// 输入/输出与可调参数：explicit > preset > missile-schema.mjs 中的参数默认值。
+// 安装位置按 SCDM_EXECUTABLE > 手动 setup 配置 > AWP_ROOT<版本> > AWP_ROOT 动态发现。
+// buildMissile 输出根按 options.outputDir > SCDM_MISSILE_OUTPUT > workspace.json 的 dataRoot；
+// 由 workspace-runtime 创建唯一运行目录并保留失败记录，以下仅集中既有文件名和运行默认值。
+// defaultRunRoot 保留原有临时目录回退，仅供其调用方/内部未托管路径使用。
+const DEFAULT_TIMEOUT_MS = 300000;
+const DEFAULT_EXECUTE = true;
+const DEFAULT_MODEL_FILENAME = "missile.scdoc";
+const DEFAULT_ACCEPTANCE_TOLERANCE = 2e-3;
+const LEGACY_RUN_APPLICATION_DIRECTORY = "ansys-scdmdoc-mcp";
+const LEGACY_RUN_DIRECTORY = "missile-runs";
+const RUN_ARTIFACT_NAMES = {
+  params: "params.json",
+  script: "model.py",
+  result: "result.json",
+  diagnostic: "diagnostic.txt",
+  image: "preview.png",
+  assemblyImage: "preview-assembly.png",
+  // 共享协议名：必须与 workspace-runtime.mjs 的 RUN_MANIFEST_FILENAME 保持一致。
+  manifest: "run.json",
+  error: "error.txt",
+};
+
+/**
+ * The missile body's name. The region names come from the schema (`enclosure_name` / `boi_name`) and
+ * travel in the request, so they are read from there rather than repeated here.
+ */
+const MISSILE_BODY_NAME = "Missile";
+
+/**
+ * Named selections for the CFD setup. The face kinds come from the analytic profile, so a run with a
+ * different fillet_location maps whatever faces exist without any change here.
+ */
+const NAMED_SELECTION_GROUPS = {
+  tip: "missile_nose_tip",
+  cone: "missile_nose",
+  shoulder: "missile_body",
+  cylinder: "missile_body",
+  base: "missile_body",
+  fin: "missile_fin",
+};
+
+/** The missile points along -X, so the low-x cap is the inlet and the high-x cap the outlet. */
+const ENCLOSURE_SELECTIONS = { front: "inlet", wall: "wall", back: "outlet" };
+
 async function exists(file) {
   try { await access(file); return true; } catch { return false; }
 }
 
 export function defaultRunRoot(env = process.env) {
-  return env.SCDM_MISSILE_OUTPUT || path.join(os.tmpdir(), "ansys-scdmdoc-mcp", "missile-runs");
+  return env.SCDM_MISSILE_OUTPUT || path.join(os.tmpdir(), LEGACY_RUN_APPLICATION_DIRECTORY, LEGACY_RUN_DIRECTORY);
 }
 
 export async function resolveSpaceClaimExecutable(env = process.env) {
@@ -69,32 +114,10 @@ function relativeDifference(actual, expected) {
 }
 
 /**
- * The missile body's name. The region names come from the schema (`enclosure_name` / `boi_name`) and
- * travel in the request, so they are read from there rather than repeated here.
- */
-const MISSILE_BODY_NAME = "Missile";
-
-/**
- * Named selections for the CFD setup. The face kinds come from the analytic profile, so a run with a
- * different fillet_location maps whatever faces exist without any change here.
- */
-const NAMED_SELECTION_GROUPS = {
-  tip: "missile_nose_tip",
-  cone: "missile_nose",
-  shoulder: "missile_body",
-  cylinder: "missile_body",
-  base: "missile_body",
-  fin: "missile_fin",
-};
-
-/** The missile points along -X, so the low-x cap is the inlet and the high-x cap the outlet. */
-const ENCLOSURE_SELECTIONS = { front: "inlet", wall: "wall", back: "outlet" };
-
-/**
  * Acceptance gate. Every check must pass, on freshly produced artifacts, for the run to be
  * reported as runtime-verified.
  */
-export function evaluateAcceptance({ request, result, modelPath, modelStat, resultStat, startedAt, regionLabels = {}, tolerance = 2e-3 }) {
+export function evaluateAcceptance({ request, result, modelPath, modelStat, resultStat, startedAt, regionLabels = {}, tolerance = DEFAULT_ACCEPTANCE_TOLERANCE }) {
   const checks = [];
   const add = (name, ok, detail) => checks.push({ name, ok: Boolean(ok), detail });
   const geometry = request.geometry;
@@ -277,7 +300,7 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
   return { ok: checks.every((check) => check.ok), checks };
 }
 
-export async function runSpaceClaim({ scriptPath, paramsPath, executablePath, timeoutMs = 300000, env = process.env, diagnosticPath = "" }) {
+export async function runSpaceClaim({ scriptPath, paramsPath, executablePath, timeoutMs = DEFAULT_TIMEOUT_MS, env = process.env, diagnosticPath = "" }) {
   const childEnv = { ...env, SCDM_MISSILE_PARAMS: paramsPath };
   if (diagnosticPath) childEnv.SCDM_MISSILE_DIAGNOSTIC = diagnosticPath;
   const args = [`/RunScript=${scriptPath}`, `/ScriptArgs=${paramsPath}`, "/Headless=True", "/ExitAfterScript=True"];
@@ -313,20 +336,20 @@ async function buildMissileCore(options = {}) {
     explicit = {},
     preset = {},
     outputDir = "",
-    fileName = "missile.scdoc",
-    timeoutMs = 300000,
+    fileName = DEFAULT_MODEL_FILENAME,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
     env = process.env,
-    execute = true,
+    execute = DEFAULT_EXECUTE,
   } = options;
 
   const runDir = options.managedRunDir || runDirectory(outputDir || defaultRunRoot(env));
   const modelPath = path.join(runDir, fileName);
-  const paramsPath = path.join(runDir, "params.json");
-  const scriptPath = path.join(runDir, "model.py");
-  const resultPath = path.join(runDir, "result.json");
-  const diagnosticPath = path.join(runDir, "diagnostic.txt");
-  const imagePath = path.join(runDir, "preview.png");
-  const assemblyImagePath = path.join(runDir, "preview-assembly.png");
+  const paramsPath = path.join(runDir, RUN_ARTIFACT_NAMES.params);
+  const scriptPath = path.join(runDir, RUN_ARTIFACT_NAMES.script);
+  const resultPath = path.join(runDir, RUN_ARTIFACT_NAMES.result);
+  const diagnosticPath = path.join(runDir, RUN_ARTIFACT_NAMES.diagnostic);
+  const imagePath = path.join(runDir, RUN_ARTIFACT_NAMES.image);
+  const assemblyImagePath = path.join(runDir, RUN_ARTIFACT_NAMES.assemblyImage);
   const REGION_LABELS = { enclosure: "外壳", boi: "加密区 BOI" };
 
   const request = buildModelRequest({ explicit, preset, outputDir: runDir, modelFile: modelPath });
@@ -398,19 +421,19 @@ export async function buildMissile(options = {}) {
   const env = options.env || process.env;
   const run = await beginRun("spaceclaim", projectDir, {
     outputDir: options.outputDir || env.SCDM_MISSILE_OUTPUT || "",
-    parameters: { explicit: options.explicit || {}, preset: options.preset || {}, execute: options.execute ?? true, fileName: options.fileName || "missile.scdoc" },
+    parameters: { explicit: options.explicit || {}, preset: options.preset || {}, execute: options.execute ?? DEFAULT_EXECUTE, fileName: options.fileName || DEFAULT_MODEL_FILENAME },
     fixture: "recorded", env,
   });
   try {
-    const fileName = options.fileName || "missile.scdoc";
+    const fileName = options.fileName || DEFAULT_MODEL_FILENAME;
     if (path.basename(fileName) !== fileName || /[\\/]/.test(fileName) || fileName === "." || fileName === "..") throw new Error("Model filename must be a leaf filename; use outputDir for its directory.");
     const result = await buildMissileCore({ ...options, managedRunDir: run.dir });
     const status = result.ok ? result.status === "script-generated" ? "GENERATED" : "PASSED" : "FAILED";
     const from = run.dir;
     await finishRun(run, { status, verification: { runtimeVerified: status === "PASSED", checks: result.acceptance?.checks || [] }, error: status === "FAILED" ? { type: result.status, message: result.errors?.join("; ") || "Fresh artifact acceptance failed" } : null });
-    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: path.join(run.dir, "run.json") };
+    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: path.join(run.dir, RUN_ARTIFACT_NAMES.manifest) };
   } catch (error) {
-    await writeFile(path.join(run.dir,"error.txt"), `${error.name}: ${error.message}\n`, "utf8");
+    await writeFile(path.join(run.dir,RUN_ARTIFACT_NAMES.error), `${error.name}: ${error.message}\n`, "utf8");
     await finishRun(run, { status: "FAILED", error });
     error.feedbackDir = run.dir;
     throw error;

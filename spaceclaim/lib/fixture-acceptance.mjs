@@ -1,3 +1,6 @@
+// 输入：调用方传入的 key=value 文本及 fixture/result；输出：内存中的解析结果和验收检查。
+// 本模块不读写文件、没有可调运行参数；六实例/60° 等数值属于既有 fixture 验收约定。
+
 export function parseResult(text) {
   return Object.fromEntries(text.split(/\r?\n/).filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)];}));
 }

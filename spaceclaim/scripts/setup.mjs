@@ -3,8 +3,16 @@ import http from "node:http";
 import { execFile } from "node:child_process";
 import { discoverAwpRoots, resolveSetupSelection, saveSetupConfig } from "../lib/setup.mjs";
 
+// === 输入 / 输出 / 可调默认参数（集中修改区） ===
+// 输入：环境变量中的 AWP_ROOT<number>，或本机浏览器表单的 SpaceClaim.exe 路径。
+// 输出：本机 setup 配置由 ../lib/setup.mjs 的 defaultConfigPath() 解析，默认位于
+// %LOCALAPPDATA%/ansys-scdmdoc-mcp/config.json；不在源码内填写安装绝对路径。
+// 本入口没有文件 CLI 选项；配置根目录保留 LOCALAPPDATA > TEMP > 当前目录的解析。
+const SETUP_HOST = "127.0.0.1";
+const SETUP_PORT = 0; // 0 让系统分配本机临时端口。
+const CLOSE_DELAY_MS = 300;
+
 const awpRoots = discoverAwpRoots(process.env);
-const port = 0;
 
 function page(message = "", forceManual = false) {
   const options = awpRoots.map((item) => `<option value="${item.name}">${item.name} → ${item.root} (V${item.version})</option>`).join("");
@@ -35,16 +43,16 @@ const server = http.createServer(async (request, response) => {
     const configPath = await saveSetupConfig(config, process.env);
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(page(`已找到并保存 API 文档路径：<code>${config.chmPath}</code><br>配置文件：<code>${configPath}</code>`, false).replace("<div class=\"error\">", "<div class=\"ok\">").replace("<h1>", "<h1>配置完成："));
-    setTimeout(() => server.close(() => process.exit(0)), 300);
+    setTimeout(() => server.close(() => process.exit(0)), CLOSE_DELAY_MS);
   } catch (error) {
     response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
     response.end(page(error.message, form.mode === "awp_root"));
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(SETUP_PORT, SETUP_HOST, () => {
   const address = server.address();
-  const url = `http://127.0.0.1:${address.port}/`;
+  const url = `http://${SETUP_HOST}:${address.port}/`;
   console.error(`Opening setup page: ${url}`);
   execFile("rundll32.exe", ["url.dll,FileProtocolHandler", url], (error) => {
     if (error) console.error(`Open this URL in a browser: ${url}`);

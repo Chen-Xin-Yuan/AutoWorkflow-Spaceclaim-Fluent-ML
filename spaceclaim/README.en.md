@@ -8,6 +8,12 @@ A Windows-local MCP server for searching the official SpaceClaim/SCDM API CHM, r
 
 The server provides seven tools over stdio. It searches the user's installed official CHM only; it does not load a local Python knowledge base. Documentation lookup, script generation, and fresh geometry acceptance are separate capabilities.
 
+## Editing inputs, outputs, and parameters
+
+Project-owned source files list inputs, outputs, and adjustable defaults after required shebangs, module documentation, and imports, before processing logic. Entry-point configuration is grouped in `server.mjs` (`MCP_DEFAULTS`), `scripts/missile.mjs` (`DEFAULT_OPTIONS`), `scripts/setup.mjs` (loopback host, port, and close delay), and `scripts/verify-geometry.mjs` (output-directory default, timeout, and filenames). Forwarding and check entrypoints explain the actual configuration source at the top. Fixed acceptance geometry and assertions remain test fixtures, not production parameters.
+
+Model parameters remain defined in `lib/missile-schema.mjs`. Select input files with CLI `--preset` and override outputs with `--out`/`--name` or MCP `outputDir`/`fileName`. Precedence remains explicit fields > preset > schema defaults. Empty output-directory defaults still defer to runtime resolution through the runner and `workspace.json`; do not replace run IDs, resolved run directories, or failed-artifact retention paths with one run's absolute paths. Installation discovery still uses AWP or supported local setup. See [scripts/README.md](scripts/README.md) for entrypoints and artifacts.
+
 ## Current capabilities and limits
 
 - Search API classes, methods, properties, events, and geometry terms, then read the matching HTML page.

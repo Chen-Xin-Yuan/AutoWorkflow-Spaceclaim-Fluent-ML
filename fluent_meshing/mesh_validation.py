@@ -7,6 +7,23 @@ import re
 import time
 
 
+# ---------------------------------------------------------------------------
+# 输入 / 输出 / 参数配置
+# ---------------------------------------------------------------------------
+# 输入：report_mesh() 接收 Fluent 会话及本次 run_dir；inspect_mesh()、
+# verify_export() 的网格路径由调用方传入，无默认输入文件。
+# 输出：以下报告名均相对调用方传入的 run_dir；inspect_mesh() 和校验函数
+# 返回内存结果，不自行选择导出目录。CLI 覆盖由 mesh_runner.py 处理。
+# 报告名是既有产物约定，修改时须同步读取报告的脚本/工具。
+VALIDATION_TRANSCRIPT_NAME = 'validation.trn'
+NATIVE_QUALITY_NAME = 'quality-native.json'
+QUALITY_REPORT_NAME = 'quality.json'
+MINIMUM_ORTHOGONAL_QUALITY = 0.01
+TRANSCRIPT_WAIT_ATTEMPTS = 20
+TRANSCRIPT_WAIT_SECONDS = 0.1
+EXPORT_MTIME_TOLERANCE_SECONDS = 2
+
+# 以下为既有报告格式、HDF5 协议及模型验收约定，修改需保持调用方兼容。
 NUMBER = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
 # Boundary zones the missile workflow must produce. They come from the CFD named
 # selections in the SpaceClaim model plus the enclosure command's own zones.
@@ -38,7 +55,7 @@ def parse_report(text, native_quality=None):
         quality_count = int(count)
     else:
         minimum_quality = extract_number(text, [r'minimum\s+orthogonal\s+quality\s*[:=]\s*(' + NUMBER + ')', r'orthogonal\s+quality[^\n]*?min(?:imum)?\s*[:=]\s*(' + NUMBER + ')'], 'minimum orthogonal quality')
-    if minimum_volume <= 0 or minimum_quality <= 0.01:
+    if minimum_volume <= 0 or minimum_quality <= MINIMUM_ORTHOGONAL_QUALITY:
         raise RuntimeError('Mesh has nonpositive volume or insufficient orthogonal quality')
     if re.search(r'(?:negative\s+(?:cell\s+)?volumes?|fatal\s+error|error\s*:|failed\s+(?:mesh|check))', text, re.I):
         # A check that reports zero negative volumes is permitted, but any real
@@ -64,7 +81,7 @@ def parse_report(text, native_quality=None):
 
 
 def report_mesh(meshing, run_dir):
-    transcript = Path(run_dir) / 'validation.trn'
+    transcript = Path(run_dir) / VALIDATION_TRANSCRIPT_NAME
     if transcript.exists():
         raise FileExistsError('Validation transcript must be fresh')
     meshing.tui.file.start_transcript(str(transcript))
@@ -73,21 +90,21 @@ def report_mesh(meshing, run_dir):
         meshing.tui.report.quality_method('orthogonal-quality')
         meshing.tui.report.cell_quality_limits('*')
         native_quality = meshing.scheme_eval.scheme_eval('(tgapi-util-get-cell-quality-limits "*" "Orthogonal Quality")')
-        (Path(run_dir) / 'quality-native.json').write_text(json.dumps(native_quality, indent=2) + '\n', encoding='utf-8')
+        (Path(run_dir) / NATIVE_QUALITY_NAME).write_text(json.dumps(native_quality, indent=2) + '\n', encoding='utf-8')
         meshing.tui.report.mesh_size()
         meshing.tui.mesh.manage.list()
         meshing.tui.boundary.manage.list()
     finally:
         meshing.tui.file.stop_transcript()
-    for _ in range(20):
+    for _ in range(TRANSCRIPT_WAIT_ATTEMPTS):
         if transcript.exists() and transcript.stat().st_size:
             break
-        time.sleep(0.1)
+        time.sleep(TRANSCRIPT_WAIT_SECONDS)
     text = transcript.read_text(encoding='utf-8', errors='replace')
     result = parse_report(text, native_quality)
     result['qualityMethod'] = 'tgapi-util-get-cell-quality-limits: Orthogonal Quality'
     result['transcript'] = transcript.name
-    (Path(run_dir) / 'quality.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+    (Path(run_dir) / QUALITY_REPORT_NAME).write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     return result
 
 
@@ -158,7 +175,7 @@ def assert_missile_mesh(mesh, quality=None):
 def verify_export(file, started_at, quality):
     """Worker-side gate: the export must be fresh and the quality report must cover it."""
     file = Path(file)
-    if not file.is_file() or file.stat().st_size <= 0 or file.stat().st_mtime < started_at - 2:
+    if not file.is_file() or file.stat().st_size <= 0 or file.stat().st_mtime < started_at - EXPORT_MTIME_TOLERANCE_SECONDS:
         raise RuntimeError('No fresh nonempty mesh export')
     if quality.get('qualityCellCount') is not None and quality['qualityCellCount'] <= 0:
         raise RuntimeError('Quality report covered no cells')

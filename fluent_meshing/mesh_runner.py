@@ -10,18 +10,45 @@ from workspace_runtime import RunRecord, supervise, workspace, relative
 from mesh_validation import report_mesh, verify_export
 
 
+# ---------------------------------------------------------------------------
+# 输入 / 输出 / 参数配置（已有默认值；命令行选项优先）
+# ---------------------------------------------------------------------------
+# 输入：--geometry 必填；相对路径按调用时工作目录解析，无默认模型。
+# 输出：--run-dir > workspace.json 的 dataRoot/runs/<run-id>/fluent_meshing；
+# --out > 本次运行目录 / module.MESH_NAME。以下文件均位于本次运行目录。
+# 工作流参数、默认网格名由 mesh_missile.py 前部提供，运行记录由
+# workspace_runtime.py 管理；路径仍在每次运行时解析。
+# 下列日志、request.json 和工作流文件名属于既有产物约定，修改时需同步
+# 消费这些文件的脚本/工具；run.json 协议名由 workspace_runtime.py 定义。
+DEFAULT_PROCESSORS = 16
+DEFAULT_START_TIMEOUT = 300
+DEFAULT_TIMEOUT = 900
+DEFAULT_DRAW_SIZE_CONTROL = 'true'
+PIPELINE_LOG_NAME = 'pipeline.log'
+REQUEST_NAME = 'request.json'
+COMPLETED_WORKFLOW_NAME = 'completed_workflow.wft'
+STOPPED_WORKFLOW_NAME = 'stopped_workflow.wft'
+FAILED_WORKFLOW_NAME = 'failed_workflow.wft'
+FAILED_OUTPUT_PREFIX = 'failed-'
+# Fluent 版本与工作流标识必须与既有环境、协议匹配。
+FLUENT_PRODUCT_VERSION = '24.1'
+FLUENT_DIMENSION = '3d'
+FLUENT_PRECISION = 'double'
+FLUENT_WORKFLOW_TYPE = 'Watertight Geometry'
+
+
 def options(module):
     parser = argparse.ArgumentParser(description='Automated Fluent Meshing with provenance and strict export checks.')
     root, config = workspace(module.PROJECT_DIR)
-    parser.add_argument('-n', '--processors', type=int, default=16)
+    parser.add_argument('-n', '--processors', type=int, default=DEFAULT_PROCESSORS)
     parser.add_argument('--geometry', required=True, help='Imported .scdoc geometry; there is no default model')
     parser.add_argument('--run-dir', help='Unique working directory; must not already exist')
     parser.add_argument('--out', help='Mesh output file; must not already exist')
-    parser.add_argument('--start-timeout', type=int, default=300)
-    parser.add_argument('--timeout', type=int, default=900)
+    parser.add_argument('--start-timeout', type=int, default=DEFAULT_START_TIMEOUT)
+    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument('--keep-fluent', action='store_true')
     parser.add_argument('--show-gui', action='store_true')
-    parser.add_argument('--draw-size-control', choices=['true', 'false'], default='true')
+    parser.add_argument('--draw-size-control', choices=['true', 'false'], default=DEFAULT_DRAW_SIZE_CONTROL)
     parser.add_argument('--stop-after', choices=['import', 'sizing', 'surface', 'describe', 'share', 'regions', 'update-regions', 'bl', 'volume'])
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     parsed = parser.parse_args()
@@ -58,7 +85,7 @@ def recorded_steps(module, log, meshing, wf):
 
 def worker(module, opts):
     run = RunRecord(module.PROJECT_DIR, opts.profile, opts.geometry, run_dir=opts.run_dir, reopen=True)
-    log = module.Logger(str(run.directory / 'pipeline.log'))
+    log = module.Logger(str(run.directory / PIPELINE_LOG_NAME))
     meshing = wf = output = None
     status, verification, error = 'FAILED', {'runtimeVerified': False}, None
     started_at = time.time()
@@ -67,7 +94,7 @@ def worker(module, opts):
         if opts.processors <= 0 or opts.start_timeout <= 0 or opts.timeout <= 0:
             raise ValueError('Processor count and timeout limits must be positive')
         run.check_input(opts.geometry)
-        (run.directory / 'request.json').write_text(json.dumps({key: value for key, value in vars(opts).items() if key != 'worker'}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+        (run.directory / REQUEST_NAME).write_text(json.dumps({key: value for key, value in vars(opts).items() if key != 'worker'}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         output = Path(opts.out).resolve() if opts.out else run.directory / module.MESH_NAME
         protected = run.root / 'missile_project'
         if output == protected or protected in output.parents:
@@ -81,9 +108,9 @@ def worker(module, opts):
         log('input:', relative(run.root, opts.geometry))
         import ansys.fluent.core as pyfluent
         module.ensure_writable_appdata(log, str(run.directory))
-        meshing = pyfluent.launch_fluent(product_version='24.1', mode='meshing', version='3d', precision='double', processor_count=opts.processors, start_transcript=True, show_gui=opts.show_gui, start_watchdog=False, cleanup_on_exit=not opts.keep_fluent, cwd=str(run.directory), start_timeout=opts.start_timeout)
+        meshing = pyfluent.launch_fluent(product_version=FLUENT_PRODUCT_VERSION, mode='meshing', version=FLUENT_DIMENSION, precision=FLUENT_PRECISION, processor_count=opts.processors, start_transcript=True, show_gui=opts.show_gui, start_watchdog=False, cleanup_on_exit=not opts.keep_fluent, cwd=str(run.directory), start_timeout=opts.start_timeout)
         wf = meshing.workflow
-        wf.InitializeWorkflow(WorkflowType='Watertight Geometry')
+        wf.InitializeWorkflow(WorkflowType=FLUENT_WORKFLOW_TYPE)
         module.step_import(log, wf, meshing)
         module.check_stop('import')
         regions = recorded_steps(module, log, meshing, wf)
@@ -100,14 +127,14 @@ def worker(module, opts):
         verification['outputPath'] = str(output)
         verification['output'] = relative(run.root, output)
         verification['regions'] = regions
-        wf.SaveWorkflow(FilePath=str(run.directory / 'completed_workflow.wft'))
+        wf.SaveWorkflow(FilePath=str(run.directory / COMPLETED_WORKFLOW_NAME))
         status = 'PASSED'
     except module.StopHere:
         status = 'STOPPED'
         verification = {'runtimeVerified': False, 'stoppedAfter': opts.stop_after}
         if wf is not None:
             try:
-                wf.SaveWorkflow(FilePath=str(run.directory / 'stopped_workflow.wft'))
+                wf.SaveWorkflow(FilePath=str(run.directory / STOPPED_WORKFLOW_NAME))
             except Exception:
                 log('Could not save stopped workflow')
         log('Deliberately stopped; full-run acceptance was not performed')
@@ -116,7 +143,7 @@ def worker(module, opts):
         log(traceback.format_exc())
         if wf is not None:
             try:
-                wf.SaveWorkflow(FilePath=str(run.directory / 'failed_workflow.wft'))
+                wf.SaveWorkflow(FilePath=str(run.directory / FAILED_WORKFLOW_NAME))
             except Exception:
                 log('Could not save partial workflow')
     finally:
@@ -131,7 +158,7 @@ def worker(module, opts):
         log.close()
     if status == 'FAILED' and owned_output and output and output.is_file() and output.parent != run.directory:
         import shutil
-        retained = run.directory / ('failed-' + output.name)
+        retained = run.directory / (FAILED_OUTPUT_PREFIX + output.name)
         shutil.copy2(output, retained)
         verification['failedOutputCopy'] = retained.name
     run.finish(status, verification, error, relocate=False)

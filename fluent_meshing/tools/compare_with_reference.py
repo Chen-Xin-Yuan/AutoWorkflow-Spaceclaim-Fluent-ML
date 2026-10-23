@@ -19,11 +19,20 @@ import json
 import os
 import sys
 
+# ---------------------------------------------------------------------------
+# 输入 / 输出 / 参数配置
+# ---------------------------------------------------------------------------
+# 输入：第 1/2 个位置参数分别覆盖 DEFAULT_NEW / DEFAULT_REF；显式相对路径
+# 按调用时工作目录解析，以下默认路径按本脚本所在仓库解析。
+# 输出：仅向标准输出打印比较结果，不写报告文件、不修改输入文件。
+# 以下默认为历史证据文件，不代表新运行验收；任务字段/别名表是比较协议。
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_NEW = os.path.join(
     os.path.dirname(PROJECT_DIR), "data_lib", "legacy", "fluent_meshing", "generated", "missile_mesh_workflow_files", "missile_mesh.wft"
 )
 DEFAULT_REF = os.path.join(os.path.dirname(PROJECT_DIR), "data_lib", "legacy", "fluent_meshing", "reference", "missile_workflow_files", "missile.wft")
+DISPLAY_DIFF_LIMIT = 300
+DISPLAY_ARGUMENT_LIMIT = 140
 
 # Explicit task-scoped recording fields; actual calculation inputs stay strict.
 TASK_RECORDING_FIELDS = {
@@ -112,10 +121,10 @@ def main() -> int:
         diffs = task_differences(name, old_task, new_task)
         if diffs:
             differences += 1
-            print(f"{name:<28} {'DIFFER':<10} " + " | ".join(diffs)[:300])
+            print(f"{name:<28} {'DIFFER':<10} " + " | ".join(diffs)[:DISPLAY_DIFF_LIMIT])
         else:
             print(f"{name:<28} {'identical':<10} "
-                  f"{json.dumps(norm(new_args), ensure_ascii=False)[:140]}")
+                  f"{json.dumps(norm(new_args), ensure_ascii=False)[:DISPLAY_ARGUMENT_LIMIT]}")
 
     print()
     print(f"tasks compared       : {len(set(new) | set(ref))}")

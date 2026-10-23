@@ -11,6 +11,22 @@ import { ALL_PARAMS, GEOMETRY_PARAMS, OPTIMISATION_RANGES, OUTPUT_FIELDS, defaul
 import { buildMissile } from "../lib/spaceclaim-runner.mjs";
 import { readFile } from "node:fs/promises";
 
+// === 输入 / 输出 / 可调默认参数（集中修改区） ===
+// 输入：--preset JSON（相对路径基于调用者当前目录）；显式 CLI 参数覆盖预设。
+// 输出：--out/--name 覆盖下列默认值；空 outputDir 保留 SCDM_MISSILE_OUTPUT /
+// workspace.json 的默认目录解析，在运行时创建唯一 run 目录；失败保留到 feedback。
+// 产物：request.json、run.json、params.json、model.py；执行后还包括模型/结果/诊断。
+// 几何参数默认值及允许范围只在 ../lib/missile-schema.mjs 定义，--list 可查看。
+const DEFAULT_OPTIONS = {
+  preset: "",
+  outputDir: "",
+  fileName: "missile.scdoc",
+  execute: true,
+  timeoutMs: 300000,
+  json: false,
+  list: false,
+};
+
 const MODEL_FIELDS = ALL_PARAMS.filter((param) => !OUTPUT_FIELDS.includes(param.field)).map((param) => param.field);
 
 function usage() {
@@ -30,7 +46,7 @@ function usage() {
     "  --out <dir>            产物目录（工作区内默认 data_lib/runs）",
     "  --name <file.scdoc>    模型文件名",
     "  --generate-only        只生成 params.json 与 model.py，不启动 SpaceClaim",
-    "  --timeout <ms>         SpaceClaim 执行超时（默认 300000）",
+    `  --timeout <ms>         SpaceClaim 执行超时（默认 ${DEFAULT_OPTIONS.timeoutMs}）`,
     "  --json                 以 JSON 输出结果",
     "  --list                 列出参数与默认值后退出",
     "",
@@ -42,7 +58,7 @@ function usage() {
 
 function parseArgs(argv) {
   const explicit = {};
-  const options = { preset: "", outputDir: "", fileName: "missile.scdoc", execute: true, timeoutMs: 300000, json: false, list: false };
+  const options = { ...DEFAULT_OPTIONS };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith("--")) throw new Error(`无法识别的参数 '${token}'。`);

@@ -1,5 +1,9 @@
 import path from "node:path";
 
+// 输入：调用方传入的 HTML / sitemap 文本、索引记录与查询；输出：内存中的提取/搜索结果。
+// 本模块不读写文件。limit 参数可覆盖下列既有搜索条数默认值；评分规则保留在实现中。
+const DEFAULT_SEARCH_LIMIT = 25;
+
 function decodeHtml(value) {
   return value.replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
     .replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'");
@@ -37,7 +41,7 @@ export function parseSitemap(text) {
   return records;
 }
 
-export function rankSearch(records, query, limit = 25) {
+export function rankSearch(records, query, limit = DEFAULT_SEARCH_LIMIT) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const normalizedQuery = q.replace(/[._()#,<>]+/g, " ").replace(/\s+/g, " ").trim();

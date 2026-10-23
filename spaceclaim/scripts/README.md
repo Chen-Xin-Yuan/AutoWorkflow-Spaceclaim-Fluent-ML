@@ -13,6 +13,20 @@
 
 `smoke` 的入口预检要求 `SCDM_CHM`、非空版本化 `AWP_ROOT<number>` 或通用 `AWP_ROOT` 至少存在一个；仅有 `npm run setup` 保存的配置仍不能通过该预检。`verify:real` 使用统一 CHM 解析器，可以使用有效的首次配置。两者的 CHM 成功、缓存命中和 API 签名只证明文档路径与查询功能，不是几何 `runtime-verified`。
 
+## 文件前部的集中修改区
+
+各入口在必要的模块说明/import 后先说明输入、输出和参数来源，默认值保留原值；路径仍按原有覆盖优先级在运行时解析。
+
+| 入口 | 文件前部的配置或实际来源 |
+| --- | --- |
+| `missile.mjs` | `DEFAULT_OPTIONS` 集中 `preset`、`outputDir`、`fileName`、`execute`、`timeoutMs` 与显示选项。CLI 覆盖这些默认值；模型字段仍来自 `../lib/missile-schema.mjs`。 |
+| `setup.mjs` | `SETUP_HOST`、`SETUP_PORT`、`CLOSE_DELAY_MS` 集中本机页面设置；配置文件位置由共享 `defaultConfigPath()` 依据 `LOCALAPPDATA` / `TEMP` 解析，不复制安装路径。 |
+| `verify-geometry.mjs` | `DEFAULT_OUTPUT_DIR`、`DEFAULT_TIMEOUT_MS`、`MAX_TIMEOUT_MS`、`FIXTURE_SOURCE_PARTS` 和 `OUTPUT_FILES` 集中 fixture 输入、超时及运行目录内文件名；`--out`、`--timeout` 仍优先。 |
+| `spaceclaim-circular-repeat-smoke.py` | 环境变量名称和诊断缺省文件名在前部；实际模型/结果/诊断路径仍由驱动脚本注入。固定几何验收数值和断言保持原样。 |
+| `smoke.mjs` / `verify-real.mjs` | 前部说明 CHM、缓存、标准输出及共享解析器来源；查询样例是固定检查，不另建一套生产模型默认值。 |
+
+`server.mjs` 的 MCP 入口默认值集中在 `MCP_DEFAULTS`。需要改变输入文件或输出根目录时，优先修改 CLI/MCP 调用；留空输出目录时仍由执行器、环境变量和 `workspace.json` 解析实际运行位置，运行产物应保存在仓库外。唯一 run 目录、反馈路径和安装位置保留动态解析，不写入某次运行的绝对路径。固定协议字段和验收断言不是可随意修改的参数。
+
 ## 配置与几何验收
 
 `setup` 不接受命令行选项。配置默认保存至 `%LOCALAPPDATA%\ansys-scdmdoc-mcp\config.json`。AWP 验证失败时页面显示 `无法根据 AWP 确定环境变量的路径，无法确定 SpaceClaim 的路径`，该错误页面只允许手动输入恢复。

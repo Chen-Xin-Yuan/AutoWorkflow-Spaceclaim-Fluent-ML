@@ -8,6 +8,12 @@ Windows 本地 MCP 服务：检索已安装的 ANSYS SpaceClaim/SCDM 官方 API 
 
 运行目标为 Windows、Node.js 18+。MCP 使用 stdio，标准输出只承载 JSON-RPC。文档检索和 MCP 启动需要本机官方 CHM；实际建模还需要可运行的 SpaceClaim。独立命令行的仅生成模式可在没有 ANSYS 的机器上使用。
 
+## 修改输入、输出和参数
+
+自有源码在必要的 shebang、模块说明和 import 之后，先列出输入/输出与可调默认参数，再进入处理逻辑。入口的集中修改区为：`server.mjs` 的 `MCP_DEFAULTS`、`scripts/missile.mjs` 的 `DEFAULT_OPTIONS`、`scripts/setup.mjs` 的回环地址/端口/关闭延迟，以及 `scripts/verify-geometry.mjs` 的输出目录默认值、超时和文件名。仅转发或检查入口在文件前部说明实际配置来源；固定验收用例的几何数值与断言不作为生产参数修改。
+
+几何参数仍统一在 `lib/missile-schema.mjs`，输入文件通过 CLI `--preset` 选择，输出通过 `--out`/`--name` 或 MCP `outputDir`/`fileName` 覆盖。优先级保持显式参数 > 预设 > schema 默认值。空输出目录仍交给执行器和 `workspace.json` 在运行时解析；运行编号、实际 run 目录和失败留存路径不能提前写成某次运行的固定绝对路径。安装仍通过 AWP 或受支持的本机配置发现。完整入口与产物说明见 [scripts/README.md](scripts/README.md)。
+
 ## 安装与首次配置
 
 在本项目目录执行：

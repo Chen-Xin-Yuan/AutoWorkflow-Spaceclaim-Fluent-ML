@@ -2,6 +2,21 @@
 
 本目录没有直接子目录。所有模块使用 Node.js ESM；MCP 入口是仓库根目录的 [`server.mjs`](../server.mjs)，命令入口见 [`scripts/README.md`](../scripts/README.md)。
 
+各模块在导入之后、业务函数之前说明输入、输出和参数来源。需要直接维护的既有文件名、目录名、超时与搜索条数默认值集中在文件前部；由环境、`workspace.json` 或调用方传入的路径继续在调用时解析，保留原来的覆盖优先级。纯函数模块在头部说明不读写文件，并指向已有参数声明，避免重复维护默认值。
+
+| 配置入口 | 输入、输出与修改位置 |
+| --- | --- |
+| `setup.mjs` / `paths.mjs` | 文件前部集中官方 CHM 文件名、用户配置和缓存目录名；安装根仍通过 AWP 或首次配置发现。用户配置根和缓存根按 `LOCALAPPDATA` → `TEMP` → 当前目录解析。 |
+| `chm.mjs` | 调用方提供 CHM 和缓存根；文件前部集中缓存文件名、提取目录前缀、300000 ms 超时、4 次稳定轮询及既有等待间隔，`options.timeoutMs` 可覆盖超时。 |
+| `index.mjs` | 调用方提供解包根和可选 sitemap；文件前部集中默认 sitemap 名、索引缓存名与配套格式版本。缓存名与格式版本是兼容性约定，调整时需一并核对。 |
+| `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。 |
+| `spaceclaim-runner.mjs` | 文件前部集中模型/请求/脚本/结果/诊断/图片/清单/错误文件名、300000 ms 超时与原有执行默认值；模型名可由 `fileName` 覆盖。输出根按 `options.outputDir` → `SCDM_MISSILE_OUTPUT` → 工作区 `dataRoot` 选择。清单名是与 `workspace-runtime.mjs` 的 `RUN_MANIFEST_FILENAME` 共享的协议名，必须保持一致。 |
+| `extract.mjs` / `python-map.mjs` | 不读写文件；文件前部集中原有搜索条数默认值 25 / 5，由函数参数或 `options.limit` 覆盖。候选模板的参数仍在前部 `INTENTS` 中。 |
+| `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。生成模板的路径由请求/环境传入，模板内容与数值计算未更改。 |
+| `fixture-acceptance.mjs` | 不读写文件；头部说明 fixture 的既有验收约定，不将契约常量重新声明为运行参数。 |
+
+这些整理保留已有默认值、文件格式、调用接口与验收逻辑。可用 `node --check lib/<module>.mjs` 做语法检查，正常代码检查仍按仓库 `AGENTS.md` 执行；语法检查或离线测试不能证明 ANSYS 运行产物已经验收。
+
 | 模块 | 当前职责 |
 | --- | --- |
 | [`setup.mjs`](setup.mjs) | 枚举版本化 AWP 环境变量、校验 AWP 或手动选择的 CHM、读写用户级首次配置。 |

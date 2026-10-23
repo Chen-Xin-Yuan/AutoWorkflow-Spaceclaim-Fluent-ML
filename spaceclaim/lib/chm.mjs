@@ -4,8 +4,18 @@ import { access, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:
 import os from "node:os";
 import path from "node:path";
 
+// 输入/输出与可调参数：CHM、缓存根目录由 ensureExtracted(chmPath, cacheRoot, options) 传入。
+// options.timeoutMs 可覆盖默认超时；临时根目录按系统临时目录、TEMP、WINDIR/Temp 动态解析。
+// 以下仅集中原有默认值；缓存目录会在调用时追加源 CHM 路径哈希，勿填机器安装绝对路径。
 const DEFAULT_TIMEOUT_MS = 300000;
 const STABLE_POLLS = 4;
+const EXTRACTION_POLL_INTERVAL_MS = 250;
+const QUICK_EXIT_THRESHOLD_MS = 3000;
+const EMPTY_EXTRACTION_GRACE_MS = 5000;
+const CACHE_METADATA_FILENAME = ".scdm-cache.json";
+const EXTRACTED_HTML_DIRECTORY = "html";
+const EXTRACTION_DIRECTORY_PREFIX = "extracted-";
+const TEMP_EXTRACTION_DIRECTORY_PREFIX = "scdm-extract-";
 /**
  * hh.exe takes the output folder as the first token after -decompile and treats the rest of the
  * raw command line, quotes included, as the CHM path. So the folder must be free of spaces and cmd
@@ -88,7 +98,7 @@ async function resolveDecompileTargets(chmPath, outputRoot) {
   if (shortened) return { chmArgument, decompileInto: shortened, moveTo: null };
   const base = await spaceFreeBase();
   if (!base) throw new Error("No space-free temporary directory is available for hh.exe; point SCDM_CHM at a path without spaces or special characters.");
-  return { chmArgument, decompileInto: path.join(base, `scdm-extract-${Date.now().toString(36)}`), moveTo: outputRoot };
+  return { chmArgument, decompileInto: path.join(base, `${TEMP_EXTRACTION_DIRECTORY_PREFIX}${Date.now().toString(36)}`), moveTo: outputRoot };
 }
 
 /** hh.exe must see the executable unquoted as well; quoting it makes cmd pass the quotes through. */
@@ -128,7 +138,7 @@ async function waitForExtraction(outputRoot, timeoutMs) {
     const hhc = await findByExtension(outputRoot, ".hhc");
     const hhk = await findByExtension(outputRoot, ".hhk");
     if (hhc && hhk) {
-      const count = await countHtmlFiles(path.join(outputRoot, "html"));
+      const count = await countHtmlFiles(path.join(outputRoot, EXTRACTED_HTML_DIRECTORY));
       if (count > 0 && count === lastCount) {
         stable += 1;
         if (stable >= STABLE_POLLS) return count;
@@ -137,7 +147,7 @@ async function waitForExtraction(outputRoot, timeoutMs) {
         lastCount = count;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, EXTRACTION_POLL_INTERVAL_MS));
   }
   throw new Error(`hh.exe did not produce a .hhc/.hhk pair and extracted HTML within ${timeoutMs} ms.`);
 }
@@ -150,8 +160,8 @@ export async function ensureExtracted(chmPath, cacheRoot, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const source = await stat(chmPath);
   const resolvedChm = path.resolve(chmPath);
-  const outputRoot = path.join(cacheRoot, `extracted-${cacheName(resolvedChm)}`);
-  const metadataPath = path.join(outputRoot, ".scdm-cache.json");
+  const outputRoot = path.join(cacheRoot, `${EXTRACTION_DIRECTORY_PREFIX}${cacheName(resolvedChm)}`);
+  const metadataPath = path.join(outputRoot, CACHE_METADATA_FILENAME);
   await mkdir(cacheRoot, { recursive: true });
   let metadata = null;
   try { metadata = JSON.parse(await readFile(metadataPath, "utf8")); } catch {}
@@ -168,9 +178,9 @@ export async function ensureExtracted(chmPath, cacheRoot, options = {}) {
       await cp(decompileInto, moveTo, { recursive: true });
       await rm(decompileInto, { recursive: true, force: true });
     }
-    if (Date.now() - started < 3000 && !(await findByExtension(outputRoot, ".hhc"))) {
+    if (Date.now() - started < QUICK_EXIT_THRESHOLD_MS && !(await findByExtension(outputRoot, ".hhc"))) {
       // hh.exe silently produces nothing when it cannot parse the request; do not spin for minutes.
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, EMPTY_EXTRACTION_GRACE_MS));
       if (!(await findByExtension(outputRoot, ".hhc"))) {
         throw new Error(`hh.exe exited without extracting anything. The CHM path '${resolvedChm}' or the cache folder '${cacheRoot}' is not usable by hh.exe; check for spaces and special characters.`);
       }

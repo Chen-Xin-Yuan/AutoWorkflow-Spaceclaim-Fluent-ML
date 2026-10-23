@@ -8,6 +8,9 @@
 import { ALL_PARAMS, OPTIMISATION_RANGES, schemaEntry } from "./missile-schema.mjs";
 import { deriveGeometry, deriveRegions, noseFilletLimits, resolveModelPlacement, solveNoseFillet, solveNoseTipFillet, bodyRadius } from "./missile-geometry.mjs";
 
+// 输入：调用方 explicit / preset / output / outputDir / modelFile；输出：内存中的校验结果和请求对象。
+// 本模块不读写文件；参数默认值统一在 missile-schema.mjs 文件前部，优先级为 explicit > preset > default。
+// 下列为原有校验常量，所有数值及校验逻辑保持不变。
 export const MIN_TIP_CHORD = 1e-3;
 const NUMBER_KINDS = new Set(["number", "integer"]);
 

@@ -1,7 +1,13 @@
 import { access, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// 输入：调用方选择的 SpaceClaim.exe / AWP_ROOT<版本>，以及调用时传入的 env。
+// 输出：LOCALAPPDATA > TEMP > 当前目录下的用户配置；安装位置始终动态发现。
+// 以下为既有文件/目录名；CHM_NAME 必须与官方安装的文档名称一致。
 const CHM_NAME = "API_Combined_Class_Library.chm";
+const INSTALL_SUBDIRECTORY = "scdm";
+const CONFIG_APPLICATION_DIRECTORY = "ansys-scdmdoc-mcp";
+const CONFIG_FILENAME = "config.json";
 
 export function discoverAwpRoots(env = process.env) {
   return Object.entries(env)
@@ -15,7 +21,7 @@ export function discoverAwpRoots(env = process.env) {
 
 export function defaultConfigPath(env = process.env) {
   const base = env.LOCALAPPDATA || env.TEMP || ".";
-  return path.join(base, "ansys-scdmdoc-mcp", "config.json");
+  return path.join(base, CONFIG_APPLICATION_DIRECTORY, CONFIG_FILENAME);
 }
 
 export async function readSetupConfig(env = process.env) {
@@ -55,7 +61,7 @@ export async function chmForSpaceClaimExecutable(executablePath) {
 export async function chmForAwpVariable(variable, env = process.env) {
   const item = discoverAwpRoots(env).find((candidate) => candidate.name === variable);
   if (!item) throw new Error("无法根据 AWP 确定环境变量的路径，无法确定 SpaceClaim 的路径");
-  const chm = path.join(item.root, "scdm", `SpaceClaim.Api.${item.apiVersion}`, CHM_NAME);
+  const chm = path.join(item.root, INSTALL_SUBDIRECTORY, `SpaceClaim.Api.${item.apiVersion}`, CHM_NAME);
   try {
     await access(chm);
     return path.resolve(chm);

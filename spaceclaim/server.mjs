@@ -13,6 +13,29 @@ import { buildModelRequest, optimisationPool } from "./lib/missile-params.mjs";
 import { buildMissile } from "./lib/spaceclaim-runner.mjs";
 import { readFile } from "node:fs/promises";
 
+// === 输入 / 输出 / 可调默认参数（集中修改区） ===
+// 输入：MCP 工具参数；CHM 由 resolveChmPath() 按环境变量/本机 setup 配置解析。
+// 输出：stdout 仅 JSON-RPC；CHM 缓存由 defaultCacheRoot() 解析，不在此写安装绝对路径。
+// 建模产物：outputDir/fileName 可由工具调用覆盖；空目录保留执行器的环境变量/
+// workspace.json 默认解析，运行时再创建唯一 run 目录，失败留存到 feedback。
+// 几何参数及其默认值统一来自 lib/missile-schema.mjs，不在入口复制。
+const MCP_DEFAULTS = {
+  serverName: "ansys-scdmdoc",
+  serverVersion: "0.1.0",
+  searchKind: "all",
+  searchLimit: 25,
+  searchMaxLimit: 100,
+  docMaxChars: 50000,
+  docMaxAllowedChars: 100000,
+  pythonLimit: 5,
+  pythonMaxLimit: 20,
+  outputDir: "",
+  fileName: "missile.scdoc",
+  timeoutMs: 300000,
+  maxTimeoutMs: 1800000,
+  execute: true,
+};
+
 const resolved = await resolveChmPath(process.env).catch((error) => { process.stderr.write(`${error.message}\n`); process.exit(1); });
 const apiVersion = apiVersionFromChmPath(resolved.path);
 const apiNamespace = apiVersion ? `SpaceClaim.Api.${apiVersion}` : "SpaceClaim.Api";
@@ -31,15 +54,15 @@ function boundedDocPath(docPath) {
   return full;
 }
 
-const server = new McpServer({ name: "ansys-scdmdoc", version: "0.1.0" });
-server.registerTool("search_api", { title: "Search SpaceClaim API", description: `Search ${apiNamespace} CHM records by type, member, title, keyword, or geometry term.`, inputSchema: { query: z.string().min(1), kind: z.enum(["all", "class", "method", "property", "event"]).optional(), limit: z.number().int().positive().max(100).optional() } }, async ({ query, kind = "all", limit = 25 }) => {
+const server = new McpServer({ name: MCP_DEFAULTS.serverName, version: MCP_DEFAULTS.serverVersion });
+server.registerTool("search_api", { title: "Search SpaceClaim API", description: `Search ${apiNamespace} CHM records by type, member, title, keyword, or geometry term.`, inputSchema: { query: z.string().min(1), kind: z.enum(["all", "class", "method", "property", "event"]).optional(), limit: z.number().int().positive().max(MCP_DEFAULTS.searchMaxLimit).optional() } }, async ({ query, kind = MCP_DEFAULTS.searchKind, limit = MCP_DEFAULTS.searchLimit }) => {
   const index = await getIndex();
   const records = kind === "all" ? index.records : index.records.filter((record) => record.kind === kind);
   const results = rankSearch(records, query, limit);
   return { content: [{ type: "text", text: JSON.stringify({ query, total: results.length, results }, null, 2) }], structuredContent: { query, total: results.length, results } };
 });
 
-server.registerTool("get_doc", { title: "Read SpaceClaim API document", description: "Read one relative HTML page returned by search_api.", inputSchema: { docPath: z.string().min(1), maxChars: z.number().int().positive().max(100000).optional() } }, async ({ docPath, maxChars = 50000 }) => {
+server.registerTool("get_doc", { title: "Read SpaceClaim API document", description: "Read one relative HTML page returned by search_api.", inputSchema: { docPath: z.string().min(1), maxChars: z.number().int().positive().max(MCP_DEFAULTS.docMaxAllowedChars).optional() } }, async ({ docPath, maxChars = MCP_DEFAULTS.docMaxChars }) => {
   try {
     const file = boundedDocPath(docPath);
     const html = await fs.readFile(file, "utf8");
@@ -54,7 +77,7 @@ server.registerTool("get_doc", { title: "Read SpaceClaim API document", descript
   }
 });
 
-server.registerTool("find_python_command", { title: "Find SCDM Python command", description: "Find SpaceClaim APIs for a geometry intent and return evidence-labelled Python candidates.", inputSchema: { intent: z.string().min(1), parameters: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(), limit: z.number().int().positive().max(20).optional() } }, async ({ intent, parameters = {}, limit = 5 }) => {
+server.registerTool("find_python_command", { title: "Find SCDM Python command", description: "Find SpaceClaim APIs for a geometry intent and return evidence-labelled Python candidates.", inputSchema: { intent: z.string().min(1), parameters: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(), limit: z.number().int().positive().max(MCP_DEFAULTS.pythonMaxLimit).optional() } }, async ({ intent, parameters = {}, limit = MCP_DEFAULTS.pythonLimit }) => {
   const result = findPythonCommands(intent, await getIndex(), { parameters, limit });
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], structuredContent: result };
 });
@@ -106,7 +129,7 @@ server.registerTool("validate_missile_params", { title: "Validate missile parame
 });
 
 server.registerTool("generate_model_script", { title: "Generate SCDM model script", description: "Write params.json and the SCDM IronPython script for a parameter set without launching SpaceClaim.", inputSchema: { ...MISSILE_INPUT, outputDir: z.string().optional(), fileName: z.string().optional() } }, async (args) => {
-  const result = await buildMissile({ explicit: modelOverrides(args), outputDir: args.outputDir ?? "", fileName: args.fileName ?? "missile.scdoc", execute: false });
+  const result = await buildMissile({ explicit: modelOverrides(args), outputDir: args.outputDir ?? MCP_DEFAULTS.outputDir, fileName: args.fileName ?? MCP_DEFAULTS.fileName, execute: false });
   if (result.status === "invalid-parameters") {
     const payload = { ok: false, status: result.status, errors: result.errors, warnings: result.warnings, corrections: result.corrections };
     return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload, isError: true };
@@ -116,9 +139,9 @@ server.registerTool("generate_model_script", { title: "Generate SCDM model scrip
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], structuredContent: payload };
 });
 
-server.registerTool("build_missile_model", { title: "Build missile model", description: "Run SpaceClaim headlessly to build the missile model and save a .scdoc, then grade the run against fresh artifacts. With execute:false only params.json and the SCDM script are written and the result is reported as generated-only.", inputSchema: { ...MISSILE_INPUT, outputDir: z.string().optional(), fileName: z.string().optional(), timeoutMs: z.number().int().positive().max(1800000).optional(), execute: z.boolean().optional() } }, async (args) => {
-  const execute = args.execute ?? true;
-  const result = await buildMissile({ explicit: modelOverrides(args), outputDir: args.outputDir ?? "", fileName: args.fileName ?? "missile.scdoc", timeoutMs: args.timeoutMs ?? 300000, execute });
+server.registerTool("build_missile_model", { title: "Build missile model", description: "Run SpaceClaim headlessly to build the missile model and save a .scdoc, then grade the run against fresh artifacts. With execute:false only params.json and the SCDM script are written and the result is reported as generated-only.", inputSchema: { ...MISSILE_INPUT, outputDir: z.string().optional(), fileName: z.string().optional(), timeoutMs: z.number().int().positive().max(MCP_DEFAULTS.maxTimeoutMs).optional(), execute: z.boolean().optional() } }, async (args) => {
+  const execute = args.execute ?? MCP_DEFAULTS.execute;
+  const result = await buildMissile({ explicit: modelOverrides(args), outputDir: args.outputDir ?? MCP_DEFAULTS.outputDir, fileName: args.fileName ?? MCP_DEFAULTS.fileName, timeoutMs: args.timeoutMs ?? MCP_DEFAULTS.timeoutMs, execute });
   const generatedOnly = result.status === "script-generated";
   const payload = {
     ok: result.ok,

@@ -4,6 +4,9 @@
  * Everything here is pure arithmetic in metres, so the geometry can be unit-tested without
  * launching SpaceClaim. The generated SCDM script consumes these numbers and only issues API
  * calls; it contains no geometry constants of its own.
+ *
+ * 输入：调用方提供的参数/剖面；输出：内存中的派生结果，不读写文件。
+ * 常用参数及默认值统一在 missile-schema.mjs 文件前部；本模块函数参数与数值计算保持原样。
  */
 
 export function bodyRadius(D) {

@@ -1,5 +1,9 @@
 import { rankSearch } from "./extract.mjs";
 
+// 输入：调用方 intent/task、内存索引、options.parameters / parameters；输出：内存中的候选脚本/步骤。
+// 本模块不读写文件；候选参数的原有默认值集中在文件前部 INTENTS 中，由调用方参数覆盖。
+const DEFAULT_COMMAND_LIMIT = 5; // options.limit 可覆盖。
+
 const INTENTS = [
   { test: /圆周阵列|圆周模式|circular\s*(pattern|array)|polar/i, terms: ["Pattern.CreateCircular", "CircularPatternData", "Combine.Merge"], code: (p) => `# Inferred candidate; verify in SCDM V261
 # Create one seed body at 0 degrees, then make a six-instance circular pattern and merge it.
@@ -23,7 +27,7 @@ function selectedIntent(intent) {
 
 export function findPythonCommands(intent, index, options = {}) {
   const selected = selectedIntent(intent);
-  const limit = options.limit ?? 5;
+  const limit = options.limit ?? DEFAULT_COMMAND_LIMIT;
   const matches = selected.terms.flatMap((term) => rankSearch(index.records, term, limit)).filter((record, position, all) => all.findIndex((other) => other.path === record.path) === position).slice(0, limit);
   return {
     intent,

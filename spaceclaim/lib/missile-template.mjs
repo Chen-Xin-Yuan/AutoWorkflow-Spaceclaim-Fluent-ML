@@ -3,6 +3,11 @@
  *
  * The template contains no geometry constants: every number arrives through the JSON request,
  * which is computed and unit-tested on the Node side.
+ *
+ * 输入：调用方 request / output / regions / namedSelections 和目标 API 版本；输出：内存中的 JSON 对象/脚本文本。
+ * 本模块自身不读写文件。生成脚本从 /ScriptArgs 或 SCDM_MISSILE_PARAMS 读取请求；
+ * 模型/结果/图片路径来自请求 output，诊断路径来自 SCDM_MISSILE_DIAGNOSTIC。
+ * 文件名和运行参数在 spaceclaim-runner.mjs 前部；模型参数在 missile-schema.mjs 前部。
  */
 
 export function buildRequestDocument(request, output, regions = [], namedSelections = null) {

@@ -2,6 +2,13 @@ import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { extractHtmlPage, parseSitemap, rankSearch } from "./extract.mjs";
 
+// 输入：调用方传入的解包根目录、源 CHM 元数据和可选 sitemapPath。
+// 输出：解包根目录中的索引缓存；saveIndex(index, file) 可显式指定文件。
+// 以下集中既有文件名；缓存版本与文件名配套，变更时需同时考虑旧缓存兼容。
+const DEFAULT_SITEMAP_FILENAME = "API_Combined_Class_Library.hhc";
+const INDEX_CACHE_FILENAME = ".scdm-index-v2.json";
+const INDEX_CACHE_VERSION = 2;
+
 async function htmlFiles(root, current = root, result = []) {
   for (const entry of await readdir(current, { withFileTypes: true })) {
     const full = path.join(current, entry.name);
@@ -33,7 +40,7 @@ export function apiVersionFromSourcePath(sourcePath) {
 }
 
 async function readSitemapRecords(extractedRoot, fallbackVersion, sitemapPath = "") {
-  const resolvedSitemap = sitemapPath || path.join(extractedRoot, "API_Combined_Class_Library.hhc");
+  const resolvedSitemap = sitemapPath || path.join(extractedRoot, DEFAULT_SITEMAP_FILENAME);
   const sitemap = await readFile(resolvedSitemap, "utf8").catch(() => "");
   const parsed = parseSitemap(sitemap);
   const records = [];
@@ -64,8 +71,8 @@ export async function saveIndex(index, file) {
 }
 
 export async function loadOrBuildIndex(extracted, options = {}) {
-  const file = path.join(extracted.root, ".scdm-index-v2.json");
-  const cacheKey = { sourcePath: extracted.metadata?.sourcePath, size: extracted.metadata?.size, mtimeMs: extracted.metadata?.mtimeMs, version: 2 };
+  const file = path.join(extracted.root, INDEX_CACHE_FILENAME);
+  const cacheKey = { sourcePath: extracted.metadata?.sourcePath, size: extracted.metadata?.size, mtimeMs: extracted.metadata?.mtimeMs, version: INDEX_CACHE_VERSION };
   try {
     const saved = JSON.parse(await readFile(file, "utf8"));
     if (JSON.stringify(saved.cacheKey) === JSON.stringify(cacheKey) && Array.isArray(saved.records)) return { ...saved, loadedFromCache: true, indexPath: file };

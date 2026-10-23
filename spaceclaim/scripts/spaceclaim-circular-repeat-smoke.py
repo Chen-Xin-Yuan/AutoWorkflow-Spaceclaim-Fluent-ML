@@ -6,7 +6,18 @@ from System import Environment
 from System.IO import File, Path
 
 
-diagnostic_path = Environment.GetEnvironmentVariable("SCDM_RUNTIME_DIAGNOSTIC") or Path.Combine(Environment.GetEnvironmentVariable("TEMP") or ".", "ansys-scdmdoc-circular-repeat-diagnostic.txt")
+# === 输入 / 输出 / 参数来源 ===
+# 输入：SpaceClaim 宿主 API；几何和验收数值为固定 fixture，不是生产模型参数。
+# 输出：下面的环境变量由 verify-geometry.mjs 注入本次 run 的实际路径。
+# 模型和结果路径为必填；诊断缺省写入 TEMP，未设置 TEMP 时回退当前目录。
+# 修改输出位置应在驱动入口配置，
+# 保留环境变量在运行时解析，不要将某次 run 的绝对路径写回源码。
+MODEL_PATH_ENV = "SCDM_RUNTIME_MODEL"
+RESULT_PATH_ENV = "SCDM_RUNTIME_RESULT"
+DIAGNOSTIC_PATH_ENV = "SCDM_RUNTIME_DIAGNOSTIC"
+DIAGNOSTIC_FALLBACK_FILENAME = "ansys-scdmdoc-circular-repeat-diagnostic.txt"
+
+diagnostic_path = Environment.GetEnvironmentVariable(DIAGNOSTIC_PATH_ENV) or Path.Combine(Environment.GetEnvironmentVariable("TEMP") or ".", DIAGNOSTIC_FALLBACK_FILENAME)
 
 
 def required_output(name):
@@ -17,8 +28,8 @@ def required_output(name):
 
 
 try:
-    model_path = required_output("SCDM_RUNTIME_MODEL")
-    result_path = required_output("SCDM_RUNTIME_RESULT")
+    model_path = required_output(MODEL_PATH_ENV)
+    result_path = required_output(RESULT_PATH_ENV)
 
     block_origin = Point.Create(MM(0), MM(-2), MM(0))
     corner = Point.Create(MM(20), MM(2), MM(5))

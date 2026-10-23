@@ -2,9 +2,17 @@ import path from "node:path";
 import { access, readdir } from "node:fs/promises";
 import { chmForSpaceClaimExecutable, chmForAwpVariable, readSetupConfig } from "./setup.mjs";
 
+// 输入：调用方 env；CHM 优先级为 SCDM_CHM > 有效 setup 配置 > AWP_ROOT<版本> > AWP_ROOT。
+// 输出：只返回解析后的 CHM/缓存路径，不写文件；根目录仍在调用时从 env 解析。
+// 通用 AWP_ROOT 可由 SCDM_API_VERSION 指定 API；缓存根按 LOCALAPPDATA > TEMP > 当前目录。
+const CHM_FILENAME = "API_Combined_Class_Library.chm";
+const INSTALL_SUBDIRECTORY = "scdm";
+const CACHE_APPLICATION_DIRECTORY = "ansys-scdmdoc-mcp";
+const CACHE_DIRECTORY_NAME = "cache";
+
 export function inferredChmPath(awpRoot, apiVersion) {
   if (!awpRoot || !apiVersion) return null;
-  return path.join(path.resolve(awpRoot), "scdm", `SpaceClaim.Api.${apiVersion}`, "API_Combined_Class_Library.chm");
+  return path.join(path.resolve(awpRoot), INSTALL_SUBDIRECTORY, `SpaceClaim.Api.${apiVersion}`, CHM_FILENAME);
 }
 
 export function apiVersionFromChmPath(chmPath) {
@@ -14,7 +22,7 @@ export function apiVersionFromChmPath(chmPath) {
 
 async function installedApiVersions(awpRoot) {
   try {
-    const entries = await readdir(path.join(path.resolve(awpRoot), "scdm"), { withFileTypes: true });
+    const entries = await readdir(path.join(path.resolve(awpRoot), INSTALL_SUBDIRECTORY), { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => /^SpaceClaim\.Api\.(V\d+)$/i.exec(entry.name)?.[1])
@@ -76,5 +84,5 @@ async function configuredCandidates(env) {
 
 export function defaultCacheRoot(env = process.env) {
   const base = env.LOCALAPPDATA || env.TEMP || ".";
-  return path.join(base, "ansys-scdmdoc-mcp", "cache");
+  return path.join(base, CACHE_APPLICATION_DIRECTORY, CACHE_DIRECTORY_NAME);
 }
