@@ -124,9 +124,9 @@ Normally seven named selections are created: `inlet`, `wall`, `outlet`, `missile
 
 ## 运行与证据 / Runs and evidence
 
-入口按脚本位置读取上一级 `workspace.json`。默认运行目录是 `../data_lib/runs/<run-id>/spaceclaim`，失败时尝试移至 `../feedback/spaceclaim/<run-id>`；文件系统或权限错误可能中断移动和清单收尾。`--out`、MCP `outputDir` 或 `SCDM_MISSILE_OUTPUT` 可指定输出父目录，其下仍新建唯一运行目录；失败留存目标仍为配置的反馈目录。
+入口按脚本位置读取上一级 `workspace.json`。默认运行目录是 `../data_lib/runs/high/<run-id>/spaceclaim`，失败时尝试移至 `../feedback/spaceclaim/<run-id>`；文件系统或权限错误可能中断移动和清单收尾。`--out`、MCP `outputDir` 或 `SCDM_MISSILE_OUTPUT` 可指定输出父目录，其下仍新建唯一运行目录；失败留存目标仍为配置的反馈目录。
 
-Entrypoints resolve the parent `workspace.json` relative to the scripts. Default runs live at `../data_lib/runs/<run-id>/spaceclaim`; failed runs attempt relocation to `../feedback/spaceclaim/<run-id>`. Filesystem or permission errors may interrupt relocation and manifest finalization. `--out`, MCP `outputDir`, or `SCDM_MISSILE_OUTPUT` selects an output parent with a unique run child; failed retention still targets the configured feedback directory.
+Entrypoints resolve the parent `workspace.json` relative to the scripts. Default runs live at `../data_lib/runs/high/<run-id>/spaceclaim`; failed runs attempt relocation to `../feedback/spaceclaim/<run-id>`. Filesystem or permission errors may interrupt relocation and manifest finalization. `--out`, MCP `outputDir`, or `SCDM_MISSILE_OUTPUT` selects an output parent with a unique run child; failed retention still targets the configured feedback directory.
 
 每次写入 `request.json`、`run.json`；有效请求增加 `params.json`、`model.py`。执行增加模型、`result.json` 和可选诊断、`preview.png`、`preview-assembly.png`。清单记录状态、时间、检查、产物大小和 SHA-256。预览图是辅助产物，不是验收门槛。
 

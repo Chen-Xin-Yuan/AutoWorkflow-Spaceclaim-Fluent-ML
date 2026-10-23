@@ -14,7 +14,7 @@ from mesh_validation import report_mesh, verify_export
 # 输入 / 输出 / 参数配置（已有默认值；命令行选项优先）
 # ---------------------------------------------------------------------------
 # 输入：--geometry 必填；相对路径按调用时工作目录解析，无默认模型。
-# 输出：--run-dir > workspace.json 的 dataRoot/runs/<run-id>/fluent_meshing；
+# 输出：--run-dir > workspace.json 的 dataRoot/runs/high/<run-id>/fluent_meshing；
 # --out > 本次运行目录 / module.MESH_NAME。以下文件均位于本次运行目录。
 # 工作流参数、默认网格名由 mesh_missile.py 前部提供，运行记录由
 # workspace_runtime.py 管理；路径仍在每次运行时解析。

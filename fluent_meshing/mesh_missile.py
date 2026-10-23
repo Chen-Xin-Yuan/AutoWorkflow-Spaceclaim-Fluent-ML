@@ -61,7 +61,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 # --------------------------------------------------------------------------
 # 正式入口：输入 --geometry 必填（相对调用时工作目录），mesh_runner.py 在运行时
 # 覆盖 GEOMETRY_FILE；下列旧路径仅保留供直接调用函数的兼容性，不是 CLI 默认值。
-# 输出：--out 优先，否则 workspace.json 的 dataRoot/runs/<run-id>/fluent_meshing
+# 输出：--out 优先，否则 workspace.json 的 dataRoot/runs/high/<run-id>/fluent_meshing
 # 下的 MESH_NAME；--run-dir 可覆盖运行目录，失败记录由 workspace_runtime.py
 # 保留到 feedbackRoot。以下 LOG_DIR 等是旧辅助函数路径，正式入口的日志名见
 # mesh_runner.py / mesh_validation.py / workspace_runtime.py 前部配置。

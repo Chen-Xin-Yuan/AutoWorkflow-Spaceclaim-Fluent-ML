@@ -43,7 +43,7 @@ function usage() {
     "",
     "选项:",
     "  --preset <file.json>   预设参数文件，优先级低于命令行开关",
-    "  --out <dir>            产物目录（工作区内默认 data_lib/runs）",
+    "  --out <dir>            产物目录（工作区内默认 data_lib/runs/high/<run-id>/spaceclaim）",
     "  --name <file.scdoc>    模型文件名",
     "  --generate-only        只生成 params.json 与 model.py，不启动 SpaceClaim",
     `  --timeout <ms>         SpaceClaim 执行超时（默认 ${DEFAULT_OPTIONS.timeoutMs}）`,

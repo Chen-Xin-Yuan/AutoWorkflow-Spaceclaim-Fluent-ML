@@ -15,7 +15,7 @@ import { buildRequestDocument, renderModelScript } from "./missile-template.mjs"
 
 // 输入/输出与可调参数：explicit > preset > missile-schema.mjs 中的参数默认值。
 // 安装位置按 SCDM_EXECUTABLE > 手动 setup 配置 > AWP_ROOT<版本> > AWP_ROOT 动态发现。
-// buildMissile 输出根按 options.outputDir > SCDM_MISSILE_OUTPUT > workspace.json 的 dataRoot；
+// buildMissile 输出根按 options.outputDir > SCDM_MISSILE_OUTPUT > workspace.json 的 dataRoot/runs/high；
 // 由 workspace-runtime 创建唯一运行目录并保留失败记录，以下仅集中既有文件名和运行默认值。
 // defaultRunRoot 保留原有临时目录回退，仅供其调用方/内部未托管路径使用。
 const DEFAULT_TIMEOUT_MS = 300000;

@@ -1,6 +1,6 @@
 # 自动求解模块预留
 
-后续从 `data_lib/index.json` 选择已验收网格作为输入，按运行 ID 保存配置、求解结果和验证记录至 `data_lib/runs/<run_id>/fluent_solution`，失败数据归入 `feedback/fluent_solution/<run_id>`。
+后续从 `data_lib/index.json` 选择已验收网格作为输入，按执行目录保存配置、求解结果和验证记录至 `data_lib/runs/high/<run-id>/fluent_solution/`。`<run-id>` 是 `run-<时间戳>-<短ID>`。失败数据归入 `feedback/fluent_solution/<run-id>/`。求解器仍待定。
 
 本次建立目录和数据约定，尚未实现或验证自动求解入口。
 

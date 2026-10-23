@@ -1,9 +1,11 @@
 # 文件数据仓库
 
-- `inputs/`：参数与原始输入。`cases.csv` 是 DATCOM 与后续工作流读取的输入总表，一行一个工况；`missile_params_example.json` 是只填写图中 11 个主尺寸的参数示例，`params_mine.json` 是配套提示词使用的自有参数，`fluent_meshing/geometry/` 保存网格阶段使用的几何。
+- `inputs/`：参数与原始输入。`cases.csv` 是工作流输入总表，一行一个工况，列里包含 `altitude_m`。当前有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07。标识符编码仍待定。`missile_params_example.json` 是只填写 11 个主尺寸的参数示例；`params_mine.json` 是配套提示词使用的自有参数。
+- `queues/`：五份队列。四份阶段队列按工况记录状态，`ml.json` 按训练轮次记录。字段见 `queues/README.md`。这 4 行试算还没有写入队列。
+- `datasets/`：数据集。`point_clouds/` 接收 `DATCOM/scripts/04_pointnet_demo.py` 的点云。脚本用 `--geometry-id` 或 `--params` 读取 11 个主尺寸。点数和最终格式仍待定。
+- `runs/`：运行目录。高保真在 `high/<run-id>/<阶段>/`，`<run-id>` 是 `run-<时间戳>-<短ID>`。低保真在 `low/<geometry_id>/`。说明见 `runs/README.md`。
+- `datcom_data/`：早先 DATCOM 脚本写出的算例结果，保留作历史记录。当前 `01_batch_datcom.py` 改写到 `runs/low/<geometry_id>/`。
 - `legacy/`：历史模型、网格、日志和 workflow，保留原文件内容；`migration-manifest.json` 解释旧路径与来源。
-- `runs/`：每次运行一个 `run-<时间戳>-<短ID>/<stage>/` 目录，以 `run.json` 记录状态和验证依据，`request.json` 记录本次参数。
-- `datcom_data/`：DATCOM 批量算例结果，每算例一个子目录（`for005.dat` / `for006.dat` / `for022.dat`、`aero_coefficients.csv`、`geometry_check.txt` / `geometry_check.png`、`case_params.json`），由 `DATCOM/scripts/01_batch_datcom.py` 写入，位置由该脚本顶部的 `RESULT_ROOT` 决定。
 - `runtime/`：运行期支撑数据；`test-support/` 供测试使用，当前为空。
 - `index.json`：由 `scripts/run.ps1 index` 更新的统一索引。
 - `README.md`：本文件。

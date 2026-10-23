@@ -3,6 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+// 输入：workspace.json 的 dataRoot/runs 与 feedbackRoot。高保真在 runs/high，低保真在 runs/low。
+// 输出：dataRoot/index.json。运行目录在扫描时解析，不在这里固定某一次 run 的路径。
+const RUNS_DIRECTORY = 'runs';
+const KNOWN_STAGES = ['spaceclaim', 'fluent_meshing', 'fluent_solution', 'datcom'];
+const KNOWN_STATUSES = ['PASSED', 'FAILED', 'STOPPED', 'GENERATED', 'RUNNING'];
+
 const config = JSON.parse(await fs.readFile(path.join(root, 'workspace.json'), 'utf8'));
 function safe(relative) {
   const target = path.resolve(root, relative);
@@ -25,8 +32,8 @@ async function runs(directory) {
       else if(entry.name === 'run.json') {
         const record=await readJson(file);
         if(record.redirectManifest) continue;
-        if(!['spaceclaim','fluent_meshing'].includes(record.stage)) throw new Error('Unknown run stage');
-        if(!['PASSED','FAILED','STOPPED','GENERATED','RUNNING'].includes(record.status)) throw new Error('Unknown run status');
+        if(!KNOWN_STAGES.includes(record.stage)) throw new Error('Unknown run stage');
+        if(!KNOWN_STATUSES.includes(record.status)) throw new Error('Unknown run status');
         found.push({...record, manifest:path.relative(root,file).replaceAll('\\','/'), runtimeVerified:record.status==='PASSED' && record.verification?.runtimeVerified===true});
       }
     }
@@ -35,7 +42,7 @@ async function runs(directory) {
   return found;
 }
 const historical=await readJson(path.join(safe(config.legacyRoot),'migration-manifest.json'));
-const records=[...await runs(path.join(safe(config.dataRoot),'runs')), ...await runs(safe(config.feedbackRoot))];
+const records=[...await runs(path.join(safe(config.dataRoot),RUNS_DIRECTORY)), ...await runs(safe(config.feedbackRoot))];
 records.sort((a,b)=>String(a.startedAt).localeCompare(String(b.startedAt)));
 const index={schemaVersion:1,updatedAt:new Date().toISOString(),historical:{runtimeVerified:false,note:'历史文件保留原样，未重新运行验收。',manifest:historical?path.relative(root,path.join(safe(config.legacyRoot),'migration-manifest.json')).replaceAll('\\','/'):null,files:historical?.files??[]},runs:records,counts:{historicalFiles:historical?.files?.length??0,runs:records.length,verified:records.filter(x=>x.runtimeVerified).length,failed:records.filter(x=>x.status==='FAILED').length,stopped:records.filter(x=>x.status==='STOPPED').length}};
 const output=path.join(safe(config.dataRoot),'index.json');

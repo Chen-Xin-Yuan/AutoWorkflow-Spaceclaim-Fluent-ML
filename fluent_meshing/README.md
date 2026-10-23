@@ -45,7 +45,7 @@
 
 | 位置 | 用途 |
 | --- | --- |
-| `data_lib/runs/<run-id>/fluent_meshing/` | 新运行记录、工作文件、日志和默认导出的 `missile_mesh.msh.h5` |
+| `data_lib/runs/high/<run-id>/fluent_meshing/` | 新运行记录、工作文件、日志和默认导出的 `missile_mesh.msh.h5` |
 | `feedback/fluent_meshing/<run-id>/` | 失败运行的记录、日志、参数和实际产生的失败产物 |
 | `data_lib/legacy/fluent_meshing/reference/` | 历史参考网格和工作流 |
 | `data_lib/legacy/fluent_meshing/generated/` | 历史生成网格和工作流 |
@@ -69,20 +69,20 @@
 
 ```powershell
 # 工作区统一入口
-..\scripts\run.ps1 verify-meshing -Geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc
+..\scripts\run.ps1 verify-meshing -Geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc
 
 # 也可直接使用本仓库启动器
-.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc -n 8
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc -n 8
 
 # 调试：只执行到局部尺寸设置完成
-.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc --stop-after sizing
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc --stop-after sizing
 ```
 
 | 选项 | 说明 |
 | --- | --- |
 | `--geometry` | 必填，输入 `.scdoc` 路径 |
 | `-n` / `--processors` | Fluent 进程数，默认 16，必须为正数 |
-| `--run-dir` | 指定新的运行目录，目录须不存在；应放在 `data_lib/runs/` 下 |
+| `--run-dir` | 指定新的运行目录，目录须不存在；应放在 `data_lib/runs/high/` 下 |
 | `--out` | 指定新的网格文件路径，文件须不存在；应放在仓库外的运行数据目录中 |
 | `--start-timeout` | Fluent 启动超时秒数，默认 300，必须为正数 |
 | `--timeout` | 工作进程运行时限秒数，默认 900，必须为正数；随后独立文件核验另有 600 秒时限 |
@@ -106,7 +106,7 @@
 也可单独查看导出文件的结构信息；这条命令不代替完整流程中的质量检查和边界组交叉核验：
 
 ```powershell
-.\mesh_check.cmd ..\data_lib\runs\run-xxxx\fluent_meshing\missile_mesh.msh.h5
+.\mesh_check.cmd ..\data_lib\runs\high\run-xxxx\fluent_meshing\missile_mesh.msh.h5
 ```
 
 ## 4. 脚本执行的步骤与参数（与 `fluent_meshing.md` 一致）
@@ -178,7 +178,7 @@ python tools\compare_with_reference.py
 比较新的运行须显式指定文件，例如：
 
 ```powershell
-python tools\compare_with_reference.py ..\data_lib\runs\run-xxxx\fluent_meshing\completed_workflow.wft
+python tools\compare_with_reference.py ..\data_lib\runs\high\run-xxxx\fluent_meshing\completed_workflow.wft
 ```
 
 第二个位置参数可指定参考 `.wft`；省略时仍使用历史参考。当前工具只忽略明确列出的任务记录字段，

@@ -5,12 +5,13 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 
 // 输入：项目目录上一级的 workspace.json，以及调用方 parameters / inputs / outputDir。
-// 输出：dataRoot/runs/<run-id>/<stage>/；失败产物移至 feedbackRoot/<stage>/<run-id>/。
+// 输出：dataRoot/runs/high/<run-id>/<stage>/；失败产物移至 feedbackRoot/<stage>/<run-id>/。
 // workspace.json 覆盖下面的根目录默认值；outputDir 在运行时覆盖默认产物根目录。
-// 文件名属于运行记录协议，修改时需同步读取这些记录的调用方。
+// 高保真阶段固定落在 runs/high。文件名属于运行记录协议，修改时需同步读取这些记录的调用方。
 const WORKSPACE_CONFIG_FILENAME = 'workspace.json';
 const DEFAULT_WORKSPACE_ROOTS = {dataRoot:'data_lib', feedbackRoot:'feedback', inputRoot:'data_lib/inputs', legacyRoot:'data_lib/legacy'};
 const RUNS_DIRECTORY_NAME = 'runs';
+const HIGH_FIDELITY_DIRECTORY_NAME = 'high';
 const REQUEST_FILENAME = 'request.json';
 const RUN_MANIFEST_FILENAME = 'run.json';
 
@@ -47,7 +48,7 @@ export async function inputRecord(workspace,file) {
 export async function beginRun(stage, projectDir, {outputDir='',parameters={},inputs=[],env=process.env,fixture=''}={}) {
   const workspace=workspaceFor(projectDir,env);
   const runId='run-'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14)+'-'+randomUUID().slice(0,8);
-  const dir=outputDir ? path.join(path.resolve(outputDir),runId) : workspacePath(workspace,path.join(workspace.dataRoot,RUNS_DIRECTORY_NAME,runId,stage));
+  const dir=outputDir ? path.join(path.resolve(outputDir),runId) : workspacePath(workspace,path.join(workspace.dataRoot,RUNS_DIRECTORY_NAME,HIGH_FIDELITY_DIRECTORY_NAME,runId,stage));
   const protectedPath=path.join(workspace.root,'DATCOM');
   if(dir.toLowerCase()===protectedPath.toLowerCase() || dir.toLowerCase().startsWith((protectedPath+path.sep).toLowerCase())) throw new Error('Protected project output');
   await fs.mkdir(dir,{recursive:false}).catch(async error=>{if(error.code!=='ENOENT')throw error; await fs.mkdir(path.dirname(dir),{recursive:true}); await fs.mkdir(dir);});

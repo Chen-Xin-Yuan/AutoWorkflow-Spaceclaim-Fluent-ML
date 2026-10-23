@@ -17,7 +17,7 @@ import uuid
 # 输入：仓库父目录的 WORKSPACE_CONFIG_NAME；存在时使用其中的 dataRoot、
 # feedbackRoot 等值。不存在时仅回退到系统临时目录 / FALLBACK_WORKSPACE_NAME。
 # 几何文件、run_dir、mesh_file 均由调用方传入；显式 run_dir 优先于自动目录。
-# 输出：dataRoot/RUNS_SUBDIR/<run-id>/fluent_meshing；失败后保留到
+# 输出：dataRoot/runs/high/<run-id>/fluent_meshing；失败后保留到
 # feedbackRoot/fluent_meshing/<run-id>。日志和报告名相对每次运行目录。
 # 核验解释器优先 MESH_INSPECT_PYTHON，再依次读取本地配置文件；依赖目录
 # 相对 project_dir，与 _deps 隔离。所有动态路径均在调用时生成。
@@ -28,6 +28,7 @@ DEFAULT_FEEDBACK_ROOT = 'feedback'
 DEFAULT_INPUT_ROOT = 'data_lib/inputs'
 DEFAULT_LEGACY_ROOT = 'data_lib/legacy'
 RUNS_SUBDIR = 'runs'
+HIGH_FIDELITY_SUBDIR = 'high'
 RUN_ID_PREFIX = 'run-'
 RUN_ID_TIME_FORMAT = '%Y%m%d%H%M%S'
 RUN_MANIFEST_NAME = 'run.json'
@@ -96,7 +97,7 @@ class RunRecord:
                 raise ValueError('Unexpected run owner')
             return
         run_id = RUN_ID_PREFIX + datetime.now(timezone.utc).strftime(RUN_ID_TIME_FORMAT) + '-' + uuid.uuid4().hex[:8]
-        self.directory = Path(run_dir).resolve() if run_dir else checked(self.root, Path(self.config['dataRoot']) / RUNS_SUBDIR / run_id / 'fluent_meshing')
+        self.directory = Path(run_dir).resolve() if run_dir else checked(self.root, Path(self.config['dataRoot']) / RUNS_SUBDIR / HIGH_FIDELITY_SUBDIR / run_id / 'fluent_meshing')
         protected = self.root / 'DATCOM'
         if self.directory == protected or protected in self.directory.parents:
             raise ValueError('Protected output path')

@@ -17,6 +17,7 @@
 ## 注意
 
 - 除 `spaceclaim-mcp` 与 `index` 模式外，`run.ps1` 结束时会自动调用 `index.mjs` 更新索引，并原样返回被调用命令的退出码。
+- `index` 在 `data_lib/runs/` 和 `feedback/` 里查找 `run.json`。高保真运行在 `runs/high/<run-id>/<阶段>/`，低保真 DATCOM 归档在 `runs/low/<geometry_id>/`。DATCOM 归档目前没有 `run.json`，所以不会进入这份索引。
 - `spaceclaim-mcp` 模式下标准输出保留给 JSON-RPC，不打印任何提示，也不接受工作流参数。
 - `verify-meshing` 必须显式传入 `-Geometry <新生成的 .scdoc>`，没有默认模型，不会退回历史几何。
 - 需要数组开关（例如 `-WorkflowArgs @('-n','8')`）时，改用 `-Command "& '<绝对路径>\scripts\run.ps1' ..."` 调用。

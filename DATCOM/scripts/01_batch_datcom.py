@@ -2,24 +2,21 @@
 """
 README 参数 → Missile DATCOM 气动计算自动化脚本
 ================================================
-输入：README「参数化方式与来流条件」里的 11 个主尺寸（单位 m）与来流条件
-      （马赫数列表 + 攻角列表 + 飞行高度）。
-输出：<数据根>\\datcom_data\\<算例名>\\ 下的 DATCOM 原始输出（含 Tecplot 几何外形
-      for022.dat）、气动系数 CSV（中文表头，含输入参数）与几何模型核对产物。
-      数据根默认 = 项目根的同级 data_lib（结果在项目外，产物不入 git）。
-
-默认算例（改本文件顶部配置区即可）：
-    几何 = 11 个主尺寸基准值：L_N / L / D / L_W / C_RW / C_TW / B_W /
-           L_F / C_RF / C_TF / B_F
-    来流 = MACH_LIST × ALPHA_LIST 的全部组合（README 为 6 个马赫 × 5 个攻角
-           = 30 个工况，一次 DATCOM 调用全部算完，输出 30 行系数）
+输入：data_lib/inputs/cases.csv（输入总表）。同一个 geometry_id、同一个
+      altitude_m 的各行合成一次 DATCOM 调用；马赫数和攻角只取表里写出的组合。
+      文件顶部的 MISSILE_GEOMETRY、MACH_LIST、ALPHA_LIST、CASES，以及
+      --params / --mach / --alpha / --alt，只在 --demo 时使用，用来演示单组基准几何。
+输出：data_lib/runs/low/<geometry_id>/。datcom.exe 运行时的工作目录是
+      data_lib/runs/low/.work，里面仍用 for005.dat、for006.dat、for022.dat。
+      算例写完后，这些文件改名为 <geometry_id>_for005.dat 等，并按工况抽出
+      <run_id>_datcom.csv。run_id = <geometry_id>__<condition_id>__<altitude_m>。
 
 用法：
-    python 01_batch_datcom.py                       # 跑 CASES 里配置的算例
-    python 01_batch_datcom.py --list                # 只看算例与工况组合
+    python 01_batch_datcom.py                       # 读取输入总表并计算
+    python 01_batch_datcom.py --list                # 只看总表里的算例与工况
     python 01_batch_datcom.py --dry-run             # 只生成 for005.dat 不调用 datcom
-    python 01_batch_datcom.py --params a.json b.json  # 每个 JSON 一组几何 → 一个算例
-    python 01_batch_datcom.py --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
+    python 01_batch_datcom.py --demo                 # 用顶部演示参数，不读总表
+    python 01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 
 几何参数（11 项，单位 m，字段名与 README / 建模程序一致）：
     L_N  鼻锥长度            L   轴向总长          D   机身直径
@@ -48,17 +45,18 @@ DATCOM 建模约定（改动前务必读）：
     9. 翼型剖面沿用 datcom_bin/for005.dat 历史模板的 HEX 参数
        （默认按弦长归一的薄翼剖面），一般无需改动。
 
-运行产物（<数据根>\\datcom_data\\<算例名>\\，项目外，产物不入 git）：
-    for005.dat             本次实际喂给 DATCOM 的输入（可复查 / 复现）
-    for006.dat             DATCOM 原始输出
-    for022.dat             DATCOM 写出的 Tecplot ASCII 几何外形（英尺），
-                           可直接拖进 Tecplot 360 看表面
-    aero_coefficients.csv  气动系数表：来流 + 11 个几何输入（中文表头）+ 升力 / 阻力 /
-                           俯仰力矩系数，一行一个工况
-    geometry_check.txt     几何模型核对报告：输入尺寸 → 派生站位 → 实际卡片 →
-                           for022.dat 外形反查 → 自检
-    geometry_check.png     几何三视图（脚本用同一套参数自绘，仅供速查）
-    case_params.json       本算例的几何、来流与派生量快照
+运行产物（data_lib/runs/low/<geometry_id>/，工作目录里的协议文件名不留在这里）：
+    <geometry_id>_for005.dat             本次实际喂给 DATCOM 的输入
+    <geometry_id>_for006.dat             DATCOM 原始输出
+    <geometry_id>_for022.dat             Tecplot ASCII 几何外形（英尺）
+    <geometry_id>_aero_coefficients.csv  该几何的系数总表，不同高度的工况会合并保留
+    <run_id>_datcom.csv                  从总表抽出的单工况一行
+    <geometry_id>_geometry_check.txt     几何模型核对报告
+    <geometry_id>_geometry_check.png     几何三视图（脚本自绘，仅供速查）
+    <geometry_id>_case_params.json       本算例的几何、来流与派生量快照
+    <geometry_id>_datcom.log             datcom.exe 的标准输出和标准错误
+    同一 geometry_id 的另一次高度会覆盖上面这些按几何命名的归档；
+    单工况 <run_id>_datcom.csv 和系数总表里的其它高度不会被删掉。
 
 输出哪几个系数由顶部 OUTPUT_COEFFICIENTS 决定（默认只要 CL / CD / CM）。
 """
@@ -66,6 +64,7 @@ DATCOM 建模约定（改动前务必读）：
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -88,15 +87,24 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # datcom.exe 与历史输入模板同目录（模板只读，脚本从不改写它）
 DATCOM_EXE = os.path.join(PROJECT_ROOT, "datcom_bin", "datcom.exe")
 
-# 结果根目录：每个算例保存到 <结果根>\<算例名>\，中间文件放在 <结果根>\.work\。
-# 默认 = 项目根的同级 data_lib\datcom_data（结果落在项目外，产物不入 git）；
-# 换位置只改这一行，DATCOM_EXE 仍由 PROJECT_ROOT 下的 datcom_bin 决定。
-RESULT_ROOT = os.path.join(os.path.dirname(PROJECT_ROOT), "data_lib", "datcom_data")
+# 结果根目录：每个几何保存到 <结果根>\<geometry_id>\。
+# datcom.exe 运行当下的协议文件放在 <结果根>\.work\，算完后不留在算例目录。
+# 默认 = 工作区 data_lib/runs/low。换位置只改这一行。
+WORKSPACE_ROOT = os.path.dirname(PROJECT_ROOT)
+RESULT_ROOT = os.path.join(WORKSPACE_ROOT, "data_lib", "runs", "low")
 
-# 输入：默认使用下面的 CASES；外部几何 JSON 由命令行 --params 指定，
-# 相对 JSON 路径仍以启动时的当前工作目录为基准，不自动读取历史模板。
-# 输出：RESULT_ROOT/<算例名>/；中间文件：RESULT_ROOT/WORK_SUBDIR/。
-# --mach / --alpha / --alt / --timeout 覆盖下方对应默认参数。
+# 输入总表：正式运行只读这一张表。路径相对工作区根。
+# 同一个 geometry_id 加同一个 altitude_m 单元格合成一次调用。
+# 输出：RESULT_ROOT/<geometry_id>/；中间文件：RESULT_ROOT/WORK_SUBDIR/。
+# 下方 MISSILE_GEOMETRY / MACH_LIST / ALPHA_LIST / CASES 与 --params / --mach /
+# --alpha / --alt 都是演示入口，只有加上 --demo 才会使用。
+INPUT_TABLE = os.path.join(WORKSPACE_ROOT, "data_lib", "inputs", "cases.csv")
+MASTER_TABLE_COLUMNS = (
+    "geometry_id", "condition_id",
+    "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W",
+    "L_F", "C_RF", "C_TF", "B_F",
+    "Ma", "alpha_deg", "altitude_m",
+)
 WORK_SUBDIR = ".work"
 
 # 外部程序约定的输入 / 输出名称，修改时必须与 DATCOM 协议保持一致。
@@ -106,11 +114,19 @@ FOR006_NAME = "for006.dat"        # DATCOM 输出（首选）
 DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
 FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形（单位英尺）
 
-# 本脚本输出文件名（均位于对应算例的输出目录）。
+# 归档文件的叶子名。算例目录里实际文件名是 <算例名>_<叶子名>。
+# .work 里 datcom.exe 仍读写上面的协议原名。
 CSV_NAME = "aero_coefficients.csv"
+CASE_CSV_SUFFIX = "_datcom.csv"
 PARAMS_NAME = "case_params.json"
 GEOMETRY_TXT_NAME = "geometry_check.txt"   # 几何模型核对报告
 GEOMETRY_PNG_NAME = "geometry_check.png"   # 几何三视图（侧视 / 俯视 / 前视）
+DATCOM_LOG_NAME = "datcom.log"
+
+
+def archived_filename(case_name, leaf):
+    """算例目录里的归档名。叶子名保持各程序原来的扩展名。"""
+    return f"{case_name}_{leaf}"
 
 # 单算例超时（秒）。一次 30 个工况通常几秒到几十秒。
 TIMEOUT_SECONDS = 300
@@ -118,8 +134,7 @@ TIMEOUT_SECONDS = 300
 # -----------------------------------------------------------------------------
 # 1.1 几何参数（README「几何参数定义与范围」，单位 m）
 # -----------------------------------------------------------------------------
-# 基准值即 README 表中的基准尺寸。直接改这里的数字即可换几何；
-# 也可以 --params 传 JSON 文件，或用下方 CASES 做多组几何批量对比。
+# 演示用基准几何。正式计算不读这里，只在 --demo 时使用。
 MISSILE_GEOMETRY = {
     "L_N": 0.49,    # 鼻锥长度
     "L": 3.69,      # 轴向总长
@@ -137,7 +152,7 @@ MISSILE_GEOMETRY = {
 # -----------------------------------------------------------------------------
 # 1.2 来流条件（README「来流参数与工况组合」）
 # -----------------------------------------------------------------------------
-# 马赫数与攻角取全部组合：len(MACH_LIST) × len(ALPHA_LIST) 个工况。
+# 演示用来流。正式计算的马赫数和攻角来自输入总表，不读这两份列表。
 MACH_LIST = [0.80, 0.84, 0.88, 0.92, 0.96, 1.00]
 ALPHA_LIST = [4.0, 4.5, 5.0, 5.5, 6.0]
 
@@ -174,8 +189,9 @@ FIN_SECTION = {
 # -----------------------------------------------------------------------------
 # 1.4 算例批量配置（每个元素 = 一个算例 = 结果根下的一个 <name>\ 目录）
 # -----------------------------------------------------------------------------
+# 演示算例，仅 --demo 使用。正式运行按输入总表的 geometry_id 分组。
 # "geometry" 里只需写要改的项，其余沿用 MISSILE_GEOMETRY；
-# 可选 "mach" / "alpha" / "alt" 覆盖全局来流条件。
+# 可选 "mach" / "alpha" / "alt" 覆盖演示来流。
 # 示例（把下面注释打开即可做几何对比）：
 #     {"name": "longer_nose", "geometry": {**MISSILE_GEOMETRY, "L_N": 0.60}},
 #     {"name": "bigger_rear_fin", "geometry": {"B_F": 0.25, "C_TF": 0.22}},
@@ -813,7 +829,7 @@ def run_datcom(exe_path, work_dir, timeout):
         print(f"[WARN] datcom stderr: {stderr_text.strip()[:300]}")
     elif result.returncode != 0:
         print(f"[WARN] datcom 返回码 {result.returncode}（老版本程序常见，以输出文件为准）")
-    return result
+    return result, stdout_text, stderr_text
 
 
 def read_result_file(work_dir):
@@ -977,6 +993,71 @@ def build_output_table(df, meta):
     columns += [GEOMETRY_CN_NAMES[key] for key in REQUIRED_GEOMETRY_KEYS]
     columns += [cn_name for _datcom_name, cn_name in OUTPUT_COEFFICIENTS]
     return pd.DataFrame(rows, columns=columns)
+
+
+def _flow_matches(row, mach, alpha):
+    """DATCOM 解析值与总表浮点按四位小数对齐。"""
+    try:
+        got_mach = float(row[CSV_FLOW_NAMES["mach"]])
+        got_alpha = float(row[CSV_FLOW_NAMES["alpha"]])
+    except (TypeError, ValueError):
+        return False
+    return abs(got_mach - mach) <= 5e-4 and abs(got_alpha - alpha) <= 5e-4
+
+
+def attach_case_identity(table, case):
+    """给系数表加上能回到总表的三列。演示算例没有工况清单时原样返回。"""
+    conditions = case.get("conditions")
+    if not conditions or table.empty:
+        return table
+    geometry_ids = []
+    condition_ids = []
+    altitude_texts = []
+    for _, row in table.iterrows():
+        match = next((item for item in conditions if _flow_matches(row, item["mach"], item["alpha"])), None)
+        geometry_ids.append(case["name"] if match else "")
+        condition_ids.append(match["condition_id"] if match else "")
+        altitude_texts.append(match["altitude_text"] if match else "")
+    tagged = table.copy()
+    tagged.insert(0, "altitude_m", altitude_texts)
+    tagged.insert(0, "condition_id", condition_ids)
+    tagged.insert(0, "geometry_id", geometry_ids)
+    return tagged
+
+
+def write_summary_csv(path, table):
+    """写入系数总表。同一几何再次运行时，只替换本次工况，保留其它高度的行。"""
+    identity = ["geometry_id", "condition_id", "altitude_m"]
+    if os.path.isfile(path) and set(identity) <= set(table.columns):
+        old = pd.read_csv(path, encoding="utf-8-sig")
+        if set(identity) <= set(old.columns):
+            fresh = {
+                (str(row.geometry_id), str(row.condition_id), str(row.altitude_m))
+                for row in table.itertuples(index=False)
+            }
+            keep = [
+                index for index, row in old.iterrows()
+                if (str(row["geometry_id"]), str(row["condition_id"]), str(row["altitude_m"])) not in fresh
+            ]
+            table = pd.concat([old.iloc[keep], table], ignore_index=True)
+    table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
+
+
+def write_case_csvs(out_dir, table, conditions):
+    """每个工况一行，文件名是 run_id。返回写出的路径。"""
+    written = []
+    if not conditions or "condition_id" not in table.columns:
+        return written
+    for item in conditions:
+        matched = table[table["condition_id"] == item["condition_id"]]
+        matched = matched[matched["altitude_m"].astype(str) == item["altitude_text"]]
+        target = os.path.join(out_dir, f"{item['run_id']}{CASE_CSV_SUFFIX}")
+        if matched.empty:
+            print(f"[WARN] 工况 {item['run_id']} 在 DATCOM 结果里没有对应行，未写 {os.path.basename(target)}")
+            continue
+        matched.to_csv(target, index=False, encoding="utf-8-sig", float_format="%.6g")
+        written.append(target)
+    return written
 
 
 _TECPLOT_ZONE = re.compile(r'ZONE\s+T\s*=\s*"([^"]*)"\s*(.*)$', re.IGNORECASE)
@@ -1604,10 +1685,10 @@ def write_geometry_outputs(out_dir, case_name, meta, for005_text):
     """
     os.makedirs(out_dir, exist_ok=True)
     checks = geometry_self_checks(meta, for005_text)
-    txt_path = os.path.join(out_dir, GEOMETRY_TXT_NAME)
+    txt_path = os.path.join(out_dir, archived_filename(case_name, GEOMETRY_TXT_NAME))
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(render_geometry_report(case_name, meta, for005_text, checks))
-    png_path = plot_geometry(meta, os.path.join(out_dir, GEOMETRY_PNG_NAME))
+    png_path = plot_geometry(meta, os.path.join(out_dir, archived_filename(case_name, GEOMETRY_PNG_NAME)))
     return txt_path, png_path, checks
 
 
@@ -1669,7 +1750,7 @@ def run_one_case(case, work_dir):
     geom_txt, geom_png, checks = write_geometry_outputs(out_dir, name, meta, for005_text)
     bad = [msg for ok, msg in checks if not ok]
     print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过 → "
-          f"{GEOMETRY_TXT_NAME}" + (f" + {GEOMETRY_PNG_NAME}" if geom_png else ""))
+          f"{os.path.basename(geom_txt)}" + (f" + {os.path.basename(geom_png)}" if geom_png else ""))
     for msg in bad:
         print(f"    [NG] {msg}")
 
@@ -1679,7 +1760,15 @@ def run_one_case(case, work_dir):
     with open(for005_path, "w", encoding="utf-8") as f:
         f.write(for005_text)
     write_input_redirect(work_dir, input_name=FOR005_NAME)
-    run_datcom(DATCOM_EXE, work_dir, case.get("timeout", TIMEOUT_SECONDS))
+    _completed, stdout_text, stderr_text = run_datcom(
+        DATCOM_EXE, work_dir, case.get("timeout", TIMEOUT_SECONDS))
+    log_path = os.path.join(out_dir, archived_filename(name, DATCOM_LOG_NAME))
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        log_file.write(stdout_text)
+        if stderr_text:
+            if stdout_text and not stdout_text.endswith("\n"):
+                log_file.write("\n")
+            log_file.write(stderr_text)
 
     # 4) 读取原始结果
     result_path, result_text = read_result_file(work_dir)
@@ -1693,7 +1782,7 @@ def run_one_case(case, work_dir):
     tecplot_path = None
     tecplot_src = os.path.join(work_dir, FOR022_NAME)
     if os.path.exists(tecplot_src):
-        tecplot_path = os.path.join(out_dir, FOR022_NAME)
+        tecplot_path = os.path.join(out_dir, archived_filename(name, FOR022_NAME))
         shutil.copyfile(tecplot_src, tecplot_path)
         try:
             with open(tecplot_src, "r", encoding="utf-8", errors="replace") as f:
@@ -1703,7 +1792,7 @@ def run_one_case(case, work_dir):
             zones = []
         geo_checks, geo_rows = check_tecplot_geometry(meta, zones)
         print(f"    {append_tecplot_geometry_check(geom_txt, geo_checks, geo_rows)}"
-              f" → {FOR022_NAME}（可拖进 Tecplot 360）")
+              f" → {os.path.basename(tecplot_path)}（可拖进 Tecplot 360）")
         for ok, msg in geo_checks:
             if not ok:
                 print(f"    [NG] {msg}")
@@ -1725,22 +1814,25 @@ def run_one_case(case, work_dir):
     elif len(df) < expected:
         print(f"[WARN] 算例 '{name}': 预期 {expected} 个工况，实际解析到 {len(df)} 行。")
 
-    # 6) 拷贝原始产物到 <结果根>\<name>\
-    shutil.copyfile(for005_path, os.path.join(out_dir, FOR005_NAME))
-    shutil.copyfile(result_path, os.path.join(out_dir, os.path.basename(result_path)))
+    # 6) 拷贝原始产物。算例目录用带几何标识的归档名，.work 里仍是协议原名。
+    archived_input = archived_filename(name, FOR005_NAME)
+    archived_raw = archived_filename(name, os.path.basename(result_path))
+    shutil.copyfile(for005_path, os.path.join(out_dir, archived_input))
+    shutil.copyfile(result_path, os.path.join(out_dir, archived_raw))
 
-    # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数
-    csv_path = os.path.join(out_dir, CSV_NAME)
+    # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数。总表工况再各写一行。
+    csv_path = os.path.join(out_dir, archived_filename(name, CSV_NAME))
+    case_csvs = []
     csv_written = False
     if not df.empty:
-        table = build_output_table(df, meta)
+        table = attach_case_identity(build_output_table(df, meta), case)
         try:
-            table.to_csv(csv_path, index=False, encoding="utf-8-sig",
-                         float_format="%.6g")
+            write_summary_csv(csv_path, table)
+            case_csvs = write_case_csvs(out_dir, table, case.get("conditions") or [])
             csv_written = True
         except OSError as exc:
             # 常见原因：CSV 正被 Excel 等程序打开，Windows 上会拒绝写入
-            print(f"[WARN] 算例 '{name}': 写 {CSV_NAME} 失败（{exc}）。"
+            print(f"[WARN] 算例 '{name}': 写 {os.path.basename(csv_path)} 失败（{exc}）。"
                   f"若该文件正被 Excel 打开，关闭后重跑本脚本即可。")
         missing = [cn for datcom_name, cn in OUTPUT_COEFFICIENTS
                    if datcom_name not in df.columns]
@@ -1761,7 +1853,7 @@ def run_one_case(case, work_dir):
         **meta,
         "overrides": overrides,
     }
-    with open(os.path.join(out_dir, PARAMS_NAME), "w", encoding="utf-8") as f:
+    with open(os.path.join(out_dir, archived_filename(name, PARAMS_NAME)), "w", encoding="utf-8") as f:
         json.dump(params, f, ensure_ascii=False, indent=2)
 
     return {
@@ -1770,6 +1862,7 @@ def run_one_case(case, work_dir):
         "expected": expected,
         "out_dir": out_dir,
         "csv_path": csv_path if csv_written else None,
+        "case_csvs": case_csvs,
         "geometry_txt": geom_txt,
         "geometry_png": geom_png,
         "geometry_tecplot": tecplot_path,
@@ -1781,6 +1874,170 @@ def run_one_case(case, work_dir):
 # =============================================================================
 # 9. 命令行与主流程
 # =============================================================================
+
+def _parse_table_float(text, row_number, column):
+    """把总表单元格解析成有限浮点数。空单元格直接报错，不用演示默认值填上。"""
+    raw = (text or "").strip()
+    if raw == "":
+        raise ValueError(f"输入总表第 {row_number} 行的 {column} 是空的。")
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"输入总表第 {row_number} 行的 {column} 不是数字：{raw}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"输入总表第 {row_number} 行的 {column} 不是有限数字：{raw}")
+    return value
+
+
+def _reject_run_id_separator(value, row_number, column):
+    """run_id 从右侧两处 __ 拆开，标识本身不能再含有 __。"""
+    if "__" in value:
+        raise ValueError(
+            f"输入总表第 {row_number} 行的 {column} 含有 __，"
+            f"无法从 run_id 右侧拆开：{value!r}"
+        )
+
+
+def _case_name_from_geometry_id(geometry_id, row_number):
+    """算例目录名使用总表第一列。拒绝路径分隔符，避免写出总表目录之外。"""
+    name = geometry_id.strip()
+    if not name or name in {".", ".."} or any(sep in name for sep in ("/", "\\", ":")):
+        raise ValueError(f"输入总表第 {row_number} 行的 geometry_id 不能作为目录名：{geometry_id!r}")
+    _reject_run_id_separator(name, row_number, "geometry_id")
+    return name
+
+
+def load_cases_from_master_table(path):
+    """
+    从输入总表生成算例。
+
+    同一个 geometry_id 的 11 个几何尺寸必须一致。同一个 geometry_id 加同一个
+    altitude_m 单元格合成一次调用。这一组里的马赫数与攻角必须刚好构成完整的
+    矩形组合，因为一次 DATCOM 调用会计算这两个列表的全部搭配。
+    altitude_m 保留单元格原文，用来拼 run_id，不另做小数格式化。
+    """
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"找不到输入总表：{path}\n"
+            "正式运行只读这张表。顶部的几何、马赫数、攻角和 --params 只用于 --demo。"
+        )
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        header = reader.fieldnames or []
+        missing = [column for column in MASTER_TABLE_COLUMNS if column not in header]
+        if missing:
+            raise ValueError(
+                "输入总表缺少列：" + ", ".join(missing)
+                + "。需要的表头是：" + ",".join(MASTER_TABLE_COLUMNS)
+            )
+        raw_rows = list(reader)
+
+    if not raw_rows:
+        raise ValueError(f"输入总表没有数据行：{path}")
+
+    grouped = {}
+    order = []
+    seen_triples = set()
+    for index, row in enumerate(raw_rows, start=2):
+        geometry_id = _case_name_from_geometry_id(row.get("geometry_id", ""), index)
+        condition_id = (row.get("condition_id") or "").strip()
+        if not condition_id:
+            raise ValueError(f"输入总表第 {index} 行的 condition_id 是空的。")
+        _reject_run_id_separator(condition_id, index, "condition_id")
+        altitude_text = (row.get("altitude_m") or "").strip()
+        _reject_run_id_separator(altitude_text, index, "altitude_m")
+        altitude_m = _parse_table_float(altitude_text, index, "altitude_m")
+        if altitude_m < 0:
+            raise ValueError(f"输入总表第 {index} 行的 altitude_m 不能为负。")
+        geometry = {
+            key: _parse_table_float(row.get(key), index, key)
+            for key in REQUIRED_GEOMETRY_KEYS
+        }
+        mach = _parse_table_float(row.get("Ma"), index, "Ma")
+        alpha = _parse_table_float(row.get("alpha_deg"), index, "alpha_deg")
+        if mach <= 0:
+            raise ValueError(f"输入总表第 {index} 行的 Ma 必须大于 0。")
+        if abs(alpha) >= 90:
+            raise ValueError(f"输入总表第 {index} 行的 alpha_deg 绝对值必须小于 90。")
+        triple = (geometry_id, condition_id, altitude_text)
+        if triple in seen_triples:
+            raise ValueError(
+                f"输入总表第 {index} 行与已有行重复："
+                f"{geometry_id}，{condition_id}，altitude_m={altitude_text}。"
+            )
+        seen_triples.add(triple)
+
+        bucket = grouped.get(geometry_id)
+        if bucket is None:
+            bucket = {"geometry": geometry, "row": index, "altitudes": {}}
+            grouped[geometry_id] = bucket
+            order.append(geometry_id)
+        elif any(abs(bucket["geometry"][key] - geometry[key]) > 1e-9 for key in REQUIRED_GEOMETRY_KEYS):
+            raise ValueError(
+                f"geometry_id {geometry_id} 在第 {bucket['row']} 行和第 {index} 行的几何尺寸不一致。"
+            )
+        altitude_bucket = bucket["altitudes"].get(altitude_text)
+        if altitude_bucket is None:
+            altitude_bucket = {"alt": altitude_m, "conditions": [], "row": index}
+            bucket["altitudes"][altitude_text] = altitude_bucket
+        elif abs(altitude_bucket["alt"] - altitude_m) > 1e-9:
+            raise ValueError(
+                f"geometry_id {geometry_id} 的 altitude_m 单元格 {altitude_text!r} "
+                f"不能同时对应两个数值。"
+            )
+        for old in altitude_bucket["conditions"]:
+            if old["condition_id"] == condition_id:
+                raise ValueError(
+                    f"geometry_id {geometry_id}、altitude_m={altitude_text} "
+                    f"的 condition_id {condition_id} 重复。"
+                )
+            if abs(old["mach"] - mach) <= 1e-9 and abs(old["alpha"] - alpha) <= 1e-9:
+                raise ValueError(
+                    f"输入总表第 {index} 行与第 {old['row']} 行的马赫数和攻角重复："
+                    f"{geometry_id}，altitude_m={altitude_text}。"
+                )
+        altitude_bucket["conditions"].append({
+            "condition_id": condition_id,
+            "mach": mach,
+            "alpha": alpha,
+            "altitude_text": altitude_text,
+            "row": index,
+            "run_id": f"{geometry_id}__{condition_id}__{altitude_text}",
+        })
+
+    cases = []
+    for geometry_id in order:
+        bucket = grouped[geometry_id]
+        normalized, notes = normalize_geometry(bucket["geometry"])
+        for note in notes:
+            print(f"[INFO] 算例 '{geometry_id}': {note}")
+        for altitude_text, altitude_bucket in bucket["altitudes"].items():
+            conditions = altitude_bucket["conditions"]
+            mach_list = sorted({item["mach"] for item in conditions})
+            alpha_list = sorted({item["alpha"] for item in conditions})
+            present = {(item["mach"], item["alpha"]) for item in conditions}
+            expected = {(mach, alpha) for mach in mach_list for alpha in alpha_list}
+            if present != expected:
+                missing_pairs = ", ".join(
+                    f"(Ma={mach:g}, alpha={alpha:g})" for mach, alpha in sorted(expected - present)
+                )
+                raise ValueError(
+                    f"geometry_id {geometry_id}、altitude_m={altitude_text} 的来流不是完整组合，"
+                    f"一次 DATCOM 调用仍会算完全部搭配。总表还缺：{missing_pairs}。"
+                )
+            cases.append({
+                "name": geometry_id,
+                "geometry": normalized,
+                "mach": mach_list,
+                "alpha": alpha_list,
+                "alt": altitude_bucket["alt"],
+                "altitude_text": altitude_text,
+                "conditions": conditions,
+                "source": path,
+            })
+    return cases
+
 
 def _case_from_geometry(name, geometry, case=None, strict=False):
     """
@@ -1807,9 +2064,32 @@ def _case_from_geometry(name, geometry, case=None, strict=False):
 
 def build_cases(args):
     """
-    汇总算例列表：--params 给的 JSON 文件优先（每个文件一个算例），
-    否则用本文件顶部 CASES，并叠加命令行给出的来流条件。
+    正式运行只读输入总表。
+
+    --demo 才使用顶部 CASES、MISSILE_GEOMETRY 和命令行里的几何、马赫数、攻角、高度。
     """
+    if not args.demo:
+        demo_switches = []
+        if args.params:
+            demo_switches.append("--params")
+        if args.mach:
+            demo_switches.append("--mach")
+        if args.alpha:
+            demo_switches.append("--alpha")
+        if args.alt is not None:
+            demo_switches.append("--alt")
+        if args.name:
+            demo_switches.append("--name")
+        if demo_switches:
+            raise ValueError(
+                "、".join(demo_switches) + " 只在 --demo 下有效。"
+                "正式运行请把几何和来流写进输入总表：" + INPUT_TABLE
+            )
+        cases = load_cases_from_master_table(INPUT_TABLE)
+        for case in cases:
+            case.setdefault("timeout", args.timeout)
+        return cases
+
     flow = {}
     if args.mach:
         flow["mach"] = [float(m) for m in args.mach]
@@ -1864,6 +2144,7 @@ def build_cases(args):
         case.setdefault("alpha", ALPHA_LIST)
         case.setdefault("alt", ALTITUDE_M)
         case.setdefault("timeout", args.timeout)
+        case["source"] = "demo"
     return cases
 
 
@@ -1871,22 +2152,26 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="按 README 的几何参数与来流条件批量调用 Missile DATCOM 求气动参数。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="结果写入 <数据根>/datcom_data/<算例名>/（默认 = 项目根同级 data_lib/datcom_data）："
-               "for005.dat、for006.dat、for022.dat"
-               "（Tecplot 几何外形）、aero_coefficients.csv（中文表头）、"
-               "geometry_check.txt、geometry_check.png、case_params.json。",
+        epilog="结果写入 data_lib/runs/low/<geometry_id>/："
+               "<geometry_id>_for005.dat、<geometry_id>_for006.dat、<geometry_id>_for022.dat、"
+               "<geometry_id>_aero_coefficients.csv、<run_id>_datcom.csv、"
+               "<geometry_id>_geometry_check.txt、<geometry_id>_geometry_check.png、"
+               "<geometry_id>_case_params.json、<geometry_id>_datcom.log。"
+               "datcom.exe 运行时使用 data_lib/runs/low/.work 里的 for005.dat。",
     )
+    parser.add_argument("--demo", action="store_true",
+                        help="使用文件顶部的演示几何、来流和 CASES，不读取输入总表。"
+                             "--params、--mach、--alpha、--alt、--name 只在此模式下有效。")
     parser.add_argument("--params", nargs="+", metavar="JSON",
-                        help="几何参数 JSON 文件（11 个主尺寸，单位 m），每个文件一个算例，"
-                             "替代顶部 CASES 配置。")
-    parser.add_argument("--name", help="算例名（仅配合单个 --params 文件使用）。")
+                        help="仅 --demo：几何参数 JSON（11 个主尺寸，单位 m），每个文件一个算例。")
+    parser.add_argument("--name", help="仅 --demo：算例名，只能和单个 --params 文件一起使用。")
     parser.add_argument("--mach", nargs="+", type=float,
-                        help=f"覆盖马赫数列表，例如 --mach 2.0 2.2（默认 {MACH_LIST}）。")
+                        help=f"仅 --demo：覆盖马赫数列表（演示默认 {MACH_LIST}）。")
     parser.add_argument("--alpha", nargs="+", type=float,
-                        help=f"覆盖攻角列表（度），例如 --alpha 4.0 5.0 6.0（默认 {ALPHA_LIST}）。")
-    parser.add_argument("--alt", type=float, help=f"覆盖飞行高度（m，默认 {ALTITUDE_M}）。")
+                        help=f"仅 --demo：覆盖攻角列表（度，演示默认 {ALPHA_LIST}）。")
+    parser.add_argument("--alt", type=float, help=f"仅 --demo：覆盖飞行高度（m，默认 {ALTITUDE_M}）。")
     parser.add_argument("--dry-run", action="store_true",
-                        help="只生成 for005.dat 到 <数据根>/datcom_data/<算例名>/，不调用 datcom。")
+                        help="只生成输入卡片到 data_lib/runs/low/<算例名>/，不调用 datcom。")
     parser.add_argument("--list", action="store_true", help="列出算例与工况组合后退出。")
     parser.add_argument("--timeout", type=float, default=TIMEOUT_SECONDS,
                         help=f"单算例超时秒数（默认 {TIMEOUT_SECONDS}）。")
@@ -1902,7 +2187,10 @@ def describe_cases(cases):
               f"{len(mach)} 个马赫 × {len(alpha)} 个攻角 = {len(mach) * len(alpha)} 个工况")
         print(f"    马赫数: {', '.join(f'{m:g}' for m in mach)}")
         print(f"    攻角  : {', '.join(f'{a:g}' for a in alpha)} 度")
-        print(f"    高度  : {case['alt']:g} m")
+        alt_label = case.get("altitude_text")
+        if alt_label is None:
+            alt_label = f"{case['alt']:g}"
+        print(f"    高度  : {alt_label} m")
         geometry = case["geometry"]
         print("    几何  : " + ", ".join(f"{k}={v:g}" for k, v in geometry.items()))
 
@@ -1926,6 +2214,9 @@ def main(argv=None):
         return 1
 
     print(f"[INFO] 项目根目录 : {PROJECT_ROOT}")
+    print(f"[INFO] 输入总表   : {INPUT_TABLE}")
+    if args.demo:
+        print("[INFO] 输入来源   : 演示参数（--demo），未读取输入总表")
     print(f"[INFO] DATCOM     : {DATCOM_EXE}")
     print(f"[INFO] 结果根目录 : {RESULT_ROOT}")
     print(f"[INFO] 待运行算例 : {len(cases)} 个")
@@ -1952,7 +2243,8 @@ def main(argv=None):
             )
             out_dir = os.path.join(RESULT_ROOT, case["name"])
             os.makedirs(out_dir, exist_ok=True)
-            with open(os.path.join(out_dir, FOR005_NAME), "w", encoding="utf-8") as f:
+            archived_input = archived_filename(case["name"], FOR005_NAME)
+            with open(os.path.join(out_dir, archived_input), "w", encoding="utf-8") as f:
                 f.write(text)
             print_geometry_brief(meta)
             geom_txt, geom_png, checks = write_geometry_outputs(
@@ -1961,9 +2253,9 @@ def main(argv=None):
             print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过")
             for msg in bad:
                 print(f"    [NG] {msg}")
-            print(f"[DRY-RUN] 已生成 {os.path.join(out_dir, FOR005_NAME)}"
-                  f" + {GEOMETRY_TXT_NAME}"
-                  + (f" + {GEOMETRY_PNG_NAME}" if geom_png else ""))
+            print(f"[DRY-RUN] 已生成 {os.path.join(out_dir, archived_input)}"
+                  f" + {os.path.basename(geom_txt)}"
+                  + (f" + {os.path.basename(geom_png)}" if geom_png else ""))
         return 0
 
     summary = []
@@ -1997,14 +2289,15 @@ def main(argv=None):
         ok = n_records == expected
         failed += 0 if ok else 1
         state = "OK  " if ok else "WARN"
-        note = "" if csv_ok else f"  ← {CSV_NAME} 未更新（文件被其它程序占用？）"
+        note = "" if csv_ok else f"  ← {archived_filename(name, CSV_NAME)} 未更新（文件被其它程序占用？）"
         print(f"  [{state}] {name:<24s} {n_records:>6d} 条（预期 {expected}）"
               f"  原始输出: {raw}{note}")
     print(f"\n[INFO] 结果目录: {RESULT_ROOT}")
-    print(f"[INFO] 每个算例一个子目录：{FOR005_NAME}（实际输入）+ {FOR006_NAME}（原始输出）"
-          f" + {FOR022_NAME}（Tecplot 几何外形）")
-    print(f"[INFO] 系数表 {CSV_NAME}（中文表头，含输入参数）+ 几何核对 {GEOMETRY_TXT_NAME} / "
-          f"{GEOMETRY_PNG_NAME} + 参数快照 {PARAMS_NAME}")
+    print(f"[INFO] 每个算例一个子目录：{archived_filename('<geometry_id>', FOR005_NAME)}（实际输入）"
+          f" + {archived_filename('<geometry_id>', FOR006_NAME)}（原始输出）"
+          f" + {archived_filename('<geometry_id>', FOR022_NAME)}（Tecplot 几何外形）")
+    print(f"[INFO] 系数总表与单工况 {CASE_CSV_SUFFIX}，几何核对与参数快照、datcom 日志"
+          f"都以算例名开头。工作目录 {WORK_SUBDIR} 在结束后删除。")
     return 0 if failed == 0 else 1
 
 

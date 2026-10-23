@@ -10,7 +10,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 `for005.dat` 是旧版手工算例模板，现在只作为翼型剖面（HEX）参数的参考，
 `01_batch_datcom.py` 不再改写它，而是按几何/来流参数整份生成 `for005.dat`。
 
-不要把算例结果放在这里，程序输出请放到项目外的 `../data_lib/datcom_data/` 或 `outputs/` 下。
+不要把算例结果放在这里。`01_batch_datcom.py` 把结果写到 `../data_lib/runs/low/<geometry_id>/`，运行中的协议文件放在 `../data_lib/runs/low/.work/`。
 
 ### `scripts/`
 
@@ -35,29 +35,30 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | `datcom_out/` | DATCOM 输出 `for006.dat` / `datcom.out` 等 |
 | `dataset/` | 训练数据集（`datcom_dataset.csv`、`fluent_validate.csv`） |
 | `figures/` | 输出的图片：预测对比图、误差图 |
-| `pointcloud/` | `04_pointnet_demo.py` 生成的导弹点云数据集 |
+| `pointcloud/` | 旧的点云演示目录。`04_pointnet_demo.py` 现在默认写到 `../data_lib/datasets/point_clouds/` |
 
-`pointcloud/` 包含 `missile_8192.ply/xyz`、部件标签、meta、参考网格 obj，以及预览图 `preview_missile.png`；体积小、可复现，已在 `.gitignore` 中单独放行入库。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸后，主文件是 `<geometry_id>_pointcloud.ply`。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
-### `../data_lib/datcom_data/`（运行结果，项目外）
+### `../data_lib/runs/low/`（运行结果，项目外）
 
-每个 DATCOM 算例一个独立子文件夹，位置由脚本顶部 `RESULT_ROOT` 决定
-（默认 = 项目根的同级 `data_lib/datcom_data`；本项目内的 `runs/` 是改名前的旧结果目录，
-历史算例仍留在那里，可自行清理或搬走）。
+每个 `geometry_id` 一个子文件夹，位置由脚本顶部 `RESULT_ROOT` 决定
+（默认 = 工作区 `data_lib/runs/low`）。`datcom.exe` 运行时只用 `../data_lib/runs/low/.work/` 里的 `for005.dat`、`for006.dat`、`for022.dat`，算完后工作目录会删掉。
 
-子文件夹内自动生成：
+同一个 `geometry_id` 加同一个 `altitude_m` 单元格是一次调用。子文件夹内的归档名带几何标识：
 
 | 文件 | 内容 |
 | --- | --- |
-| `for005.dat` | 本次实际喂给 DATCOM 的输入卡片（可复查、可直接复现） |
-| `for006.dat` | DATCOM 原始输出 |
-| `for022.dat` | **DATCOM 自己写出的 Tecplot ASCII 几何外形**（`VARIABLES=X,Y,Z` + `ZONE T="FUSELAGE"` / `ZONE T="FINSET n"`，坐标单位英尺）；用 Tecplot 360 直接打开即可看到真实外表面 |
-| `aero_coefficients.csv` | 气动系数表：**中文表头**，来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 升力系数 `CL` / 阻力系数 `CD` / 俯仰力矩系数 `CM`，一行一个工况 |
-| `geometry_check.txt` | 几何模型核对报告：输入尺寸 → 派生站位 / 弦长 / 展长 / 后掠角 → 实际写入的 DATCOM 卡片 → **拿 `for022.dat` 反查外形** → 逐项自检 → 与 README 基准几何的差异 |
-| `geometry_check.png` | 脚本按同一套参数自绘的三视图，仅供速查；权威外形以 `for022.dat` 为准 |
-| `case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
+| `<geometry_id>_for005.dat` | 本次实际喂给 DATCOM 的输入卡片 |
+| `<geometry_id>_for006.dat` | DATCOM 原始输出 |
+| `<geometry_id>_for022.dat` | DATCOM 写出的 Tecplot ASCII 几何外形（英尺） |
+| `<geometry_id>_aero_coefficients.csv` | 该几何的系数总表。不同高度再次运行时保留已有高度的行 |
+| `<run_id>_datcom.csv` | 从总表抽出的单工况一行。`run_id` 是 `<geometry_id>__<condition_id>__<altitude_m>` |
+| `<geometry_id>_geometry_check.txt` | 几何模型核对报告 |
+| `<geometry_id>_geometry_check.png` | 脚本自绘的三视图，仅供速查 |
+| `<geometry_id>_case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
+| `<geometry_id>_datcom.log` | `datcom.exe` 的标准输出和标准错误 |
 
-看外形的最直接方式：Tecplot 360 → *File → Load Data File(s)* → 选 `../data_lib/datcom_data/<算例名>/for022.dat`，
+看外形的最直接方式：Tecplot 360 → *File → Load Data File(s)* → 选 `../data_lib/runs/low/<geometry_id>/<geometry_id>_for022.dat`，
 会得到 9 个区（1 个 `FUSELAGE` + 前舵 4 片 `FINSET 1` + 后舵 4 片 `FINSET 2`）。
 注意文件长度单位是**英尺**（DATCOM 几何输出固定用英尺，与输入卡片里的英寸无关）。
 
@@ -65,7 +66,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 `OUTPUT_COEFFICIENTS` 里加一行即可。注意：CSV 若正被 Excel 打开，Windows 会拒绝覆盖写入，
 脚本会给出警告并保留其余产物，关闭 Excel 后重跑即可。
 
-建议命名方式：`readme_baseline` / `longer_nose` 等，便于区分（算例名由脚本配置决定）。
+归档目录名就是 `geometry_id`。当前工作区总表有 4 行试算，几何标识暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，结果在 `../data_lib/runs/low/1/`。前一次试算的归档留在 `../data_lib/runs/low/sample/`。
 
 ### `docs/`
 
@@ -104,15 +105,15 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 
 `01_batch_datcom.py` 的入口参数就是工作区 README「参数化方式与来流条件」里的那套量：
 
-1. 几何：脚本顶部 `MISSILE_GEOMETRY` 的 11 个主尺寸（m，字段名与建模程序一致）：
-   `L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`。
-2. 来流：`MACH_LIST` / `ALPHA_LIST` / `ALTITUDE_M`，默认即 README 的 6 个马赫 ×
-   5 个攻角 = 30 个工况（高度按英尺写入 DATCOM）；`ALTITUDE_M` 默认 **5000 m**。
-3. 运行 `python scripts/01_batch_datcom.py`，脚本自动生成 `for005.dat`、
-   调用 `datcom_bin/datcom.exe`，把结果写到 `../data_lib/datcom_data/<算例名>/` 并解析成
-   `aero_coefficients.csv`（中文表头，含输入参数与 `CL`/`CD`/`CM`）；
-   同时保留 DATCOM 自己写出的 `for022.dat`（Tecplot 几何外形），并生成
-   `geometry_check.txt`（含拿 `for022.dat` 反查外形的结果）。
+1. 正式输入是工作区的 `data_lib/inputs/cases.csv`。每一行是一个工况，列依次为
+   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`。同一个
+   `geometry_id` 的几何尺寸必须相同。同一个 `geometry_id` 和同一个 `altitude_m`
+   单元格的来流必须是这些马赫数和攻角的完整组合。
+2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
+   `MISSILE_GEOMETRY`、`MACH_LIST`、`ALPHA_LIST` 和 `CASES` 只在 `--demo` 时使用。
+3. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
+4. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
+   每个工况另有 `<run_id>_datcom.csv`。
 
 几条实测到的模型约定（改输入卡片前务必知道）：
 
@@ -127,29 +128,27 @@ Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 常用命令：
 
 ```powershell
-python scripts/01_batch_datcom.py --list          # 只看算例与工况组合
-python scripts/01_batch_datcom.py --dry-run       # 只出 for005.dat 与几何核对图，不调用 DATCOM
-python scripts/01_batch_datcom.py                 # 跑顶部 CASES 的算例
-python scripts/01_batch_datcom.py --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
-python scripts/01_batch_datcom.py --params D:\...\missile_params_example.json
+python scripts/01_batch_datcom.py --list          # 只看输入总表里的算例与工况
+python scripts/01_batch_datcom.py --dry-run       # 按总表生成 for005.dat 与几何核对图，不调用 DATCOM
+python scripts/01_batch_datcom.py                 # 读取 data_lib/inputs/cases.csv 并计算
+python scripts/01_batch_datcom.py --demo          # 用脚本顶部的演示几何和来流，不读总表
+python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 ```
 
-`--params` 吃的是 11 个主尺寸的 JSON（单位 m，必须齐全），每个文件跑成一个算例。
+`--params`、`--mach`、`--alpha`、`--alt` 只在 `--demo` 下有效。正式计算改总表，不改命令行。
 
 ### 2. 批量扩展
 
-- 多组几何对比：在 `CASES` 里加一项，`"geometry"` 只写要改的参数，其余沿用基准值；
-- 不同来流：算例里可用 `"mach"` / `"alpha"` / `"alt"` 单独覆盖全局来流条件；
-- 一个算例 = 一次 DATCOM 调用 = 一个 `../data_lib/datcom_data/<算例名>/` 目录，互不干扰。
+- 多组几何对比：在 `data_lib/inputs/cases.csv` 里为新几何另起一个 `geometry_id`，并写全它的来流组合。
+- 演示单组几何：加 `--demo`，此时才使用脚本顶部的 `CASES`。
+- 一个 `geometry_id` 加一个 `altitude_m` = 一次 DATCOM 调用，结果落在 `../data_lib/runs/low/<geometry_id>/`。
 
 ### 3. Git 管理
 
-结果现在写到项目外的 `../data_lib/datcom_data/`，由上级工作区 `.gitignore` 里的 `/data_lib/datcom_data/` 忽略，
-不需要在本项目里再维护一份忽略规则。本项目 `DATCOM/` 整体被上级 `.gitignore` 忽略，改动源码后
-按 `AGENTS.md` 的说明返回上一级目录、用 `git add -f` 提交具体文件。
+结果现在写到项目外的 `../data_lib/runs/low/`，由上级工作区 `.gitignore` 忽略运行产物。点云写到 `../data_lib/datasets/point_clouds/`，点云文件同样不入库。
 
 `outputs/`、`__pycache__/` 等产物同样不入库（由上级 `.gitignore` 统一覆盖）。
 
 ---
 
-最后更新：2026-10-21
+最后更新：2026-10-23

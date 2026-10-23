@@ -23,7 +23,7 @@
 以下命令在本仓库目录中使用 PowerShell 执行，`run-xxxx` 替换为实际几何生成记录目录：
 
 ```powershell
-.\run_meshing.cmd --geometry ..\data_lib\runs\run-xxxx\spaceclaim\missile.scdoc -n 16
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc -n 16
 ```
 
 | 项目 | 当前行为 |
@@ -35,7 +35,7 @@
 | 边界层范围 | `BLRegionList` 使用区域更新结果，`RegionScope` 保留 `missile`；Fluent 返回 `CompleteBLZoneList` 时逐项匹配配置的面区域，缺失或多义报错；未返回时保留配置并在导出阶段检查边界组 |
 | 体网格范围 | 尺寸列表保留 `missile` 的 25 mm 设置，将历史 enclosure 条目替换为区域更新结果的第一个区域名并使用 500 mm；生成后必须报告唯一非空流体区域，且与更新结果一致 |
 | 运行限制 | 默认 16 进程、启动超时 300 秒、工作进程时限 900 秒；独立文件核验另有 600 秒时限 |
-| 数据位置 | 读取父目录的 `workspace.json`；默认运行目录为 `data_lib/runs/<run-id>/fluent_meshing/`，失败记录及产物归 `feedback/fluent_meshing/<run-id>/`；路径均相对工作区根目录 |
+| 数据位置 | 读取父目录的 `workspace.json`；默认运行目录为 `data_lib/runs/high/<run-id>/fluent_meshing/`，失败记录及产物归 `feedback/fluent_meshing/<run-id>/`；路径均相对工作区根目录 |
 | 输出约束 | 默认网格为本次运行目录下的 `missile_mesh.msh.h5`；`--run-dir` 必须为新目录，`--out` 文件必须不存在；运行数据保存在代码仓库外 |
 | 环境隔离 | PyFluent 使用 `_deps/`；导出核验使用独立解释器与 `.mesh_inspect_deps_313/`；旧 `.mesh_inspect_deps/` 保留，三者不合并、不混用 Python/NumPy 环境 |
 

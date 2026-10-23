@@ -11,8 +11,19 @@
 # ---------------------------------------------------------------
 # 一、运行记录、失败产物与生成物
 # ---------------------------------------------------------------
-# 每次运行的模型、网格与日志（约 536 MB），由 data_lib/runs 承载
-/data_lib/runs/
+# 高保真在 data_lib/runs/high/，低保真在 data_lib/runs/low/。
+# 运行产物不入库；各层 README 入库，用来固定目录契约。
+/data_lib/runs/*
+!/data_lib/runs/README.md
+!/data_lib/runs/high/
+!/data_lib/runs/low/
+/data_lib/runs/high/*
+!/data_lib/runs/high/README.md
+/data_lib/runs/low/*
+!/data_lib/runs/low/README.md
+# 点云文件不入库；说明文件入库。点数和文件格式仍待定。
+/data_lib/datasets/point_clouds/*
+!/data_lib/datasets/point_clouds/README.md
 # DATCOM 批量算例结果（每算例一个子目录：for005/for006/for022、CSV、几何核对图）
 /data_lib/datcom_data/
 # 运行期支撑数据

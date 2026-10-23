@@ -2,11 +2,15 @@
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `spaceclaim/` | 生成 | 建模阶段的异常包，按 `<run_id>/` 存放 |
-| `fluent_meshing/` | 生成 | 网格阶段的异常包，按 `<run_id>/` 存放 |
+| `spaceclaim/` | 生成 | 建模阶段的异常包，按 `run-<时间戳>-<短ID>/` 存放 |
+| `fluent_meshing/` | 生成 | 网格阶段的异常包，按 `run-<时间戳>-<短ID>/` 存放 |
+| `fluent_solution/` | 生成 | 求解阶段的异常包，按 `run-<时间戳>-<短ID>/` 存放。当前没有失败包 |
+| `datcom/` | 生成 | DATCOM 阶段的异常包，按 `run-<时间戳>-<短ID>/` 存放。当前没有失败包 |
 | `README.md` | 文件 | 本文件 |
 
-每个阶段按 `<stage>/<run_id>/` 保存异常包，包含 `run.json`、参数快照、诊断日志和已产生的失败产物。
+每个阶段按 `feedback/<阶段>/<run-id>/` 保存异常包，`<run-id>` 是 `run-<时间戳>-<短ID>`。包内包含 `run.json`、参数快照、诊断日志和已产生的失败产物。这个目录名是一次执行的目录，不是文件名里的 `run_id`。
+
+DATCOM 成功时的归档在 `data_lib/runs/low/<geometry_id>/`。`datcom/` 这里只收失败包，当前没有失败包。
 
 原始大输入保存在 `data_lib`，通过相对路径、大小和 SHA-256 关联。主动分步停止记录为 `STOPPED`，保留在运行目录；缺少质量证据、程序启动失败或超时均记录为 `FAILED`。
 

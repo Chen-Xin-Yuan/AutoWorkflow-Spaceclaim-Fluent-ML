@@ -9,7 +9,7 @@
 | `setup.mjs` / `paths.mjs` | 文件前部集中官方 CHM 文件名、用户配置和缓存目录名；安装根仍通过 AWP 或首次配置发现。用户配置根和缓存根按 `LOCALAPPDATA` → `TEMP` → 当前目录解析。 |
 | `chm.mjs` | 调用方提供 CHM 和缓存根；文件前部集中缓存文件名、提取目录前缀、300000 ms 超时、4 次稳定轮询及既有等待间隔，`options.timeoutMs` 可覆盖超时。 |
 | `index.mjs` | 调用方提供解包根和可选 sitemap；文件前部集中默认 sitemap 名、索引缓存名与配套格式版本。缓存名与格式版本是兼容性约定，调整时需一并核对。 |
-| `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。 |
+| `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs/high` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。 |
 | `spaceclaim-runner.mjs` | 文件前部集中模型/请求/脚本/结果/诊断/图片/清单/错误文件名、300000 ms 超时与原有执行默认值；模型名可由 `fileName` 覆盖。输出根按 `options.outputDir` → `SCDM_MISSILE_OUTPUT` → 工作区 `dataRoot` 选择。清单名是与 `workspace-runtime.mjs` 的 `RUN_MANIFEST_FILENAME` 共享的协议名，必须保持一致。 |
 | `extract.mjs` / `python-map.mjs` | 不读写文件；文件前部集中原有搜索条数默认值 25 / 5，由函数参数或 `options.limit` 覆盖。候选模板的参数仍在前部 `INTENTS` 中。 |
 | `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。生成模板的路径由请求/环境传入，模板内容与数值计算未更改。 |
@@ -35,4 +35,4 @@
 
 `server.mjs` 启动时先解析并解包官方 CHM，首次需要索引时再加载或构建索引，因此通过 MCP 调用参数校验或仅生成脚本的工具也需要可用 CHM。独立 CLI 的 `--generate-only` 可以在没有 ANSYS 安装时生成请求与脚本；这只产生 `script-generated` / 运行清单 `GENERATED` 状态，不表示模型已生成或几何已验证。
 
-默认运行产物写入工作区配置的 `data_lib/runs/<run-id>/spaceclaim/`，失败时尝试移至 `feedback/spaceclaim/<run-id>/`；文件系统或权限错误可能中断移动及清单收尾。调用方可选择仓库外输出位置。用户配置与 CHM 缓存也不应提交到仓库。`official-doc` 只表示官方文档来源，Python 推导候选标为 `inferred`；只有当前运行的新产物通过验收后，才能标为 `runtime-verified`。
+默认运行产物写入工作区配置的 `data_lib/runs/high/<run-id>/spaceclaim/`，失败时尝试移至 `feedback/spaceclaim/<run-id>/`；文件系统或权限错误可能中断移动及清单收尾。调用方可选择仓库外输出位置。用户配置与 CHM 缓存也不应提交到仓库。`official-doc` 只表示官方文档来源，Python 推导候选标为 `inferred`；只有当前运行的新产物通过验收后，才能标为 `runtime-verified`。

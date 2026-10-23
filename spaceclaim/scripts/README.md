@@ -64,4 +64,4 @@ npm run missile -- --k_nose 0.006 --t_fin 0.015 --timeout 300000 --json
 
 几何尺寸以米为单位，参数的完整默认值与允许值由 schema 和 `--list` 给出。目标脚本 API 版本从所选安装解析。CLI 没有批量扫参命令。
 
-默认每次运行写入工作区 `data_lib/runs/<run-id>/spaceclaim/`，包括 `request.json` 和 `run.json`；建模路径还生成 `params.json`、`model.py`，执行时产生 `.scdoc`、`result.json` 和诊断，预览图属于可选产物。失败时尝试将运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动及清单收尾。仅生成脚本的结果为 `script-generated`，清单为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。
+默认每次运行写入工作区 `data_lib/runs/high/<run-id>/spaceclaim/`，包括 `request.json` 和 `run.json`；建模路径还生成 `params.json`、`model.py`，执行时产生 `.scdoc`、`result.json` 和诊断，预览图属于可选产物。失败时尝试将运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动及清单收尾。仅生成脚本的结果为 `script-generated`，清单为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。

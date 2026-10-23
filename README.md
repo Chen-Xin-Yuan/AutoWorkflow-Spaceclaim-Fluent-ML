@@ -55,7 +55,7 @@
 | spaceclaim | SpaceClaim 建模代码 |
 | fluent_meshing | Fluent 网格代码及隔离依赖 |
 | fluent_solution | 自动求解预留，目前没有已验证的求解流程 |
-| data_lib | 输入、历史产物、新运行及来源索引 |
+| data_lib | 输入总表、阶段队列、高低保真运行、点云与来源索引 |
 | ML_training | 机器学习预留 |
 | feedback | 异常日志、参数快照和失败产物，大输入通过校验值引用 |
 | docx | 文献、汇报、提示词、通用 skill 和资料导航 |
@@ -125,12 +125,15 @@
 | `compare-models.mjs` | 文件 | 模型对比 |
 | `README.md` | 文件 | 各脚本的用途与调用注意 |
 
-### `data_lib/` — 输入、运行记录与历史产物
+### `data_lib/` — 输入、队列、运行记录与历史产物
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `inputs/` | 目录 | 参数与原始输入：`missile_params_example.json`、`params_mine.json`，以及 `fluent_meshing/geometry/` |
-| `runs/` | 生成 | 每次运行一个 `run-<时间戳>-<短ID>/` 目录，内含 `run.json`、`request.json` 与产物 |
+| `inputs/` | 目录 | 参数与原始输入：`cases.csv`（当前 4 行试算，`geometry_id` 暂为 `1`）、`missile_params_example.json`、`params_mine.json` |
+| `queues/` | 目录 | 阶段队列与训练轮次：`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`。记录仍为空 |
+| `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，点数和最终格式仍待定 |
+| `runs/` | 目录 | 高保真 `high/<run-id>/<阶段>/`，低保真 `low/<geometry_id>/`。运行产物不入库，说明文件入库 |
+| `datcom_data/` | 生成 | 早先 DATCOM 算例结果，保留作历史记录，不入库 |
 | `legacy/` | 目录 | 迁移前的历史产物（`spaceclaim/`、`fluent_meshing/`）与 `migration-manifest.json` 迁移清单 |
 | `runtime/` | 目录 | 运行期支撑数据（`test-support/`，当前为空） |
 | `index.json` | 生成 | 由 `scripts/run.ps1 index` 更新的统一索引 |
@@ -140,8 +143,10 @@
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `spaceclaim/` | 生成 | 该阶段按 `<run_id>/` 保存的异常包 |
-| `fluent_meshing/` | 生成 | 该阶段按 `<run_id>/` 保存的异常包 |
+| `spaceclaim/` | 生成 | 该阶段按 `run-<时间戳>-<短ID>/` 保存的异常包 |
+| `fluent_meshing/` | 生成 | 该阶段按 `run-<时间戳>-<短ID>/` 保存的异常包 |
+| `fluent_solution/` | 生成 | 该阶段按 `run-<时间戳>-<短ID>/` 保存的异常包 |
+| `datcom/` | 生成 | 该阶段按 `run-<时间戳>-<短ID>/` 保存的异常包 |
 | `README.md` | 文件 | 异常包内容与 `STOPPED` / `FAILED` 的判定说明 |
 
 ### `docx/` — 文献、汇报、提示词与技能资料
@@ -244,7 +249,9 @@ node .\spaceclaim\scripts\missile.mjs --preset .\data_lib\inputs\missile_params_
 
 ## 数据与回退
 
-每次运行生成独立 ID 和 `run.json`。真实验证通过的记录标记 `PASSED`；失败为 `FAILED`，主动分步停止为 `STOPPED`；仅生成脚本为 `GENERATED`。文件存在或进程退出成功不能单独作为验收依据。
+高保真默认写到 `data_lib/runs/high/<run-id>/<阶段>/`，`<run-id>` 形如 `run-<时间戳>-<短ID>`。低保真由 `DATCOM/scripts/01_batch_datcom.py` 读取 `data_lib/inputs/cases.csv`：同一个 `geometry_id` 加同一个 `altitude_m` 是一次调用，归档在 `data_lib/runs/low/<geometry_id>/`。点云由 `DATCOM/scripts/04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 写入 `data_lib/datasets/point_clouds/`。标识符编码、置信度、补点范围、点云最终格式、求解器和上报后的调整权仍待定。
+
+建模和网格每次运行生成独立 `<run-id>` 和 `run.json`。真实验证通过的记录标记 `PASSED`；失败为 `FAILED`，主动分步停止为 `STOPPED`；仅生成脚本为 `GENERATED`。文件存在或进程退出成功不能单独作为验收依据。
 
 历史文件保持原内容，旧路径由 `data_lib/legacy/migration-manifest.json` 和备份中的迁移清单解释。可从 `data_lib/index.json` 查找来源、验证状态和反馈。
 

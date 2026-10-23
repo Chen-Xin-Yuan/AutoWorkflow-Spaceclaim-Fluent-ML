@@ -5,7 +5,7 @@ Runs the recorded workflow up to the Update Regions step and prints the labels,
 boundary zones and regions Fluent can see for the imported geometry. Use it when
 a run fails with a name-mapping error.
 
-    python tools/probe_regions.py --geometry ..\data_lib\runs\<run>\spaceclaim\missile.scdoc
+    python tools/probe_regions.py --geometry ..\data_lib\runs\high\<run>\spaceclaim\missile.scdoc
 """
 from __future__ import annotations
 

@@ -156,7 +156,7 @@ SpaceClaim 可执行文件单独按 `SCDM_EXECUTABLE`、手动配置、降序 AW
 
 CHM 使用 Windows `hh.exe` 解包，并按源文件路径、大小和修改时间缓存提取结果及索引。默认缓存为 `%LOCALAPPDATA%\ansys-scdmdoc-mcp\cache`（无 `LOCALAPPDATA` 时依次回退到 `TEMP` 和当前目录，应配置到仓库外）。不读取本地 Python 知识库，也不随仓库分发 ANSYS 文档。
 
-建模与圆周验收根据项目父目录的 `workspace.json` 解析工作区数据路径；缺失该配置时使用同级默认 `data_lib` / `feedback`。默认运行位置是 `data_lib/runs/<runId>/spaceclaim`；失败时尝试将产物移至 `feedback/spaceclaim/<runId>`，文件系统或权限错误可能中断移动及清单收尾。`--out`、MCP `outputDir` 或 `SCDM_MISSILE_OUTPUT` 可覆盖建模输出根目录，应始终指定仓库外位置。
+建模与圆周验收根据项目父目录的 `workspace.json` 解析工作区数据路径；缺失该配置时使用同级默认 `data_lib` / `feedback`。默认运行位置是 `data_lib/runs/high/<runId>/spaceclaim`；失败时尝试将产物移至 `feedback/spaceclaim/<runId>`，文件系统或权限错误可能中断移动及清单收尾。`--out`、MCP `outputDir` 或 `SCDM_MISSILE_OUTPUT` 可覆盖建模输出根目录，应始终指定仓库外位置。
 
 每次运行写入 `request.json` 和 `run.json`，清单记录状态、验证结果、产物大小及 SHA-256。参数有效后写入 `params.json`、ASCII 源码 `model.py`；实际执行还会尝试生成模型、`result.json`、诊断文本和预览图。预览是否生成不作为几何验收依据。
 
