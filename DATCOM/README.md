@@ -27,7 +27,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 
 
-`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸后，主文件是 `<geometry_id>_pointcloud.ply`。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸后，主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
 ### `../data_lib/runs/low/`（运行结果，项目外）
 

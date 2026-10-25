@@ -29,8 +29,11 @@
     厚度按 NACA 翼型加在周向。翼型五个参数见 scripts/naca_section.py，
     与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
 
-采样: 按面积加权均匀采样（每个面片分组单独采样，4 片舵面均分点数），
-      最后精确凑到目标点数、打乱顺序；--seed 固定即可完全复现。
+采样: 默认按 CFD 关键部位加密，总点数不变。舵面、前缘/后缘、根梢、锥顶倒角、
+      头锥肩部、舵身交界和尾部底缘比大面积弹身更密。各组仍单独采样，4 片舵面
+      平分该组点数，最后精确凑到目标点数并打乱。--seed 固定即可完全复现。
+      文件前部 CFD_REFINEMENT_ENABLED = False 时，恢复按面积均匀采样。
+      加密的是表面上的点，不是附面层体网格。
 
 输出（默认 ../data_lib/datasets/point_clouds/，可用 --outdir 改）:
     不带几何标识时，文件名仍是 missile_<N>.*，点数和格式沿用本脚本现有演示。
@@ -38,7 +41,7 @@
     <geometry_id>_pointcloud.ply / .xyz，并带标签、meta 和可选网格。
 
 用法（在项目根或任意目录均可，路径自动推导）:
-    python scripts/04_pointnet_demo.py                 # 生成 8192 点 + 校验
+    python scripts/04_pointnet_demo.py                 # 按默认点数生成 + 校验
     python scripts/04_pointnet_demo.py --preview       # 顺便渲染三视图
     python scripts/04_pointnet_demo.py --nose-profile  # 顺便渲染锥顶倒角剖面图
     python scripts/04_pointnet_demo.py --n 4096 --seed 1
@@ -91,6 +94,66 @@ DEFAULT_TAG_TEMPLATE = "missile_{n_points}"
 # 调用采样 / 网格辅助函数时的原有离散参数默认值（无对应命令行开关）。
 REVOLVED_SAMPLING_SEGMENTS = 256
 MESH_AZIMUTH_SEGMENTS = 72
+
+# CFD 表面点云局部加密。
+# 总点数仍由 DEFAULT_N_POINTS / --n-points 决定，下面的倍数和比例只决定这些点落在哪里。
+# 点始终在外形表面上。关闭后恢复按面积均匀采样：CFD_REFINEMENT_ENABLED = False。
+CFD_REFINEMENT_ENABLED = True
+# 按面积分点时的倍数。1 表示这一组不加权。舵面面积远小于弹身，倍数要大于 1 才会更密。
+CFD_CYLINDER_AREA_WEIGHT = 1.0
+CFD_NOSE_AREA_WEIGHT = 2.5
+CFD_TAIL_AREA_WEIGHT = 3.0
+CFD_FIN_AREA_WEIGHT = 4.5
+# 舵面已分配的点数里，这一比例落在前缘、后缘、根部、梢部，其余在舵面上均匀分布。
+CFD_FIN_BOUNDARY_FRACTION = 0.60
+CFD_FIN_BOUNDARY_SPLIT = {
+    "leading_edge": 0.42,
+    "trailing_edge": 0.20,
+    "root": 0.22,
+    "tip": 0.16,
+}
+# 宽边界带，相对当地弦长 / 展长。带内的点按幂次贴向边界，指数越大越贴边。
+CFD_FIN_CHORD_BAND = 0.12
+CFD_FIN_SPAN_BAND = 0.15
+CFD_EDGE_CLUSTER_POWER = 2.5
+# 前缘另有一条紧带，用来盖住前缘圆角。宽度 = 倍数 × (前缘半径/弦长)，且不超过宽边界带。
+# 紧带份额是前缘点数中的比例，其余前缘点落在宽边界带里。
+CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE = 12.0
+CFD_FIN_LE_TIGHT_SHARE = 0.65
+# 根部和梢部翼型端面里，贴向前缘和后缘的比例。
+CFD_FIN_EDGE_PERIMETER_FRACTION = 0.70
+# 头锥点数中划给锥顶倒角、头锥-圆柱肩部的比例，其余仍按头锥面积均匀分布。
+CFD_NOSE_FILLET_FRACTION = 0.50
+CFD_NOSE_SHOULDER_FRACTION = 0.22
+# 倒角点数里贴向顶点的比例。核心用更大的指数，其余倒角点用较缓的指数盖住整个球冠。
+CFD_NOSE_TIP_CORE_SHARE = 0.35
+CFD_NOSE_TIP_CORE_POWER = 5.0
+CFD_NOSE_FILLET_POWER = 1.8
+# 圆柱点数里划给肩部、底缘和舵身交界的比例。交界再分成舵根前缘、后缘和整条根弦。
+CFD_CYLINDER_FEATURE_FRACTION = 0.42
+CFD_CYLINDER_FEATURE_SPLIT = {
+    "shoulder": 0.16,
+    "base": 0.18,
+    "fin_junction": 0.66,
+}
+CFD_JUNCTION_SPLIT = {
+    "leading_edge": 0.42,
+    "trailing_edge": 0.24,
+    "root_chord": 0.34,
+}
+# 舵根前缘/后缘的轴向窗口，除了直径倍数给出的外伸，还沿根弦向翼面内收这一段。
+CFD_JUNCTION_LE_CHORD_FRACTION = 0.18
+CFD_JUNCTION_TE_CHORD_FRACTION = 0.12
+# 轴向带宽 = 倍数 × 弹身直径。肩部、底缘、舵根前后外伸共用。
+CFD_BODY_AXIAL_BAND_DIAMETERS = 0.22
+# 舵身干扰区的周向半宽（度）。贴着舵根线的那一部分更窄，宽度由翼型半厚对应的圆心角决定。
+CFD_BODY_FIN_AZIMUTH_DEG = 12.0
+CFD_FIN_ROOT_AZIMUTH_MULTIPLE = 1.2
+CFD_FIN_ROOT_LINE_SHARE = 0.55
+CFD_AXIAL_CLUSTER_POWER = 2.0
+# 尾盖外缘环带占尾盖点数的比例，环带宽度相对尾盖半径。
+CFD_TAIL_RIM_FRACTION = 0.72
+CFD_TAIL_RIM_BAND = 0.20
 
 # 输出文件名：{tag} 是 --tag 指定的标签或 DEFAULT_TAG_TEMPLATE 生成的标签。
 # 预览图和头锥剖面图分别由 --preview / --nose-profile 开启。
@@ -538,8 +601,496 @@ def _face_normal(g, plan, a, v, s, az) -> np.ndarray:
     return normal
 
 
-def _sample_fin_faces(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None):
-    """舵面上下表面按平面形状均匀采样，厚度取 NACA 翼型。"""
+def _require_unit_interval(name: str, value: float) -> None:
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0 or number > 1.0:
+        raise ValueError(f"{name} 必须在 0 到 1 之间，收到 {value!r}")
+
+
+def _require_split(name: str, weights: dict[str, float], keys: tuple[str, ...]) -> None:
+    missing = [key for key in keys if key not in weights]
+    if missing:
+        raise ValueError(f"{name} 缺少 {', '.join(missing)}")
+    total = float(sum(weights.values()))
+    if not math.isfinite(total) or abs(total - 1.0) > 1e-6:
+        raise ValueError(f"{name} 的比例之和必须为 1，收到 {total:.6g}")
+    for key, value in weights.items():
+        _require_unit_interval(f"{name}.{key}", value)
+
+
+def _check_cfd_config() -> None:
+    """加密参数不合法时直接说明，避免采样中途才出现难懂的错误。"""
+    if not CFD_REFINEMENT_ENABLED:
+        return
+    for name, value in (
+        ("CFD_CYLINDER_AREA_WEIGHT", CFD_CYLINDER_AREA_WEIGHT),
+        ("CFD_NOSE_AREA_WEIGHT", CFD_NOSE_AREA_WEIGHT),
+        ("CFD_TAIL_AREA_WEIGHT", CFD_TAIL_AREA_WEIGHT),
+        ("CFD_FIN_AREA_WEIGHT", CFD_FIN_AREA_WEIGHT),
+    ):
+        number = float(value)
+        if not math.isfinite(number) or number <= 0.0:
+            raise ValueError(f"{name} 必须是正的有限数，收到 {value!r}")
+    for name, value in (
+        ("CFD_EDGE_CLUSTER_POWER", CFD_EDGE_CLUSTER_POWER),
+        ("CFD_NOSE_TIP_CORE_POWER", CFD_NOSE_TIP_CORE_POWER),
+        ("CFD_NOSE_FILLET_POWER", CFD_NOSE_FILLET_POWER),
+        ("CFD_AXIAL_CLUSTER_POWER", CFD_AXIAL_CLUSTER_POWER),
+    ):
+        number = float(value)
+        if not math.isfinite(number) or number < 1.0:
+            raise ValueError(f"{name} 必须大于等于 1，收到 {value!r}")
+    for name, value in (
+        ("CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE", CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE),
+        ("CFD_BODY_AXIAL_BAND_DIAMETERS", CFD_BODY_AXIAL_BAND_DIAMETERS),
+        ("CFD_BODY_FIN_AZIMUTH_DEG", CFD_BODY_FIN_AZIMUTH_DEG),
+        ("CFD_FIN_ROOT_AZIMUTH_MULTIPLE", CFD_FIN_ROOT_AZIMUTH_MULTIPLE),
+        ("CFD_FIN_CHORD_BAND", CFD_FIN_CHORD_BAND),
+        ("CFD_FIN_SPAN_BAND", CFD_FIN_SPAN_BAND),
+        ("CFD_TAIL_RIM_BAND", CFD_TAIL_RIM_BAND),
+        ("CFD_JUNCTION_LE_CHORD_FRACTION", CFD_JUNCTION_LE_CHORD_FRACTION),
+        ("CFD_JUNCTION_TE_CHORD_FRACTION", CFD_JUNCTION_TE_CHORD_FRACTION),
+    ):
+        number = float(value)
+        if not math.isfinite(number) or number < 0.0:
+            raise ValueError(f"{name} 必须是非负有限数，收到 {value!r}")
+    for name, value in (
+        ("CFD_FIN_BOUNDARY_FRACTION", CFD_FIN_BOUNDARY_FRACTION),
+        ("CFD_FIN_LE_TIGHT_SHARE", CFD_FIN_LE_TIGHT_SHARE),
+        ("CFD_FIN_EDGE_PERIMETER_FRACTION", CFD_FIN_EDGE_PERIMETER_FRACTION),
+        ("CFD_NOSE_FILLET_FRACTION", CFD_NOSE_FILLET_FRACTION),
+        ("CFD_NOSE_SHOULDER_FRACTION", CFD_NOSE_SHOULDER_FRACTION),
+        ("CFD_NOSE_TIP_CORE_SHARE", CFD_NOSE_TIP_CORE_SHARE),
+        ("CFD_CYLINDER_FEATURE_FRACTION", CFD_CYLINDER_FEATURE_FRACTION),
+        ("CFD_FIN_ROOT_LINE_SHARE", CFD_FIN_ROOT_LINE_SHARE),
+        ("CFD_TAIL_RIM_FRACTION", CFD_TAIL_RIM_FRACTION),
+    ):
+        _require_unit_interval(name, value)
+    if CFD_NOSE_FILLET_FRACTION + CFD_NOSE_SHOULDER_FRACTION > 1.0 + 1e-9:
+        raise ValueError("头锥倒角比例与肩部比例之和不能超过 1")
+    _require_split(
+        "CFD_FIN_BOUNDARY_SPLIT",
+        CFD_FIN_BOUNDARY_SPLIT,
+        ("leading_edge", "trailing_edge", "root", "tip"),
+    )
+    _require_split(
+        "CFD_CYLINDER_FEATURE_SPLIT",
+        CFD_CYLINDER_FEATURE_SPLIT,
+        ("shoulder", "base", "fin_junction"),
+    )
+    _require_split(
+        "CFD_JUNCTION_SPLIT",
+        CFD_JUNCTION_SPLIT,
+        ("leading_edge", "trailing_edge", "root_chord"),
+    )
+
+
+def _cfd_weighted_areas(areas: dict[str, float]) -> dict[str, float]:
+    """分配点数用的加权面积。返回值不替代真实面积。"""
+    weighted = {}
+    for key, area in areas.items():
+        if key == "nose_cone":
+            weight = CFD_NOSE_AREA_WEIGHT
+        elif key == "mid_cylinder":
+            weight = CFD_CYLINDER_AREA_WEIGHT
+        elif key == "tail_cap":
+            weight = CFD_TAIL_AREA_WEIGHT
+        elif key.startswith("fin_"):
+            weight = CFD_FIN_AREA_WEIGHT
+        else:
+            weight = 1.0
+        weighted[key] = float(area) * float(weight)
+    return weighted
+
+
+def _cfd_refinement_report() -> dict:
+    return {
+        "enabled": bool(CFD_REFINEMENT_ENABLED),
+        "cylinder_area_weight": float(CFD_CYLINDER_AREA_WEIGHT),
+        "nose_area_weight": float(CFD_NOSE_AREA_WEIGHT),
+        "tail_area_weight": float(CFD_TAIL_AREA_WEIGHT),
+        "fin_area_weight": float(CFD_FIN_AREA_WEIGHT),
+        "fin_boundary_fraction": float(CFD_FIN_BOUNDARY_FRACTION),
+        "cylinder_feature_fraction": float(CFD_CYLINDER_FEATURE_FRACTION),
+        "nose_fillet_fraction": float(CFD_NOSE_FILLET_FRACTION),
+        "tail_rim_fraction": float(CFD_TAIL_RIM_FRACTION),
+        "body_axial_band_diameters": float(CFD_BODY_AXIAL_BAND_DIAMETERS),
+        "body_fin_azimuth_deg": float(CFD_BODY_FIN_AZIMUTH_DEG),
+        "surface_only": True,
+    }
+
+
+def _split_counts(total: int, weights: dict[str, float]) -> dict[str, int]:
+    """按比例分配整数，余数补给小数部分最大的项，总和精确等于 total。"""
+    keys = list(weights)
+    if int(total) <= 0:
+        return {key: 0 for key in keys}
+    raw_weights = np.asarray([float(weights[key]) for key in keys], dtype=float)
+    if not np.isfinite(raw_weights).all() or np.any(raw_weights < 0.0):
+        raise ValueError(f"点数分配比例非法: {weights}")
+    weight_sum = float(raw_weights.sum())
+    if weight_sum <= 0.0:
+        raise ValueError(f"点数分配比例全为 0: {weights}")
+    raw = raw_weights / weight_sum * int(total)
+    counts = np.floor(raw).astype(int)
+    leftover = int(total) - int(counts.sum())
+    order = np.argsort(-(raw - counts))
+    for index in range(leftover):
+        counts[int(order[index % len(counts)])] += 1
+    return {key: int(count) for key, count in zip(keys, counts)}
+
+
+def _split_counts_even(total: int, parts: int) -> list[int]:
+    if parts <= 0:
+        raise ValueError("分配份数必须大于 0")
+    base, remainder = divmod(int(total), parts)
+    return [base + (1 if index < remainder else 0) for index in range(parts)]
+
+
+def _unit_cluster(rng, n: int, power: float) -> np.ndarray:
+    """[0, 1) 上的随机数。power > 1 时样本贴向 0。"""
+    if n <= 0:
+        return np.zeros(0)
+    return rng.random(n) ** max(float(power), 1.0)
+
+
+def _clamped_band(value: float) -> float:
+    return float(min(max(float(value), 0.0), 0.49))
+
+
+def _sample_x_toward(rng, n: int, x0: float, x1: float, target: float, power: float) -> np.ndarray:
+    """在 [x0, x1] 内采样，并贴向 target。"""
+    if n <= 0:
+        return np.zeros(0)
+    x0, x1 = float(x0), float(x1)
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if x1 - x0 < 1e-15:
+        return np.full(n, x0)
+    target = min(max(float(target), x0), x1)
+    left = target - x0
+    right = x1 - target
+    span = left + right
+    draw = _unit_cluster(rng, n, power)
+    go_left = rng.random(n) < (left / span if span > 0.0 else 0.5)
+    x = np.empty(n)
+    x[go_left] = target - draw[go_left] * left
+    x[~go_left] = target + draw[~go_left] * right
+    return x
+
+
+def _cat_points(parts_p: list[np.ndarray], parts_n: list[np.ndarray]):
+    if len(parts_p) != len(parts_n):
+        raise ValueError("点与法向分组数量不一致")
+    kept_p = []
+    kept_n = []
+    for pts, nrm in zip(parts_p, parts_n):
+        if len(pts) == 0:
+            continue
+        if len(pts) != len(nrm):
+            raise ValueError("点与法向数量不一致")
+        kept_p.append(pts)
+        kept_n.append(nrm)
+    if not kept_p:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    return np.concatenate(kept_p, axis=0), np.concatenate(kept_n, axis=0)
+
+
+def _revolved_from_xphi(g: MissileGeometry, x, phi):
+    """把轴向坐标和方位角放回回转面上，并给出外法向。"""
+    x = np.asarray(x, dtype=float).reshape(-1)
+    phi = np.asarray(phi, dtype=float).reshape(-1)
+    if len(x) != len(phi):
+        raise ValueError(f"回转采样的 x 与方位角数量不一致: {len(x)} != {len(phi)}")
+    radius = np.asarray(g.radius(x), dtype=float).reshape(-1)
+    pts = np.stack([x, radius * np.cos(phi), radius * np.sin(phi)], axis=1)
+    slope = np.asarray(g.radius_slope(x), dtype=float).reshape(-1)
+    nrm = np.stack([-slope, np.cos(phi), np.sin(phi)], axis=1)
+    nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-30)
+    return pts, nrm
+
+
+def _sample_revolved_targeted(g, n, rng, x0, x1, target, power):
+    if n <= 0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    x0, x1 = float(x0), float(x1)
+    if x1 - x0 < 1e-12:
+        return _sample_revolved_section(g, g.nose_length, g.total_length, n, rng)
+    x = _sample_x_toward(rng, n, x0, x1, target, power)
+    phi = rng.random(n) * 2.0 * math.pi
+    return _revolved_from_xphi(g, x, phi)
+
+
+def _body_axial_band(g: MissileGeometry) -> float:
+    return float(CFD_BODY_AXIAL_BAND_DIAMETERS) * 2.0 * float(g.body_radius)
+
+
+def _sample_nose_fillet(g: MissileGeometry, n: int, rng):
+    xt = float(g.nose_tangent_x)
+    if n <= 0 or xt <= 0.0:
+        return _sample_revolved_section(g, 0.0, g.nose_length, n, rng)
+    n_core = int(round(n * float(CFD_NOSE_TIP_CORE_SHARE)))
+    n_core = min(max(n_core, 0), n)
+    n_cap = n - n_core
+    xs = []
+    if n_core:
+        xs.append(_sample_x_toward(rng, n_core, 0.0, xt, 0.0, CFD_NOSE_TIP_CORE_POWER))
+    if n_cap:
+        xs.append(_sample_x_toward(rng, n_cap, 0.0, xt, 0.0, CFD_NOSE_FILLET_POWER))
+    phi = rng.random(n) * 2.0 * math.pi
+    return _revolved_from_xphi(g, np.concatenate(xs), phi)
+
+
+def _sample_nose_surface(g: MissileGeometry, n: int, rng, refine: bool):
+    if n <= 0 or not refine:
+        return _sample_revolved_section(g, 0.0, g.nose_length, n, rng)
+    fillet_w = float(CFD_NOSE_FILLET_FRACTION) if g.tip_fillet_radius > 0.0 else 0.0
+    shoulder_w = float(CFD_NOSE_SHOULDER_FRACTION)
+    rest_w = max(0.0, 1.0 - fillet_w - shoulder_w)
+    counts = _split_counts(n, {"fillet": fillet_w, "shoulder": shoulder_w, "rest": rest_w})
+    parts_p, parts_n = [], []
+    if counts["fillet"]:
+        pts, nrm = _sample_nose_fillet(g, counts["fillet"], rng)
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    if counts["shoulder"]:
+        x0 = max(0.0, g.nose_length - _body_axial_band(g))
+        pts, nrm = _sample_revolved_targeted(
+            g, counts["shoulder"], rng, x0, g.nose_length, g.nose_length, CFD_AXIAL_CLUSTER_POWER
+        )
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    if counts["rest"]:
+        pts, nrm = _sample_revolved_section(g, 0.0, g.nose_length, counts["rest"], rng)
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    return _cat_points(parts_p, parts_n)
+
+
+def _junction_phi(rng, n: int, azimuth: float, tight: float, wide: float) -> np.ndarray:
+    """舵根线用窄角，干扰区用到给定的周向半宽。"""
+    if n <= 0:
+        return np.zeros(0)
+    n_line = int(round(n * float(CFD_FIN_ROOT_LINE_SHARE)))
+    n_line = min(max(n_line, 0), n)
+    n_wide = n - n_line
+    parts = []
+    if n_line:
+        magnitude = _unit_cluster(rng, n_line, CFD_EDGE_CLUSTER_POWER) * tight
+        sign = np.where(rng.random(n_line) < 0.5, -1.0, 1.0)
+        parts.append(azimuth + sign * magnitude)
+    if n_wide:
+        magnitude = tight + rng.random(n_wide) * max(wide - tight, 0.0)
+        sign = np.where(rng.random(n_wide) < 0.5, -1.0, 1.0)
+        parts.append(azimuth + sign * magnitude)
+    return np.concatenate(parts)
+
+
+def _sample_fin_junctions(g: MissileGeometry, n: int, rng, plans: dict[str, FinPlanform]):
+    """弹身上沿每片舵根的交界带：前缘、后缘和整条根弦。"""
+    if n <= 0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    stations = [
+        (plan, math.radians(float(az0)))
+        for plan in plans.values()
+        for az0 in g.fin_azimuth_deg
+    ]
+    if not stations:
+        return _sample_revolved_section(g, g.nose_length, g.total_length, n, rng)
+    counts = _split_counts_even(n, len(stations))
+    xs, phis = [], []
+    band = _body_axial_band(g)
+    for (plan, azimuth), count in zip(stations, counts):
+        if count <= 0:
+            continue
+        half_thickness = 0.5 * g.naca.thickness_ratio * float(plan.c_root)
+        tight = math.atan2(half_thickness, g.body_radius) * float(CFD_FIN_ROOT_AZIMUTH_MULTIPLE)
+        wide = max(math.radians(float(CFD_BODY_FIN_AZIMUTH_DEG)), tight)
+        part = _split_counts(count, CFD_JUNCTION_SPLIT)
+        windows = {
+            "leading_edge": (
+                max(g.nose_length, plan.x_root_le - band),
+                min(g.total_length, plan.x_root_le + float(CFD_JUNCTION_LE_CHORD_FRACTION) * plan.c_root),
+                plan.x_root_le,
+            ),
+            "trailing_edge": (
+                max(g.nose_length, plan.x_root_te - float(CFD_JUNCTION_TE_CHORD_FRACTION) * plan.c_root),
+                min(g.total_length, plan.x_root_te + band),
+                plan.x_root_te,
+            ),
+            "root_chord": (
+                max(g.nose_length, plan.x_root_le),
+                min(g.total_length, plan.x_root_te),
+                None,
+            ),
+        }
+        for key, (x_lo, x_hi, target) in windows.items():
+            m = part[key]
+            if m <= 0:
+                continue
+            if float(x_hi) - float(x_lo) < 1e-12:
+                x = _sample_x_toward(
+                    rng, m, g.nose_length, g.total_length,
+                    0.5 * (g.nose_length + g.total_length), 1.0,
+                )
+                phi = rng.random(m) * 2.0 * math.pi
+            elif target is None:
+                x = float(x_lo) + rng.random(m) * (float(x_hi) - float(x_lo))
+                phi = _junction_phi(rng, m, azimuth, tight, wide)
+            else:
+                x = _sample_x_toward(rng, m, x_lo, x_hi, target, CFD_AXIAL_CLUSTER_POWER)
+                phi = _junction_phi(rng, m, azimuth, tight, wide)
+            xs.append(np.asarray(x, dtype=float))
+            phis.append(np.asarray(phi, dtype=float))
+    if not xs:
+        return _sample_revolved_section(g, g.nose_length, g.total_length, n, rng)
+    return _revolved_from_xphi(g, np.concatenate(xs), np.concatenate(phis))
+
+
+def _sample_cylinder_surface(g, n, rng, plans, refine: bool):
+    x0, x1 = float(g.nose_length), float(g.total_length)
+    if n <= 0 or not refine:
+        return _sample_revolved_section(g, x0, x1, n, rng)
+    n_feat = int(round(n * float(CFD_CYLINDER_FEATURE_FRACTION)))
+    n_feat = min(max(n_feat, 0), n)
+    parts_p, parts_n = [], []
+    if n - n_feat:
+        pts, nrm = _sample_revolved_section(g, x0, x1, n - n_feat, rng)
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    splits = _split_counts(n_feat, CFD_CYLINDER_FEATURE_SPLIT)
+    band = _body_axial_band(g)
+    if splits["shoulder"]:
+        pts, nrm = _sample_revolved_targeted(
+            g, splits["shoulder"], rng, x0, min(x1, x0 + band), x0, CFD_AXIAL_CLUSTER_POWER
+        )
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    if splits["base"]:
+        pts, nrm = _sample_revolved_targeted(
+            g, splits["base"], rng, max(x0, x1 - band), x1, x1, CFD_AXIAL_CLUSTER_POWER
+        )
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    if splits["fin_junction"]:
+        pts, nrm = _sample_fin_junctions(g, splits["fin_junction"], rng, plans)
+        parts_p.append(pts)
+        parts_n.append(nrm)
+    return _cat_points(parts_p, parts_n)
+
+
+def _sample_tail_cap(g: MissileGeometry, n: int, rng, refine: bool):
+    if n <= 0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    radius = float(g.body_radius)
+    if not refine:
+        rr = np.sqrt(rng.random(n)) * radius
+    else:
+        n_rim = int(round(n * float(CFD_TAIL_RIM_FRACTION)))
+        n_rim = min(max(n_rim, 0), n)
+        parts = []
+        if n - n_rim:
+            parts.append(np.sqrt(rng.random(n - n_rim)) * radius)
+        if n_rim:
+            band = min(max(float(CFD_TAIL_RIM_BAND), 0.0), 1.0)
+            inner = radius * (1.0 - band)
+            parts.append(radius - _unit_cluster(rng, n_rim, CFD_EDGE_CLUSTER_POWER) * (radius - inner))
+        rr = np.concatenate(parts)
+    phi = rng.random(n) * 2.0 * math.pi
+    pts = np.stack(
+        [np.full(n, g.total_length), rr * np.cos(phi), rr * np.sin(phi)], axis=1
+    )
+    return pts, np.tile([1.0, 0.0, 0.0], (n, 1))
+
+
+def _leading_edge_chord_fraction(g: MissileGeometry) -> float:
+    chord_band = _clamped_band(CFD_FIN_CHORD_BAND)
+    tight = g.naca.leading_edge_radius_ratio() * float(CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE)
+    if tight <= 0.0:
+        tight = 0.008
+    ceiling = chord_band if chord_band > 0.0 else 0.008
+    return float(min(max(tight, 0.008), ceiling))
+
+
+def _draw_fin_av(g: MissileGeometry, plan: FinPlanform, n: int, rng, refine: bool):
+    """舵面参数 (展向 a, 弦向 v)。v=0 是前缘，v=1 是后缘。"""
+    if n <= 0:
+        return np.zeros(0), np.zeros(0)
+    if not refine:
+        return rng.random(n) * plan.span, rng.random(n)
+    n_bound = int(round(n * float(CFD_FIN_BOUNDARY_FRACTION)))
+    n_bound = min(max(n_bound, 0), n)
+    splits = _split_counts(n_bound, CFD_FIN_BOUNDARY_SPLIT)
+    parts_a, parts_v = [], []
+    if n - n_bound:
+        parts_a.append(rng.random(n - n_bound) * plan.span)
+        parts_v.append(rng.random(n - n_bound))
+    chord_band = _clamped_band(CFD_FIN_CHORD_BAND)
+    span_band = _clamped_band(CFD_FIN_SPAN_BAND)
+    n_le = splits["leading_edge"]
+    if n_le:
+        n_tight = int(round(n_le * float(CFD_FIN_LE_TIGHT_SHARE)))
+        n_tight = min(max(n_tight, 0), n_le)
+        tight_width = _leading_edge_chord_fraction(g)
+        if n_tight:
+            parts_a.append(rng.random(n_tight) * plan.span)
+            parts_v.append(_unit_cluster(rng, n_tight, CFD_EDGE_CLUSTER_POWER) * tight_width)
+        if n_le - n_tight:
+            parts_a.append(rng.random(n_le - n_tight) * plan.span)
+            parts_v.append(_unit_cluster(rng, n_le - n_tight, CFD_EDGE_CLUSTER_POWER) * chord_band)
+    if splits["trailing_edge"]:
+        count = splits["trailing_edge"]
+        parts_a.append(rng.random(count) * plan.span)
+        parts_v.append(1.0 - _unit_cluster(rng, count, CFD_EDGE_CLUSTER_POWER) * chord_band)
+    if splits["root"]:
+        count = splits["root"]
+        parts_a.append(plan.span * _unit_cluster(rng, count, CFD_EDGE_CLUSTER_POWER) * span_band)
+        parts_v.append(rng.random(count))
+    if splits["tip"]:
+        count = splits["tip"]
+        parts_a.append(plan.span * (1.0 - _unit_cluster(rng, count, CFD_EDGE_CLUSTER_POWER) * span_band))
+        parts_v.append(rng.random(count))
+    return np.concatenate(parts_a), np.concatenate(parts_v)
+
+
+def _airfoil_section_xy(g: MissileGeometry, n: int, rng, refine: bool):
+    """翼型端面内的点。加密时把大部分点贴到前缘和后缘。"""
+    if n <= 0:
+        return np.zeros(0), np.zeros(0)
+    if not refine:
+        return g.naca.sample_interior(n, rng)
+    n_edge = int(round(n * float(CFD_FIN_EDGE_PERIMETER_FRACTION)))
+    n_edge = min(max(n_edge, 0), n)
+    xs, ys = [], []
+    if n - n_edge:
+        xi, yi = g.naca.sample_interior(n - n_edge, rng)
+        xs.append(xi)
+        ys.append(yi)
+    if n_edge:
+        n_le = (n_edge + 1) // 2
+        n_te = n_edge - n_le
+        tight = _leading_edge_chord_fraction(g)
+        chord_band = _clamped_band(CFD_FIN_CHORD_BAND)
+        for count, leading, width in ((n_le, True, tight), (n_te, False, chord_band)):
+            if count <= 0:
+                continue
+            x = _unit_cluster(rng, count, CFD_EDGE_CLUSTER_POWER) * width
+            if not leading:
+                x = 1.0 - x
+            s = rng.random(count) * 2.0 - 1.0
+            xy = np.array(
+                [g.naca.interior_xy(float(x[i]), float(s[i])) for i in range(count)],
+                dtype=float,
+            )
+            xs.append(xy[:, 0])
+            ys.append(xy[:, 1])
+    return np.concatenate(xs), np.concatenate(ys)
+
+
+def _sample_fin_faces(
+    g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None, refine: bool = False,
+):
+    """舵面上下表面。refine 时前缘、后缘、根部、梢部更密，厚度仍取 NACA 翼型。"""
     if n <= 0:
         return np.zeros((0, 3)), np.zeros((0, 3))
     if x_max is None:
@@ -548,19 +1099,23 @@ def _sample_fin_faces(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=
     pts = np.zeros((n, 3))
     nrm = np.zeros((n, 3))
     todo = np.arange(n)
+    cand = np.zeros((0, 3))
+    normals = np.zeros((0, 3))
+    keep = np.zeros(0, dtype=bool)
     for _ in range(200):
         if not len(todo):
             break
         m = len(todo)
-        u = rng.random(m)
-        v = rng.random(m)
+        a, v = _draw_fin_av(g, plan, m, rng, refine)
         side = np.where(rng.random(m) < 0.5, -1.0, 1.0)
-        a = u * plan.span
         cand = np.zeros((m, 3))
         normals = np.zeros((m, 3))
         for i in range(m):
-            cand[i] = _place_fin_point(g, plan, float(a[i]), float(v[i]), float(side[i]), az)
-            normals[i] = _face_normal(g, plan, float(a[i]), float(v[i]), float(side[i]), az)
+            aa = float(a[i])
+            vv = float(min(max(v[i], 0.0), 1.0))
+            ss = float(side[i])
+            cand[i] = _place_fin_point(g, plan, aa, vv, ss, az)
+            normals[i] = _face_normal(g, plan, aa, vv, ss, az)
         keep = cand[:, 0] <= x_max + 1e-12
         idx = todo[keep]
         pts[idx] = cand[keep]
@@ -572,8 +1127,10 @@ def _sample_fin_faces(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=
     return pts, nrm
 
 
-def _sample_fin_edges(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None):
-    """根部和梢部的翼型端面。前缘圆角和后缘尖点已经包含在上下表面里。"""
+def _sample_fin_edges(
+    g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None, refine: bool = False,
+):
+    """根部和梢部的翼型端面。加密时端面内的点贴向前缘和后缘。"""
     if n <= 0:
         return np.zeros((0, 3)), np.zeros((0, 3))
     if x_max is None:
@@ -592,7 +1149,7 @@ def _sample_fin_edges(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=
         pending = np.where(~filled)[0]
         m = len(pending)
         which = rng.choice(2, size=m, p=probability)
-        xc, yc = g.naca.sample_interior(m, rng)
+        xc, yc = _airfoil_section_xy(g, m, rng, refine)
         cand = np.zeros((m, 3))
         cand_n = np.zeros((m, 3))
         for i in range(m):
@@ -624,11 +1181,14 @@ def build_pointcloud(
     noise: float = DEFAULT_GAUSS,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
     """→ (points[N,3], normals[N,3], labels[N], 统计信息)。"""
+    _check_cfd_config()
+    refine = bool(CFD_REFINEMENT_ENABLED)
     rng = np.random.default_rng(seed)
     plans = fin_planforms(g)
     dirs = _dir_vectors(g.fin_azimuth_deg)
     areas = surface_group_areas(g)
-    alloc = allocate_points(areas, n_total, rng)
+    allocation_areas = _cfd_weighted_areas(areas) if refine else areas
+    alloc = allocate_points(allocation_areas, n_total, rng)
 
     chunks: list[np.ndarray] = []
     normals: list[np.ndarray] = []
@@ -640,12 +1200,10 @@ def build_pointcloud(
         labels.append(np.full(len(pts), LABEL_ID[label], dtype=np.int8))
 
     # --- 回转体两段：圆锥头锥 + 等直圆柱弹身（尾部同半径，无尾锥）---
-    for key, label, (x0, x1) in (
-        ("nose_cone", "nose_cone", (0.0, g.nose_length)),
-        ("mid_cylinder", "mid_cylinder", (g.nose_length, g.total_length)),
-    ):
-        pts, nrm = _sample_revolved_section(g, x0, x1, alloc.get(key, 0), rng)
-        add(pts, nrm, label)
+    pts, nrm = _sample_nose_surface(g, alloc.get("nose_cone", 0), rng, refine)
+    add(pts, nrm, "nose_cone")
+    pts, nrm = _sample_cylinder_surface(g, alloc.get("mid_cylinder", 0), rng, plans, refine)
+    add(pts, nrm, "mid_cylinder")
 
     # --- 端盖 ---
     if g.include_nose_tip and alloc.get("nose_tip_cap", 0) > 0:
@@ -658,26 +1216,26 @@ def build_pointcloud(
             "nose_cone",
         )
     if g.include_tail_cap and alloc.get("tail_cap", 0) > 0:
-        n = alloc["tail_cap"]
-        rr = np.sqrt(rng.random(n)) * g.body_radius
-        phi = rng.random(n) * 2 * np.pi
-        add(
-            np.stack([np.full(n, g.total_length), rr * np.cos(phi), rr * np.sin(phi)], axis=1),
-            np.tile([1.0, 0.0, 0.0], (n, 1)),
-            "tail_cap",
-        )
+        pts, nrm = _sample_tail_cap(g, alloc["tail_cap"], rng, refine)
+        add(pts, nrm, "tail_cap")
 
-    # --- 舵面（4 片均分点数）---
+    # --- 舵面（4 片平分点数，余数按片补齐）---
     fin_report = {}
     for name, plan in plans.items():
         n_face = alloc.get(f"fin_{name}_faces", 0)
         n_edge = alloc.get(f"fin_{name}_edges", 0)
         label = f"fin_{name}"
-        for d in dirs:
+        face_counts = _split_counts_even(n_face, len(dirs))
+        edge_counts = _split_counts_even(n_edge, len(dirs))
+        for index, d in enumerate(dirs):
             az0 = math.degrees(math.atan2(d[2], d[1])) % 360.0
-            pts, nrm = _sample_fin_faces(g, plan, n_face // 4, rng, az0, x_max=g.total_length)
+            pts, nrm = _sample_fin_faces(
+                g, plan, face_counts[index], rng, az0, x_max=g.total_length, refine=refine,
+            )
             add(pts, nrm, label)
-            pts, nrm = _sample_fin_edges(g, plan, n_edge // 4, rng, az0, x_max=g.total_length)
+            pts, nrm = _sample_fin_edges(
+                g, plan, edge_counts[index], rng, az0, x_max=g.total_length, refine=refine,
+            )
             add(pts, nrm, label)
         fin_report[name] = {
             "n_faces": n_face,
@@ -697,6 +1255,7 @@ def build_pointcloud(
     points = np.concatenate(chunks, axis=0)
     normal_arr = np.concatenate(normals, axis=0)
     label_arr = np.concatenate(labels, axis=0)
+    raw_count = int(len(points))
 
     # 精确凑数（分配阶段已保证，这里做一次保险裁剪/回填）
     if len(points) > n_total:
@@ -719,7 +1278,11 @@ def build_pointcloud(
         "n_points": int(len(points)),
         "seed": seed,
         "noise_sigma": noise,
+        "sampling_mode": "cfd-local-refinement" if refine else "area-weighted uniform",
+        "cfd_refinement": _cfd_refinement_report(),
+        "count_adjustment": int(raw_count - n_total),
         "areas_m2": areas,
+        "allocation_areas_m2": allocation_areas,
         "points_per_group": alloc,
         "points_per_part": {
             PART_LABELS[i]: int((label_arr == i).sum()) for i in PART_LABELS
@@ -1354,10 +1917,13 @@ def main() -> int:
             for k, v in plans.items()
         },
         "sampling": {
-            "mode": "area-weighted uniform",
+            "mode": info["sampling_mode"],
+            "cfd_refinement": info["cfd_refinement"],
+            "count_adjustment": info["count_adjustment"],
             "points_per_group": info["points_per_group"],
             "points_per_part": info["points_per_part"],
             "areas_m2": info["areas_m2"],
+            "allocation_areas_m2": info["allocation_areas_m2"],
             "seed": args.seed,
             "noise_sigma": args.gauss,
         },
@@ -1384,6 +1950,10 @@ def main() -> int:
     print(f"     bbox max = {np.round(points.max(axis=0), 4).tolist()}")
     print(f"     r_max    = {radial.max():.4f}  (aft-fin tip radius)")
     print(f"     per-part: " + ", ".join(f"{k}={v}" for k, v in info["points_per_part"].items()))
+    if info["cfd_refinement"]["enabled"]:
+        print("     sampling = CFD 关键部位加密（舵面、前缘/后缘、根梢、锥顶、肩部、舵身交界、底缘）")
+    else:
+        print("     sampling = 按面积均匀")
     for name, p in plans.items():
         print(
             f"     fin[{name}]: root_x=[{p.x_root_le:.3f},{p.x_root_te:.3f}] "
