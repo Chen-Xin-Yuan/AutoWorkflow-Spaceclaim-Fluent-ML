@@ -321,7 +321,7 @@ python DATCOM/scripts/01_batch_datcom.py
 
 机器学习的后续实现放在已有的 `ML_training/`。`DATCOM/scripts/` 里已有的训练和画图脚本不作为这条闭环的入口。开始放训练代码时，同步更新 `ML_training` 的目录说明。
 
-`.gitignore` 忽略整个 `/DATCOM/`。`datcom.exe` 不写入计划、源码或报告。低保真结果在 `data_lib/runs/low/`。
+`.gitignore` 不忽略 `DATCOM/`。`datcom.exe` 留在 `DATCOM/datcom_bin/`，不写入计划或报告正文。低保真结果在 `data_lib/runs/low/`。
 
 ## 建议的实施顺序
 

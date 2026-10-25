@@ -48,13 +48,14 @@
 
 ## 工作区组织
 
-围绕上述几何参数和来流工况，本工作区按建模、网格、求解、数据、机器学习和异常反馈组织。`DATCOM` 独立保留，不参与重构。
+围绕上述几何参数和来流工况，本工作区按建模、网格、求解、低保真 DATCOM、数据、机器学习和异常反馈组织。高保真链路是 SpaceClaim → Fluent Meshing → Fluent Solution，低保真链路是 DATCOM。两条链路读同一张 `data_lib/inputs/cases.csv`，之后互不阻塞。
 
 | 目录 | 用途 |
 |---|---|
 | spaceclaim | SpaceClaim 建模代码 |
 | fluent_meshing | Fluent 网格代码及隔离依赖 |
 | fluent_solution | 自动求解预留，目前没有已验证的求解流程 |
+| DATCOM | 低保真气动力程序与模板。正式入口读总表，结果写到 `data_lib/runs/low/` |
 | data_lib | 输入总表、阶段队列、高低保真运行、点云与来源索引 |
 | ML_training | 机器学习预留 |
 | feedback | 异常日志、参数快照和失败产物，大输入通过校验值引用 |
@@ -67,7 +68,7 @@
 
 ## 目录组成
 
-下面按顶层目录列出**直接下级**，只展开一级；更深的层级见各目录自己的 README。`DATCOM` 独立保留，不在此说明。
+下面按顶层目录列出**直接下级**，只展开一级；更深的层级见各目录自己的 README。`DATCOM/` 随本仓库保存，这里说明它的入口、系数和归档。
 
 类型含义：
 
@@ -174,6 +175,40 @@
 |---|---|---|
 | `README.md` | 预留 | 仅建立目录与数据约定，尚未实现或验证自动求解入口 |
 
+### `DATCOM/` — 低保真气动力
+
+`DATCOM/` 是本仓库里的低保真程序和模板，`.gitignore` 不排除这个目录。程序本体是 `DATCOM/datcom_bin/datcom.exe`。算例结果写到 `data_lib/runs/low/<geometry_id>/`，那些运行产物不入库。队列在 `data_lib/queues/datcom.json`，失败包在 `feedback/datcom/`。这条链路可以在几何、网格、求解尚未结束时单独运行。
+
+正式计算不带参数。`DATCOM/scripts/01_batch_datcom.py` 自己读取 `data_lib/inputs/cases.csv`。同一个 `geometry_id` 加同一个 `altitude_m` 是一次调用，覆盖该几何、该高度在总表里的全部马赫数和攻角。`--params`、`--mach`、`--alpha`、`--alt` 以及脚本顶部的几何和来流列表只在 `--demo` 时使用。
+
+```powershell
+python DATCOM/scripts/01_batch_datcom.py
+```
+
+一次调用生成输入卡片并运行 `datcom.exe`。运行当下的协议文件放在 `data_lib/runs/low/.work/`，文件名是 `for005.dat`、`for006.dat`、`for022.dat`，算完后删除。标准输出和标准错误写入 `data_lib/runs/low/<geometry_id>/<geometry_id>_datcom.log`。
+
+三个系数与后续高保真使用同一套参考量：升力系数 `CL`、阻力系数 `CD`、俯仰力矩系数 `CM`。参考面积是机身横截面积 `π(D/2)²`，参考长度是机身直径 `D`，力矩参考点在 `L/2`。舵面相位 `+`、后缘对齐和这个力矩参考点是本次计算的冻结约定，记在 `{geometry_id}_case_params.json`，不进入 `geometry_id`。
+
+一次调用通过验收，要同时满足这三条：几何核对报告里的自检都已通过；系数表行数等于这次计算的工况数；每一行的马赫数、攻角和高度都能对上总表。通过后，该几何、该高度下这些工况在 `datcom.json` 里改为已完成。子智能体按队列领取仍待接入，脚本现在可以按总表直接运行。
+
+同一几何再跑时，按 `geometry_id` 命名的归档由这次调用覆盖。`{run_id}_datcom.csv` 以及系数总表里其它高度的行保留。`run_id` 是 `{geometry_id}__{condition_id}__{altitude_m}`。
+
+| 归档文件 | 作用 |
+|---|---|
+| `{geometry_id}_for005.dat` | 输入卡片 |
+| `{geometry_id}_for006.dat` | 原始输出 |
+| `{geometry_id}_for022.dat` | 外形 |
+| `{geometry_id}_aero_coefficients.csv` | 该几何各高度的系数总表 |
+| `{geometry_id}_geometry_check.txt` | 几何核对 |
+| `{geometry_id}_geometry_check.png` | 几何核对图 |
+| `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
+| `{geometry_id}_datcom.log` | 该次调用的标准输出和标准错误 |
+| `{run_id}_datcom.csv` | 从系数总表抽出的单个工况 |
+
+点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/`；`DATCOM/scripts/` 里原有的训练和画图脚本留在原处。
+
+当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。前一次试算把几何标识写成 `sample`，归档仍在 `data_lib/runs/low/sample/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
+
 ### `ML_training/` — 机器学习（预留）
 
 | 下级 | 类型 | 作用 |
@@ -206,7 +241,6 @@
 | `AGENTS.md` | 文件 | 本工作区的规则与边界 |
 | `.gitignore` | 文件 | 根仓库的忽略规则：运行产物、依赖、备份与大体积数据不入库 |
 | `README.md` | 文件 | 本文件 |
-| `DATCOM/` | 目录 | 独立保留，不参与重构，不在此说明 |
 
 ## 启动与验收
 
@@ -249,7 +283,7 @@ node .\spaceclaim\scripts\missile.mjs --preset .\data_lib\inputs\missile_params_
 
 ## 数据与回退
 
-高保真默认写到 `data_lib/runs/high/<run-id>/<阶段>/`，`<run-id>` 形如 `run-<时间戳>-<短ID>`。低保真由 `DATCOM/scripts/01_batch_datcom.py` 读取 `data_lib/inputs/cases.csv`：同一个 `geometry_id` 加同一个 `altitude_m` 是一次调用，归档在 `data_lib/runs/low/<geometry_id>/`。点云由 `DATCOM/scripts/04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 写入 `data_lib/datasets/point_clouds/`。标识符编码、置信度、补点范围、点云最终格式、求解器和上报后的调整权仍待定。
+高保真默认写到 `data_lib/runs/high/<run-id>/<阶段>/`，`<run-id>` 形如 `run-<时间戳>-<短ID>`。低保真的调用、系数和归档文件见上面的 [DATCOM](#datcom--低保真气动力)。标识符编码、置信度、补点范围、点云最终格式、求解器和上报后的调整权仍待定。
 
 建模和网格每次运行生成独立 `<run-id>` 和 `run.json`。真实验证通过的记录标记 `PASSED`；失败为 `FAILED`，主动分步停止为 `STOPPED`；仅生成脚本为 `GENERATED`。文件存在或进程退出成功不能单独作为验收依据。
 

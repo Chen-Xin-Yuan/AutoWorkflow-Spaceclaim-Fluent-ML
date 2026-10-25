@@ -7,8 +7,8 @@
 
 DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.dat`。
 
-`for005.dat` 是旧版手工算例模板，现在只作为翼型剖面（HEX）参数的参考，
-`01_batch_datcom.py` 不再改写它，而是按几何/来流参数整份生成 `for005.dat`。
+`for005.dat` 是旧版手工算例模板。`01_batch_datcom.py` 不再改写它，
+而是按几何、来流和 `scripts/naca_section.py` 里的翼型参数整份生成 `for005.dat`。
 
 不要把算例结果放在这里。`01_batch_datcom.py` 把结果写到 `../data_lib/runs/low/<geometry_id>/`，运行中的协议文件放在 `../data_lib/runs/low/.work/`。
 
@@ -22,20 +22,10 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | `02_ml_train.py` | MLP 神经网络训练 |
 | `03_plot_result.py` | 画图、误差分析、对比 DATCOM/Fluent |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
+| `naca_section.py` | 舵面 NACA 翼型的五个参数和外形方程。批量 DATCOM 与点云共用这一份 |
 | `datcom_parser.py` | 解析 `for006.dat` 的工具函数 |
 
 
-### `outputs/`
-
-程序自动生成的产物目录（可定期清理，建议通过 `.gitignore` 忽略）。
-
-| 子目录 | 用途 |
-| --- | --- |
-| `inp_files/` | Python 自动生成的 `*.inp` 输入卡片 |
-| `datcom_out/` | DATCOM 输出 `for006.dat` / `datcom.out` 等 |
-| `dataset/` | 训练数据集（`datcom_dataset.csv`、`fluent_validate.csv`） |
-| `figures/` | 输出的图片：预测对比图、误差图 |
-| `pointcloud/` | 旧的点云演示目录。`04_pointnet_demo.py` 现在默认写到 `../data_lib/datasets/point_clouds/` |
 
 `04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸后，主文件是 `<geometry_id>_pointcloud.ply`。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
@@ -68,22 +58,10 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 归档目录名就是 `geometry_id`。当前工作区总表有 4 行试算，几何标识暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，结果在 `../data_lib/runs/low/1/`。前一次试算的归档留在 `../data_lib/runs/low/sample/`。
 
-### `docs/`
-
-文档、笔记、参考资料。
-
-| 文件或子目录 | 用途 |
-| --- | --- |
-| `task_note.md` | 任务进度记录 |
-| `reference_papers/` | 下载的相关硕士论文 PDF |
-
 ### `.vscode/`
 
 VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置，建议保留。
 
-### `.claude/`
-
-Claude Code 配置文件。属于 IDE 工具配置，建议保留。
 
 ### `AGENTS.md`
 

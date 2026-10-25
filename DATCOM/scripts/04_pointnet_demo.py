@@ -1,0 +1,1421 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""导弹外形点云生成 + 几何校验 + 三视图预览（PointNet / PointNet++ 演示数据）。
+
+外形定义（回转轴 = +X，单位 m）:
+    总弹长 total_length = 圆锥头锥 nose_length + 等直圆柱 midbody_length
+    （total_length 本身就是完整弹长，不要再加 nose_length）
+    x = 0                 : 头部顶点（锥顶倒角球冠的最前点）
+    [0.000, x_t]          : 锥顶倒角（球冠，半径 R_fillet），半径 0 -> r_t
+    [x_t, nose_length]    : 圆锥头锥，半径 r_t -> R_body（与倒角球相切，无折点）
+    [nose_length, total_length] : 等直圆柱弹身，半径恒为 R_body
+    x = total_length      : 尾部端面（尾盖）
+
+    头部就是圆锥 + 锥顶倒角，不再用卵形母线；尾部半径与弹身半径相同，
+    不做收缩（无 boat-tail）。锥顶倒角半径 R_fillet = nose_tip_fillet_ratio ×
+    total_length（默认比例 0.005 = 弹长的 0.5%，可改），也可用 nose_tip_fillet_radius
+    直接给绝对值（米）；置 0 即退化成尖锥。x_t / r_t 由"倒角球与圆锥相切"解析求出。
+
+舵面（两组，每组 4 片，绕弹轴每 90 度等距分布）:
+    位置参数: 每组一个"轴向长度" = 舵面前沿（根部前缘，整片舵面最靠前的点）
+    到弹头顶点 x=0 的轴向距离，即 fwd_x_root_le / aft_x_root_le
+    （默认 1.10 m / 2.82 m）；两组互相独立，后组不再要求后缘与弹尾对齐。
+    约束: x_root_le > nose_length（长在圆柱段上），
+          且 x_root_le + c_root <= total_length（后缘不伸出弹尾），均由校验把关。
+    每片侧视均为直角梯形（后缘垂直于弹轴 = 直角腰在后缘）:
+        根部弦长 c_root > 梢部弦长 c_tip；前缘后掠量 sweep_le ≡ c_root - c_tip，
+        由前者自动派生（不单独填参数），保证后缘始终垂直于弹轴。
+    建模方式: 在子午面 (x, r) 内画侧视梯形（根部贴在弹体圆柱表面上），
+    厚度按 NACA 翼型加在周向。翼型五个参数见 scripts/naca_section.py，
+    与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
+
+采样: 按面积加权均匀采样（每个面片分组单独采样，4 片舵面均分点数），
+      最后精确凑到目标点数、打乱顺序；--seed 固定即可完全复现。
+
+输出（默认 ../data_lib/datasets/point_clouds/，可用 --outdir 改）:
+    不带几何标识时，文件名仍是 missile_<N>.*，点数和格式沿用本脚本现有演示。
+    用 --geometry-id 或 --params 读入总表的 11 个主尺寸后，主文件名是
+    <geometry_id>_pointcloud.ply / .xyz，并带标签、meta 和可选网格。
+
+用法（在项目根或任意目录均可，路径自动推导）:
+    python scripts/04_pointnet_demo.py                 # 生成 8192 点 + 校验
+    python scripts/04_pointnet_demo.py --preview       # 顺便渲染三视图
+    python scripts/04_pointnet_demo.py --nose-profile  # 顺便渲染锥顶倒角剖面图
+    python scripts/04_pointnet_demo.py --n 4096 --seed 1
+    python scripts/04_pointnet_demo.py --geometry-id <id>   # 从 cases.csv 读 11 个主尺寸
+    python scripts/04_pointnet_demo.py --params geometry.json
+
+调整锥顶倒角: 改 MissileGeometry.nose_tip_fillet_ratio（倒角半径 = 比例 × total_length）
+    或用 nose_tip_fillet_radius 直接给绝对半径（米）；置 0 即退化成尖锥。
+
+部件标签: 0 头锥 / 1 圆柱弹身 / 2 尾端面 / 3 前组舵面 / 4 后组舵面
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import sys
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+from naca_section import NACA_SECTION, NacaSection
+
+# --------------------------------------------------------------------------- #
+# 输入 / 输出 / 参数配置（命令行参数覆盖这里的运行默认值）
+# --------------------------------------------------------------------------- #
+# 输入：不带 --geometry-id / --params 时，使用 MissileGeometry 的演示默认值。
+# 正式几何读取总表的 11 个主尺寸：L_N L D L_W C_RW C_TW B_W L_F C_RF C_TF B_F。
+# D 是机身直径，脚本内部仍用半径 body_radius = D/2。
+# 路径约定：项目根 = scripts/ 的上一级；工作区根 = 项目根的上一级。
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_ROOT = PROJECT_ROOT.parent
+CASES_CSV = WORKSPACE_ROOT / "data_lib" / "inputs" / "cases.csv"
+# --outdir 覆盖输出目录；相对路径仍相对启动时的当前工作目录。
+OUTPUT_DIR = WORKSPACE_ROOT / "data_lib" / "datasets" / "point_clouds"
+MAIN_DIMENSIONS = (
+    "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
+)
+
+# 舵面翼型与批量 DATCOM 共用 scripts/naca_section.py 顶部的五个参数。
+# 改弯度、弯度位置、厚度、前缘半径指数或最大厚度位置时，只改那一处。
+FIN_SECTION = NACA_SECTION
+DEFAULT_N_POINTS = 16384
+DEFAULT_SEED = 0
+DEFAULT_GAUSS = 0.0
+DEFAULT_TAG_TEMPLATE = "missile_{n_points}"
+# 调用采样 / 网格辅助函数时的原有离散参数默认值（无对应命令行开关）。
+REVOLVED_SAMPLING_SEGMENTS = 256
+MESH_AZIMUTH_SEGMENTS = 72
+
+# 输出文件名：{tag} 是 --tag 指定的标签或 DEFAULT_TAG_TEMPLATE 生成的标签。
+# 预览图和头锥剖面图分别由 --preview / --nose-profile 开启。
+OUTPUT_FILES = {
+    "ply": "{tag}.ply",
+    "xyz": "{tag}.xyz",
+    "labels": "{tag}_labels.txt",
+    "meta": "{tag}_meta.json",
+    "mesh": "missile_surface.obj",
+    "preview": "preview_missile.png",
+    "nose_profile": "nose_tip_profile.png",
+}
+
+# 部件标签（PointNet / PointNet++ 分割演示用）
+PART_LABELS = {
+    0: "nose_cone",       # 头锥（圆锥 + 锥顶倒角球冠）
+    1: "mid_cylinder",    # 圆柱弹身（尾部同半径，无尾锥）
+    2: "tail_cap",        # 尾端面（尾盖）
+    3: "fin_forward",     # 前组舵面（4 片）
+    4: "fin_aft",         # 后组舵面（4 片）
+}
+LABEL_ID = {v: k for k, v in PART_LABELS.items()}
+
+# 校验容差
+TOL_R = 5e-5          # 径向/轴向容差（点云按 float32 保存，留出裕量）
+TOL_A = 5e-4          # 子午面内反解坐标的容差（反解涉及浮点差值，误差被放大）
+TOL_AZ_SHEET = 1e-3   # 方位角容差附加量（度）
+
+
+# --------------------------------------------------------------------------- #
+# 一、几何定义
+# 字段默认值集中在紧接下方的配置类中，保持唯一来源，不在入口处另写一份。
+# --------------------------------------------------------------------------- #
+@dataclass
+class MissileGeometry:
+    """导弹几何参数（单位：米）。"""
+
+    # --- 弹身 ---
+    total_length: float = 3.69          # 总弹长：头部顶点 x=0 → 尾部端面 x=total_length（含头锥）
+    body_radius: float = 0.09          # 弹身圆柱半径（尾部半径同值，不区分尾锥）
+    nose_length: float = 0.49           # 圆锥头锥轴向长度（总弹长的一部分）
+    nose_tip_fillet_ratio: float = 0.004         # 锥顶倒角半径 = ratio × total_length
+    nose_tip_fillet_radius: float | None = None  # 直接给倒角半径(m)，非 None 时覆盖上面的比例
+    nose_segments: int = 120           # 头锥母线离散段数
+
+    # --- 舵面共同参数 ---
+    # 翼型默认取 naca_section.NACA_SECTION。绝对厚度 = 厚度比 × 当地弦长。
+    naca: NacaSection = field(default_factory=lambda: FIN_SECTION)
+    fin_azimuth_deg: tuple = (0.0, 90.0, 180.0, 270.0)  # 一组内 4 片，90° 等距
+
+    # --- 舵面轴向位置 ---
+    # "轴向长度" = 舵面前沿（根部前缘，即整片舵面最靠前的位置）到弹头顶点 x=0 的轴向距离。
+    # 两组各自独立给定，后组不再要求后缘与弹尾对齐。
+    # 约束：x_root_le > nose_length（长在圆柱段上），且 x_root_le + c_root <= total_length
+    #       （后缘不得伸出弹尾；超了校验会 FAIL，而不是被悄悄裁掉）。
+
+    # --- 前组舵面 ---
+    fwd_x_root_le: float = 1.72       # 前组：前沿到弹头顶点 x=0 的轴向距离
+    fwd_c_root: float = 0.230
+    fwd_c_tip: float = 0.06
+    fwd_span: float = 0.230
+    # 前缘后掠量不单独给：sweep_le ≡ c_root - c_tip，由属性自动派生（后缘垂直于弹轴）
+
+    # --- 后组舵面 ---
+    aft_x_root_le: float = 3.200       # 后组：前沿到弹头顶点 x=0 的轴向距离
+    aft_c_root: float = 0.380
+    aft_c_tip: float = 0.190
+    aft_span: float = 0.220
+
+    # --- 端盖 ---
+    include_nose_tip: bool = True
+    include_tail_cap: bool = True
+
+    # ------------------------------------------------------------------ #
+    # 长度分段
+    # ------------------------------------------------------------------ #
+    @property
+    def midbody_length(self) -> float:
+        """等直圆柱段长度 = total_length - nose_length（必须 > 0）。"""
+        return self.total_length - self.nose_length
+
+    # ------------------------------------------------------------------ #
+    # 锥顶倒角几何（解析式：倒角球与圆锥母线相切）
+    # ------------------------------------------------------------------ #
+    @property
+    def tip_fillet_radius(self) -> float:
+        """锥顶倒角球冠半径 R（米）：默认 = nose_tip_fillet_ratio × total_length。"""
+        if self.nose_tip_fillet_radius is not None:
+            return float(self.nose_tip_fillet_radius)
+        return float(self.nose_tip_fillet_ratio) * float(self.total_length)
+
+    @property
+    def nose_cone_slope(self) -> float:
+        """圆锥母线斜率 m = dr/dx。
+
+        母线须同时满足: 与锥顶倒角球（球心 (R, 0)、半径 R，球面最前点即 x=0）相切；
+        且在 x = nose_length 处半径正好等于 body_radius。记 d = nose_length - R、
+        Rb = body_radius，则 m 满足
+            m²(d² - R²) - 2·Rb·d·m + (Rb² - R²) = 0
+        取较小的那个根 = 与球冠前方相切的那条母线。
+        R = 0 时退化为尖锥 m = Rb / nose_length。
+        """
+        R, Rb, Ln = self.tip_fillet_radius, self.body_radius, self.nose_length
+        if R <= 0.0:
+            return Rb / Ln
+        if R >= min(Rb, Ln / 2.0):
+            raise ValueError(
+                f"锥顶倒角半径 R={R:.6g} m 与头锥几何不相容：需 0 <= R < "
+                f"min(body_radius={Rb:g}, nose_length/2={Ln / 2:g})；"
+                f"请调小 nose_tip_fillet_ratio 或 nose_tip_fillet_radius"
+            )
+        d = Ln - R
+        disc = d * d + Rb * Rb - R * R          # > 0 由 R < min(Rb, Ln/2) 保证
+        return (Rb * d - R * math.sqrt(disc)) / (d * d - R * R)
+
+    @property
+    def nose_tangent_x(self) -> float:
+        """倒角球与圆锥母线的切点轴向坐标 x_t（R = 0 时为 0）。"""
+        R = self.tip_fillet_radius
+        if R <= 0.0:
+            return 0.0
+        m = self.nose_cone_slope
+        return self.nose_length - (self.nose_length - R + m * self.body_radius) / (1.0 + m * m)
+
+    @property
+    def nose_tangent_r(self) -> float:
+        """切点半径 r_t（R = 0 时为 0）."""
+        R = self.tip_fillet_radius
+        if R <= 0.0:
+            return 0.0
+        m = self.nose_cone_slope
+        return self.body_radius - m * (self.nose_length - R + m * self.body_radius) / (1.0 + m * m)
+
+    # ------------------------------------------------------------------ #
+    # 舵面前缘后掠量：模型要求后缘垂直于弹轴（直角梯形），因此
+    # sweep_le ≡ c_root - c_tip 是派生量，不单独给参数，避免与弦长对不上。
+    # （若以后要允许后缘前掠/后掠，再把 sweep_le 改成独立字段并放开校验。）
+    # ------------------------------------------------------------------ #
+    @property
+    def fwd_sweep_le(self) -> float:
+        """前组前缘后掠量 = fwd_c_root - fwd_c_tip（自动派生）。"""
+        return self.fwd_c_root - self.fwd_c_tip
+
+    @property
+    def aft_sweep_le(self) -> float:
+        """后组前缘后掠量 = aft_c_root - aft_c_tip（自动派生）。"""
+        return self.aft_c_root - self.aft_c_tip
+
+    def radius(self, x):
+        """回转体母线：x -> 半径（圆锥头锥 + 锥顶球冠倒角 + 等直圆柱）。"""
+        x = np.asarray(x, dtype=float)
+        nose = x < self.nose_length
+        y = np.empty_like(x)
+
+        if nose.any():
+            xn = x[nose]
+            R = self.tip_fillet_radius
+            if R > 0.0:
+                xt, rt, m = self.nose_tangent_x, self.nose_tangent_r, self.nose_cone_slope
+                cap = xn <= xt
+                yn = np.empty_like(xn)
+                # 球冠段: r = sqrt(R² - (R-x)²) = sqrt(2Rx - x²)
+                yn[cap] = np.sqrt(np.clip(2.0 * R * xn[cap] - xn[cap] ** 2, 0.0, None))
+                # 圆锥段: 与球冠在 x_t 处相切
+                yn[~cap] = rt + m * (xn[~cap] - xt)
+                y[nose] = yn
+            else:
+                y[nose] = self.body_radius * xn / self.nose_length      # 尖锥
+
+        # 等直圆柱：尾部半径与弹身相同，无尾锥收缩
+        y[~nose] = self.body_radius
+        return y
+
+    def radius_slope(self, x):
+        """回转体母线斜率 dr/dx（解析式，避免分段处数值差分）。
+
+        锥顶球冠段的真实斜率在 x→0 处发散，这里用 eps 截断（那里半径本身 → 0，
+        对面积积分的贡献为 0；精确面积请用 nose_lateral_area()）。
+        """
+        x = np.asarray(x, dtype=float)
+        nose = x < self.nose_length
+        y = np.zeros_like(x)
+
+        if nose.any():
+            xn = x[nose]
+            R = self.tip_fillet_radius
+            if R > 0.0:
+                xt, m = self.nose_tangent_x, self.nose_cone_slope
+                cap = xn <= xt
+                sl = np.empty_like(xn)
+                denom = np.sqrt(np.clip(2.0 * R * xn[cap] - xn[cap] ** 2, 1e-12, None))
+                sl[cap] = (R - xn[cap]) / denom
+                sl[~cap] = m
+                y[nose] = sl
+            else:
+                y[nose] = self.body_radius / self.nose_length
+        return y
+
+    def nose_lateral_area(self) -> float:
+        """头锥侧面积（解析式，含锥顶倒角球冠）。
+
+        球冠段: A = 2πR·x_t；圆锥段（圆台侧面积）: A = π(r_t + R_body)·斜高。
+        """
+        R, Rb, Ln = self.tip_fillet_radius, self.body_radius, self.nose_length
+        if R <= 0.0:
+            return math.pi * Rb * math.hypot(Ln, Rb)                     # 尖锥
+        xt, rt = self.nose_tangent_x, self.nose_tangent_r
+        cap = 2.0 * math.pi * R * xt
+        cone = math.pi * (rt + Rb) * math.hypot(Ln - xt, Rb - rt)
+        return cap + cone
+
+    @property
+    def fin_half_thickness_envelope(self) -> float:
+        """两套舵面里，翼型表面偏离弦线的最大距离（米）。校验用它做包络。"""
+        chords = (self.fwd_c_root, self.fwd_c_tip, self.aft_c_root, self.aft_c_tip)
+        return max(chords) * self.naca.max_offset_ratio()
+
+
+@dataclass
+class FinPlanform:
+    """一片舵面的侧视平面形状（直角梯形）。
+
+    局部坐标: a = 展向 0..span，x = 轴向；弦长沿展向线性变化。
+    """
+
+    x_root_le: float
+    c_root: float
+    c_tip: float
+    span: float
+    sweep_le: float
+
+    @property
+    def x_root_te(self) -> float:
+        return self.x_root_le + self.c_root
+
+    @property
+    def x_tip_le(self) -> float:
+        return self.x_root_le + self.sweep_le
+
+    @property
+    def x_tip_te(self) -> float:
+        return self.x_tip_le + self.c_tip
+
+    def chord(self, a):
+        a = np.asarray(a, dtype=float)
+        return self.c_root + (self.c_tip - self.c_root) * (a / self.span)
+
+    def leading_x(self, a):
+        a = np.asarray(a, dtype=float)
+        return self.x_root_le + self.sweep_le * (a / self.span)
+
+    def area(self) -> float:
+        return 0.5 * (self.c_root + self.c_tip) * self.span
+
+    def is_right_trapezoid(self, tol: float = 1e-12) -> bool:
+        """侧视：一条腰垂直于底 => 直角梯形（后缘 x 不随展向变化）。"""
+        return abs(self.x_root_te - self.x_tip_te) < tol
+
+    def corners(self) -> np.ndarray:
+        """侧视四角点，逆时针: 根部前缘, 根部后缘, 梢部后缘, 梢部前缘。"""
+        return np.array(
+            [
+                [self.x_root_le, 0.0],
+                [self.x_root_te, 0.0],
+                [self.x_tip_te, self.span],
+                [self.x_tip_le, self.span],
+            ]
+        )
+
+
+def fin_planforms(g: MissileGeometry) -> dict[str, FinPlanform]:
+    return {
+        "forward": FinPlanform(
+            x_root_le=g.fwd_x_root_le,
+            c_root=g.fwd_c_root,
+            c_tip=g.fwd_c_tip,
+            span=g.fwd_span,
+            sweep_le=g.fwd_sweep_le,
+        ),
+        "aft": FinPlanform(
+            x_root_le=g.aft_x_root_le,
+            c_root=g.aft_c_root,
+            c_tip=g.aft_c_tip,
+            span=g.aft_span,
+            sweep_le=g.aft_sweep_le,
+        ),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 二、采样
+# --------------------------------------------------------------------------- #
+def _dir_vectors(azimuth_deg) -> np.ndarray:
+    """一组舵面的外法向单位向量（绕 +X 轴，每 90° 一个）。"""
+    return np.asarray(
+        [[0.0, math.cos(math.radians(d)), math.sin(math.radians(d))] for d in azimuth_deg]
+    )
+
+
+def _fin_normal_dir(azimuth_rad: float) -> np.ndarray:
+    """舵面板厚方向 = 周向单位向量 ê_φ（子午面内梯形沿周向拉伸）。"""
+    return np.array([0.0, -math.sin(azimuth_rad), math.cos(azimuth_rad)])
+
+
+def surface_group_areas(g: MissileGeometry) -> dict[str, float]:
+    """各面片分组的面积（m²）：回转体用解析式，避免数值积分在锥顶斜率发散。"""
+    areas: dict[str, float] = {}
+    plans = fin_planforms(g)
+
+    # 头锥（圆锥 + 锥顶倒角球冠）侧面积
+    areas["nose_cone"] = float(g.nose_lateral_area())
+
+    # 等直圆柱弹身段（尾部半径与弹身相同，不再有尾锥/尾锥面积）
+    # 圆柱段长度 = total_length - nose_length，必须为正，否则说明总长比头锥还短
+    if g.midbody_length <= 0.0:
+        raise ValueError(
+            f"圆柱段长度为 {g.midbody_length:.6g} m：要求 total_length({g.total_length:g}) "
+            f"> nose_length({g.nose_length:g})。注意 total_length 已包含头锥，不要重复相加"
+        )
+    areas["mid_cylinder"] = float(2 * math.pi * g.body_radius * g.midbody_length)
+
+    # 舵面（4 片 × 上下表面 / 根梢两个翼型端面）
+    cap_ratio = g.naca.section_area_ratio()
+    for name, p in plans.items():
+        areas[f"fin_{name}_faces"] = 4.0 * 2.0 * p.area()
+        areas[f"fin_{name}_edges"] = 4.0 * cap_ratio * (p.c_root ** 2 + p.c_tip ** 2)
+
+    # 头部顶点处半径收成 0（倒角球冠端点），因此头端盖面积为 0；保留键位兼容原有开关
+    if g.include_nose_tip:
+        areas["nose_tip_cap"] = float(math.pi * g.radius(0.0) ** 2)
+    if g.include_tail_cap:
+        areas["tail_cap"] = float(math.pi * g.body_radius**2)
+    return areas
+
+
+def allocate_points(areas: dict[str, float], n_total: int, rng) -> dict[str, int]:
+    """按面积比例分配点数，并补偿取整误差使总和精确等于 n_total。
+
+    面积必须是非负有限值：一旦出现负面积 / NaN（通常意味着几何参数互相矛盾，
+    例如头锥长度超过了圆柱段起点），这里直接抛可读的中文报错，而不是让 numpy
+    抛出难懂的 "pvals < 0, pvals > 1 or pvals contains NaNs"。
+    """
+    names = list(areas)
+    w = np.asarray([areas[k] for k in names], dtype=float)
+    bad = ~np.isfinite(w) | (w < 0.0)
+    if bad.any():
+        detail = ", ".join(f"{k}={v:.6g}" for k, v, b in zip(names, w, bad) if b)
+        raise ValueError(f"面积权重非法（负值或 NaN）: {detail}；请检查几何参数是否自洽")
+    total = float(w.sum())
+    if total <= 0.0:
+        raise ValueError(f"面积权重全为 0，无法分配点数: {areas}")
+    w = w / total
+    counts = rng.multinomial(n_total, w)
+    alloc = {k: int(c) for k, c in zip(names, counts)}
+    diff = n_total - sum(alloc.values())
+    while diff != 0:
+        k = names[int(rng.integers(len(names)))]
+        if diff > 0:
+            alloc[k] += 1
+            diff -= 1
+        elif alloc[k] > 0:
+            alloc[k] -= 1
+            diff += 1
+    return alloc
+
+
+def _sample_revolved_section(g: MissileGeometry, x0, x1, n, rng, segs: int = REVOLVED_SAMPLING_SEGMENTS):
+    """在回转面 x∈[x0,x1] 上按面积均匀采样 n 个点，返回 (points, normals)。"""
+    if n <= 0 or x1 <= x0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    dx = (x1 - x0) / segs
+    xs = np.linspace(x0, x1, segs + 1)
+    rs = g.radius(xs)
+    slope = (rs[1:] - rs[:-1]) / dx
+    r_mid = 0.5 * (rs[1:] + rs[:-1])          # 中点法则估面积（比取左端点稳，头锥处不会低估到 0）
+    dA = 2 * np.pi * r_mid * np.sqrt(1 + slope**2) * dx
+    tot = float(dA.sum())
+    if not np.isfinite(tot) or tot <= 0.0:     # 该段退化成零面积
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    p = dA / tot
+    idx = rng.choice(segs, size=n, p=p)
+    x = xs[idx] + rng.random(n) * dx
+    r = g.radius(x)
+    phi = rng.random(n) * 2 * np.pi
+    pts = np.stack([x, r * np.cos(phi), r * np.sin(phi)], axis=1)
+    # 解析法向: dS/dx × dS/dφ ∝ (-dr/dx, cosφ, sinφ)
+    drx = g.radius_slope(x)
+    nrm = np.stack([-drx, np.cos(phi), np.sin(phi)], axis=1)
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+    return pts, nrm
+
+
+def _point_to_trapezoid_dist(xq: np.ndarray, aq: np.ndarray, plan: FinPlanform) -> np.ndarray:
+    """(x, a) 平面内点到侧视直角梯形的距离（在梯形内部为 0）。"""
+    corners = plan.corners()
+    inside = np.ones(xq.shape, dtype=bool)
+    for (x0, a0), (x1, a1) in zip(corners, np.roll(corners, -1, axis=0)):
+        cross = (x1 - x0) * (aq - a0) - (a1 - a0) * (xq - x0)
+        inside &= cross >= -1e-15
+    d = np.full(xq.shape, np.inf)
+    for (x0, a0), (x1, a1) in zip(corners, np.roll(corners, -1, axis=0)):
+        vx, va = x1 - x0, a1 - a0
+        L2 = vx * vx + va * va
+        t = np.clip(((xq - x0) * vx + (aq - a0) * va) / L2, 0.0, 1.0)
+        d = np.minimum(d, np.hypot(xq - (x0 + t * vx), aq - (a0 + t * va)))
+    return np.where(inside, 0.0, d)
+
+
+def _radial_dir(azimuth_rad: float) -> np.ndarray:
+    """展向单位向量，从弹轴指向舵梢。"""
+    return np.array([0.0, math.cos(azimuth_rad), math.sin(azimuth_rad)])
+
+
+def _place_fin_point(g: MissileGeometry, plan: FinPlanform, a: float, v: float, s: float, az: float):
+    """把翼型截面上的点放回弹体坐标。v 是弦向参数，s 是厚度参数，+1 为上表面。"""
+    chord = float(plan.chord(a))
+    x_le = float(plan.leading_x(a))
+    xc, yc = g.naca.interior_xy(v, s)
+    x = x_le + xc * chord
+    r = float(g.radius(x)) + a
+    return np.array([x, 0.0, 0.0]) + r * _radial_dir(az) + (yc * chord) * _fin_normal_dir(az)
+
+
+def _face_normal(g, plan, a, v, s, az) -> np.ndarray:
+    """上下表面的外法向。差分步长落在翼面内部。"""
+    eps_v = 1e-4 if v < 1.0 - 1e-4 else -1e-4
+    eps_a = 1e-4 * plan.span if a < plan.span - 1e-6 * plan.span else -1e-4 * plan.span
+    if eps_a == 0.0:
+        eps_a = 1e-6
+    p0 = _place_fin_point(g, plan, a, v, s, az)
+    pv = _place_fin_point(g, plan, a, min(max(v + eps_v, 0.0), 1.0), s, az) - p0
+    pa = _place_fin_point(g, plan, min(max(a + eps_a, 0.0), plan.span), v, s, az) - p0
+    if eps_v < 0.0:
+        pv = -pv
+    if eps_a < 0.0:
+        pa = -pa
+    normal = np.cross(pa, pv)
+    length = float(np.linalg.norm(normal))
+    if length < 1e-14:
+        normal = s * _fin_normal_dir(az)
+        length = float(np.linalg.norm(normal))
+    normal = normal / length
+    if float(np.dot(normal, _fin_normal_dir(az))) * s < 0.0:
+        normal = -normal
+    return normal
+
+
+def _sample_fin_faces(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None):
+    """舵面上下表面按平面形状均匀采样，厚度取 NACA 翼型。"""
+    if n <= 0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    if x_max is None:
+        x_max = g.total_length
+    az = math.radians(az0)
+    pts = np.zeros((n, 3))
+    nrm = np.zeros((n, 3))
+    todo = np.arange(n)
+    for _ in range(200):
+        if not len(todo):
+            break
+        m = len(todo)
+        u = rng.random(m)
+        v = rng.random(m)
+        side = np.where(rng.random(m) < 0.5, -1.0, 1.0)
+        a = u * plan.span
+        cand = np.zeros((m, 3))
+        normals = np.zeros((m, 3))
+        for i in range(m):
+            cand[i] = _place_fin_point(g, plan, float(a[i]), float(v[i]), float(side[i]), az)
+            normals[i] = _face_normal(g, plan, float(a[i]), float(v[i]), float(side[i]), az)
+        keep = cand[:, 0] <= x_max + 1e-12
+        idx = todo[keep]
+        pts[idx] = cand[keep]
+        nrm[idx] = normals[keep]
+        todo = todo[~keep]
+    if len(todo):
+        pts[todo] = cand[~keep]
+        nrm[todo] = normals[~keep]
+    return pts, nrm
+
+
+def _sample_fin_edges(g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None):
+    """根部和梢部的翼型端面。前缘圆角和后缘尖点已经包含在上下表面里。"""
+    if n <= 0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    if x_max is None:
+        x_max = g.total_length
+    weights = np.array([plan.c_root ** 2, plan.c_tip ** 2], dtype=float)
+    if float(weights.sum()) <= 0.0:
+        return np.zeros((0, 3)), np.zeros((0, 3))
+    probability = weights / weights.sum()
+    az = math.radians(az0)
+    out = np.zeros((n, 3))
+    normals = np.zeros((n, 3))
+    filled = np.zeros(n, dtype=bool)
+    for _ in range(200):
+        if filled.all():
+            break
+        pending = np.where(~filled)[0]
+        m = len(pending)
+        which = rng.choice(2, size=m, p=probability)
+        xc, yc = g.naca.sample_interior(m, rng)
+        cand = np.zeros((m, 3))
+        cand_n = np.zeros((m, 3))
+        for i in range(m):
+            a = 0.0 if which[i] == 0 else plan.span
+            chord = float(plan.chord(a))
+            x = float(plan.leading_x(a)) + float(xc[i]) * chord
+            r = float(g.radius(x)) + a
+            cand[i] = (
+                np.array([x, 0.0, 0.0])
+                + r * _radial_dir(az)
+                + (float(yc[i]) * chord) * _fin_normal_dir(az)
+            )
+            cand_n[i] = -_radial_dir(az) if which[i] == 0 else _radial_dir(az)
+        ok = cand[:, 0] <= x_max + 1e-12
+        out[pending[ok]] = cand[ok]
+        normals[pending[ok]] = cand_n[ok]
+        filled[pending[ok]] = True
+    if not filled.all():
+        missing = np.where(~filled)[0]
+        out[missing] = cand[~ok]
+        normals[missing] = cand_n[~ok]
+    return out, normals
+
+
+def build_pointcloud(
+    g: MissileGeometry,
+    n_total: int = DEFAULT_N_POINTS,
+    seed: int = DEFAULT_SEED,
+    noise: float = DEFAULT_GAUSS,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """→ (points[N,3], normals[N,3], labels[N], 统计信息)。"""
+    rng = np.random.default_rng(seed)
+    plans = fin_planforms(g)
+    dirs = _dir_vectors(g.fin_azimuth_deg)
+    areas = surface_group_areas(g)
+    alloc = allocate_points(areas, n_total, rng)
+
+    chunks: list[np.ndarray] = []
+    normals: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+
+    def add(pts: np.ndarray, nrm: np.ndarray, label: str) -> None:
+        chunks.append(pts)
+        normals.append(nrm)
+        labels.append(np.full(len(pts), LABEL_ID[label], dtype=np.int8))
+
+    # --- 回转体两段：圆锥头锥 + 等直圆柱弹身（尾部同半径，无尾锥）---
+    for key, label, (x0, x1) in (
+        ("nose_cone", "nose_cone", (0.0, g.nose_length)),
+        ("mid_cylinder", "mid_cylinder", (g.nose_length, g.total_length)),
+    ):
+        pts, nrm = _sample_revolved_section(g, x0, x1, alloc.get(key, 0), rng)
+        add(pts, nrm, label)
+
+    # --- 端盖 ---
+    if g.include_nose_tip and alloc.get("nose_tip_cap", 0) > 0:
+        n = alloc["nose_tip_cap"]
+        rr = np.sqrt(rng.random(n)) * g.radius(0.0)
+        phi = rng.random(n) * 2 * np.pi
+        add(
+            np.stack([np.zeros(n), rr * np.cos(phi), rr * np.sin(phi)], axis=1),
+            np.tile([-1.0, 0.0, 0.0], (n, 1)),
+            "nose_cone",
+        )
+    if g.include_tail_cap and alloc.get("tail_cap", 0) > 0:
+        n = alloc["tail_cap"]
+        rr = np.sqrt(rng.random(n)) * g.body_radius
+        phi = rng.random(n) * 2 * np.pi
+        add(
+            np.stack([np.full(n, g.total_length), rr * np.cos(phi), rr * np.sin(phi)], axis=1),
+            np.tile([1.0, 0.0, 0.0], (n, 1)),
+            "tail_cap",
+        )
+
+    # --- 舵面（4 片均分点数）---
+    fin_report = {}
+    for name, plan in plans.items():
+        n_face = alloc.get(f"fin_{name}_faces", 0)
+        n_edge = alloc.get(f"fin_{name}_edges", 0)
+        label = f"fin_{name}"
+        for d in dirs:
+            az0 = math.degrees(math.atan2(d[2], d[1])) % 360.0
+            pts, nrm = _sample_fin_faces(g, plan, n_face // 4, rng, az0, x_max=g.total_length)
+            add(pts, nrm, label)
+            pts, nrm = _sample_fin_edges(g, plan, n_edge // 4, rng, az0, x_max=g.total_length)
+            add(pts, nrm, label)
+        fin_report[name] = {
+            "n_faces": n_face,
+            "n_edges": n_edge,
+            "x_root_le": plan.x_root_le,
+            "x_root_te": plan.x_root_te,
+            "x_tip_le": plan.x_tip_le,
+            "x_tip_te": plan.x_tip_te,
+            "c_root": plan.c_root,
+            "c_tip": plan.c_tip,
+            "span": plan.span,
+            "sweep_le": plan.sweep_le,
+            "area_one_fin_m2": plan.area(),
+            "is_right_trapezoid": plan.is_right_trapezoid(),
+        }
+
+    points = np.concatenate(chunks, axis=0)
+    normal_arr = np.concatenate(normals, axis=0)
+    label_arr = np.concatenate(labels, axis=0)
+
+    # 精确凑数（分配阶段已保证，这里做一次保险裁剪/回填）
+    if len(points) > n_total:
+        sel = rng.permutation(len(points))[:n_total]
+        points, normal_arr, label_arr = points[sel], normal_arr[sel], label_arr[sel]
+    elif len(points) < n_total:
+        extra = rng.integers(0, len(points), n_total - len(points))
+        points = np.concatenate([points, points[extra]], axis=0)
+        normal_arr = np.concatenate([normal_arr, normal_arr[extra]], axis=0)
+        label_arr = np.concatenate([label_arr, label_arr[extra]], axis=0)
+
+    if noise > 0:
+        points = points + rng.normal(0.0, noise, points.shape)
+
+    # 打乱顺序，避免同类点连续排布（标签同步重排）
+    perm = rng.permutation(len(points))
+    points, normal_arr, label_arr = points[perm], normal_arr[perm], label_arr[perm]
+
+    info = {
+        "n_points": int(len(points)),
+        "seed": seed,
+        "noise_sigma": noise,
+        "areas_m2": areas,
+        "points_per_group": alloc,
+        "points_per_part": {
+            PART_LABELS[i]: int((label_arr == i).sum()) for i in PART_LABELS
+        },
+        "fins": fin_report,
+    }
+    return points, normal_arr, label_arr, info
+
+
+# --------------------------------------------------------------------------- #
+# 三、参考三角网格（同一几何，封闭流形）
+# --------------------------------------------------------------------------- #
+def add_fin_plate_mesh(
+    g: MissileGeometry,
+    plan: FinPlanform,
+    az0: float,
+    verts: list,
+    faces: list,
+    nu: int = 8,
+    nv: int = 24,
+    x_max: float | None = None,
+) -> None:
+    """把一片舵面按 NACA 翼型加成网格。弦向用余弦间距，让前缘圆角有足够的点。"""
+    if x_max is None:
+        x_max = g.total_length
+    az = math.radians(az0)
+
+    grid: dict[tuple, int] = {}
+    for iu in range(nu + 1):
+        a = plan.span * iu / nu
+        for iv in range(nv + 1):
+            v = 0.5 * (1.0 - math.cos(math.pi * iv / nv))
+            if iv == 0:
+                # 前缘上下表面交于同一点，必须共用顶点，网格才能封闭。
+                p = _place_fin_point(g, plan, a, v, 1.0, az)
+                if p[0] > x_max:
+                    p = np.array([x_max, p[1], p[2]])
+                grid[(iu, 0)] = len(verts)
+                verts.append(list(p))
+                continue
+            for side_i, side in enumerate((-1.0, 1.0)):
+                p = _place_fin_point(g, plan, a, v, side, az)
+                if p[0] > x_max:
+                    p = np.array([x_max, p[1], p[2]])
+                grid[(iu, iv, side_i)] = len(verts)
+                verts.append(list(p))
+
+    def vid(iu, iv, side):
+        if iv == 0:
+            return grid[(iu, 0)]
+        return grid[(iu, iv, 0 if side < 0.0 else 1)]
+
+    for iu in range(nu):
+        for iv in range(nv):
+            for side in (-1.0, 1.0):
+                v00 = vid(iu, iv, side)
+                v10 = vid(iu + 1, iv, side)
+                v11 = vid(iu + 1, iv + 1, side)
+                v01 = vid(iu, iv + 1, side)
+                if len({v00, v10, v11, v01}) < 3:
+                    continue
+                if side > 0.0:
+                    faces.append((v00, v10, v11))
+                    faces.append((v00, v11, v01))
+                else:
+                    faces.append((v00, v11, v10))
+                    faces.append((v00, v01, v11))
+
+    ring = (
+        [(0, iv) for iv in range(nv)]
+        + [(iu, nv) for iu in range(nu)]
+        + [(nu, iv) for iv in range(nv, 0, -1)]
+        + [(iu, 0) for iu in range(nu, 0, -1)]
+    )
+    for k in range(len(ring)):
+        i0, j0 = ring[k]
+        i1, j1 = ring[(k + 1) % len(ring)]
+        a_lo, a_hi = vid(i0, j0, -1.0), vid(i0, j0, 1.0)
+        b_lo, b_hi = vid(i1, j1, -1.0), vid(i1, j1, 1.0)
+        if a_lo == a_hi and b_lo == b_hi:
+            continue
+        if a_lo == a_hi:
+            faces.append((a_lo, b_lo, b_hi))
+            continue
+        if b_lo == b_hi:
+            faces.append((a_lo, b_lo, a_hi))
+            continue
+        faces.append((a_lo, b_lo, b_hi))
+        faces.append((a_lo, b_hi, a_hi))
+
+
+def build_mesh(g: MissileGeometry, n_az: int = MESH_AZIMUTH_SEGMENTS) -> tuple[np.ndarray, np.ndarray]:
+    """整弹三角网格（封闭流形：头部收成一点、尾部加端盖、舵面为 NACA 翼型）。"""
+    plans = fin_planforms(g)
+    verts: list[list[float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    # 头部：锥顶倒角球冠 + 圆锥；球冠段多切几刀，网格上能看出倒角
+    R = g.tip_fillet_radius
+    if R > 0.0:
+        xt = g.nose_tangent_x
+        profile_x = [0.25 * xt, 0.5 * xt, 0.75 * xt, xt, g.nose_length]
+    else:
+        profile_x = [g.nose_length]                     # 尖锥：顶点扇形直连到 x = nose_length
+    # 等直圆柱弹身段（尾部与弹身同半径，无尾锥）
+    profile_x += list(np.linspace(g.nose_length, g.total_length, 4)[1:])
+    xs = np.array(sorted(set(profile_x)))
+    rs = g.radius(xs)
+    phi = np.linspace(0, 2 * np.pi, n_az, endpoint=False)
+
+    apex = len(verts)
+    verts.append([0.0, 0.0, 0.0])                      # 头部顶点
+    ring_start = []
+    for x, r in zip(xs, rs):
+        ring_start.append(len(verts))
+        for p in phi:
+            verts.append([float(x), float(r * math.cos(p)), float(r * math.sin(p))])
+    a = ring_start[0]
+    for j in range(n_az):                              # 头锥顶点扇形
+        faces.append((apex, a + j, a + (j + 1) % n_az))
+    for k in range(len(xs) - 1):
+        a, b = ring_start[k], ring_start[k + 1]
+        for j in range(n_az):
+            j2 = (j + 1) % n_az
+            faces.append((a + j, a + j2, b + j2))
+            faces.append((a + j, b + j2, b + j))
+    tail = ring_start[-1]
+    cap_center = len(verts)
+    verts.append([float(g.total_length), 0.0, 0.0])     # 尾端面圆心
+    for j in range(n_az):
+        j2 = (j + 1) % n_az
+        faces.append((cap_center, tail + j2, tail + j))
+
+    for plan in plans.values():
+        for d in _dir_vectors(g.fin_azimuth_deg):
+            add_fin_plate_mesh(
+                g, plan, math.degrees(math.atan2(d[2], d[1])) % 360.0, verts, faces,
+                x_max=g.total_length,
+            )
+    return np.asarray(verts), np.asarray(faces)
+
+
+# --------------------------------------------------------------------------- #
+# 四、几何校验
+# --------------------------------------------------------------------------- #
+def validate(
+    g: MissileGeometry, points: np.ndarray, n_total: int | None = None
+) -> list[tuple[str, bool, str]]:
+    """对点云做几何校验，返回 [(项目, 是否通过, 说明)]。
+
+    n_total 给定时顺带核对点数（不再把 8192 写死，改 --n 也不会误报失败）。
+    """
+    plans = fin_planforms(g)
+    results: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results.append((name, bool(ok), detail))
+
+    n = len(points)
+    x = points[:, 0]
+    r = np.linalg.norm(points[:, 1:], axis=1)
+    az = (np.degrees(np.arctan2(points[:, 2], points[:, 1])) + 360.0) % 360.0
+
+    # 1) 点数与范围
+    expected = n_total if n_total is not None else n
+    check(f"point_count == {expected}", n == expected, f"n = {n}")
+    check(
+        "all x within [0, total_length]",
+        bool(x.min() >= -1e-9 and x.max() <= g.total_length + 1e-9),
+        f"x in [{x.min():.4f}, {x.max():.4f}]",
+    )
+
+    # 2) 每个点都落在弹身表面 / 尾端面 / 舵面实体上
+    on_body = np.abs(r - g.radius(np.clip(x, 0.0, g.total_length))) < TOL_R
+    on_tail_cap = (np.abs(x - g.total_length) < TOL_R) & (r <= g.body_radius + TOL_R)
+
+    fin_hit = np.zeros(n, dtype=bool)
+    fin_group = np.full(n, -1, dtype=int)
+    for gi, (name, plan) in enumerate(plans.items()):
+        for az0 in g.fin_azimuth_deg:
+            dev = np.abs(((az - az0 + 180.0) % 360.0) - 180.0)
+            e_n = _fin_normal_dir(math.radians(az0))        # 周向 = 板厚方向
+            h = points @ e_n                                # 偏离板中面的距离
+            a_gen = r - g.radius(np.clip(x, 0.0, g.total_length))
+            dist = _point_to_trapezoid_dist(x, a_gen, plan)
+            # 方位角容差：板厚 t/2 在半径很小处对应的圆心角可以更大
+            dev_tol = np.degrees(
+                np.arctan2(g.fin_half_thickness_envelope + TOL_A, np.maximum(r, 1e-6))
+            ) + TOL_AZ_SHEET
+            hit = (
+                (dev < np.minimum(dev_tol, 15.0))
+                & (np.abs(h) <= g.fin_half_thickness_envelope + TOL_R)
+                & (dist <= g.fin_half_thickness_envelope + TOL_A)
+            )
+            newly = hit & ~fin_hit
+            fin_group[newly] = gi
+            fin_hit |= hit
+
+    stray = ~(on_body | on_tail_cap | fin_hit)
+    check(
+        "all points on body / tail cap / fin surface",
+        int(stray.sum()) == 0,
+        f"{int(stray.sum())} stray points",
+    )
+    for gi, name in enumerate(plans):
+        check(
+            f"{name} fin group has points",
+            int((fin_group == gi).sum()) > 0,
+            f"{int((fin_group == gi).sum())} points",
+        )
+
+    # 3) 每组 4 片、90° 等距
+    for gi, name in enumerate(plans):
+        m = fin_group == gi
+        base = az[m] % 90.0
+        base = np.where(base > 45.0, base - 90.0, base)
+        dev = np.abs(base)
+        dev_tol = np.degrees(
+            np.arctan2(g.fin_half_thickness_envelope + TOL_A, np.maximum(r[m], 1e-6))
+        ) + TOL_AZ_SHEET
+        near_edge = dev <= np.degrees(
+            np.arctan2(2.0 * g.fin_half_thickness_envelope + TOL_A, np.maximum(r[m], 1e-6))
+        ) + TOL_AZ_SHEET
+        quadrants = sorted(set(((az[m] // 90.0) % 4).astype(int).tolist()))
+        check(
+            f"{name} fins: 4 fins at 90 deg spacing",
+            len(quadrants) == 4 and bool(near_edge.all()) and float((dev <= dev_tol).mean()) > 0.5,
+            f"quadrants={quadrants} max_az_dev={dev.max():.2f} deg",
+        )
+
+    # 4) 侧视直角梯形
+    for name, plan in plans.items():
+        check(
+            f"{name} planform is right trapezoid (TE vertical)",
+            plan.is_right_trapezoid(),
+            f"x_root_te={plan.x_root_te:.4f} x_tip_te={plan.x_tip_te:.4f}",
+        )
+        check(
+            f"{name} chord c_root > c_tip",
+            plan.c_root > plan.c_tip,
+            f"c_root={plan.c_root:.3f} > c_tip={plan.c_tip:.3f}",
+        )
+
+    # 5) 舵面轴向位置：两组各自独立（"前沿到弹头顶点的轴向距离"），
+    #    不再要求后组后缘与弹尾对齐，只要求后缘不伸出弹尾
+    for name, plan in plans.items():
+        check(
+            f"{name} fin: trailing edge inside body (x_root_te <= total_length)",
+            plan.x_root_te <= g.total_length + 1e-9,
+            f"x_root_te={plan.x_root_te:.4f} <= total_length={g.total_length:.4f} "
+            f"(le={plan.x_root_le:.3f} + c_root={plan.c_root:.3f})",
+        )
+    fwd_plan, aft_plan = plans["forward"], plans["aft"]
+    check(
+        "fin groups do not overlap axially",
+        fwd_plan.x_root_te <= aft_plan.x_root_le + 1e-9
+        or aft_plan.x_root_te <= fwd_plan.x_root_le + 1e-9,
+        f"forward [{fwd_plan.x_root_le:.3f}, {fwd_plan.x_root_te:.3f}], "
+        f"aft [{aft_plan.x_root_le:.3f}, {aft_plan.x_root_te:.3f}]",
+    )
+
+    # 6) 弹身轮廓
+    check("body: nose radius -> 0 at x=0", abs(float(g.radius(0.0))) < 1e-12, "r(0) = 0")
+
+    # 长度分段：total_length 本身就是完整弹长，圆柱段 = total_length - nose_length
+    check(
+        "length: total_length > nose_length (cylinder section > 0)",
+        g.midbody_length > 0.0,
+        f"total_length={g.total_length:g} = nose_length({g.nose_length:g}) + "
+        f"midbody_length({g.midbody_length:g})",
+    )
+
+    # 圆柱段取两处抽样（不写死 0.3：头锥变长后 0.3 会落在圆锥上）
+    x_cyl = [0.5 * (g.nose_length + g.total_length), g.total_length]
+    r_cyl = [float(g.radius(xi)) for xi in x_cyl]
+    check(
+        "body: constant-radius cylinder over [nose_length, total_length]",
+        all(abs(ri - g.body_radius) < 1e-12 for ri in r_cyl),
+        f"r({x_cyl[0]:.2f})={r_cyl[0]:.4f}, r({x_cyl[1]:.2f})={r_cyl[1]:.4f}, "
+        f"r_body={g.body_radius:.4f}",
+    )
+    check(
+        "body: tail radius == body radius (no boat-tail)",
+        abs(float(g.radius(g.total_length)) - g.body_radius) < 1e-12,
+        f"r_tail={float(g.radius(g.total_length)):.3f} == r_body={g.body_radius:.3f}",
+    )
+
+    # 7) 锥顶倒角（球冠与圆锥相切、无折点）
+    R = g.tip_fillet_radius
+    xt = g.nose_tangent_x
+    if R > 0.0:
+        # 倒角球球心 (R, 0) 到圆锥母线的距离应等于 R（相切）
+        m = g.nose_cone_slope
+        dist_axis = abs(g.body_radius - m * (g.nose_length - R)) / math.sqrt(1.0 + m * m)
+        check(
+            "nose: tip fillet is tangent to the cone (distance == R)",
+            abs(dist_axis - R) < 1e-9 and 0.0 < xt < g.nose_length,
+            f"R={R:.6f} dist={dist_axis:.6f} x_t={xt:.6f} m={m:.6f}",
+        )
+        # 切点处斜率连续（球冠解析斜率应等于圆锥斜率，即无折点）
+        s_cap = (R - xt) / math.sqrt(max(2.0 * R * xt - xt * xt, 1e-300))
+        check(
+            "nose: fillet/cone slopes match at the tangent point",
+            abs(s_cap - m) < 1e-6,
+            f"slope_cap={s_cap:.6f} slope_cone={m:.6f}",
+        )
+        # 球冠段母线应与解析球面一致
+        xs_cap = np.linspace(0.0, xt, 16)
+        err = float(np.max(np.abs(g.radius(xs_cap) - np.sqrt(np.clip(2 * R * xs_cap - xs_cap**2, 0, None)))))
+        check("nose: tip cap follows the sphere profile", err < 1e-9, f"max err = {err:.2e}")
+    else:
+        check("nose: sharp cone (fillet disabled)", True, "R = 0")
+
+    # 8) 舵面根部应落在圆柱段上（避免舵面长在圆锥头上）
+    check(
+        "fin roots lie on the cylindrical body section",
+        all(p.x_root_le >= g.nose_length for p in plans.values()),
+        ", ".join(f"{k}: x_root_le={p.x_root_le:.3f} vs nose_length={g.nose_length:.3f}"
+                  for k, p in plans.items()),
+    )
+
+    # 参考网格自检（封闭流形 + 无退化面）
+    verts, faces = build_mesh(g)
+    tri = verts[faces]
+    area = 0.5 * np.linalg.norm(
+        np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1
+    )
+    edge_use: dict[tuple[int, int], int] = {}
+    for f in faces:
+        for a_, b_ in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0])):
+            key = (min(a_, b_), max(a_, b_))
+            edge_use[key] = edge_use.get(key, 0) + 1
+    check(
+        "reference mesh is a closed manifold",
+        all(v == 2 for v in edge_use.values()) and float(area.min()) > 1e-12,
+        f"{len(verts)} verts / {len(faces)} faces / min area {area.min():.2e}",
+    )
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# 五、导出
+# --------------------------------------------------------------------------- #
+def write_ply_binary(path: Path, points: np.ndarray) -> None:
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        "comment missile point cloud generated by scripts/04_pointnet_demo.py\n"
+        f"element vertex {len(points)}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "end_header\n"
+    )
+    path.write_bytes(header.encode("ascii") + np.ascontiguousarray(points, dtype="<f4").tobytes())
+
+
+def write_text(path: Path, lines) -> None:
+    """按 LF 写文本，保证跨平台可复现（仓库按 LF 存储）。"""
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+
+
+def write_obj(path: Path, verts: np.ndarray, faces: np.ndarray) -> None:
+    lines = ["# missile surface (same geometry as the point cloud)"]
+    lines += [f"v {v[0]:.8f} {v[1]:.8f} {v[2]:.8f}" for v in verts]
+    lines += [f"f {f[0] + 1} {f[1] + 1} {f[2] + 1}" for f in faces]
+    write_text(path, lines)
+
+
+def load_points(path: Path) -> np.ndarray:
+    """读取本脚本生成的二进制 PLY 或 XYZ。"""
+    if path.suffix.lower() == ".ply":
+        raw = path.read_bytes()
+        end = raw.index(b"end_header")
+        header = raw[:end].decode("ascii", errors="ignore")
+        n = 0
+        for line in header.splitlines():
+            if line.startswith("element vertex"):
+                n = int(line.split()[-1])
+        body = raw[raw.index(b"\n", end) + 1:]
+        return np.frombuffer(body, dtype="<f4", count=n * 3).reshape(n, 3).astype(float)
+    return np.loadtxt(path, dtype=float).reshape(-1, 3)
+
+
+def render_preview(points: np.ndarray, path: Path) -> bool:
+    """渲染侧视 / 尾向 / 3D 三视图 PNG；缺 matplotlib 时跳过。"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:                                  # pragma: no cover
+        print(f"[warn] skip preview (matplotlib unavailable: {exc})")
+        return False
+
+    x, y, z = points[:, 0], points[:, 1], points[:, 2]
+    # 中文字体不可靠，图内文字统一用英文
+    fig = plt.figure(figsize=(16, 5.2), dpi=130)
+    ax1 = fig.add_subplot(1, 3, 1)
+    ax1.scatter(x, z, s=1.6, c=np.hypot(y, z), cmap="viridis", linewidths=0)
+    ax1.set_title("side view (X-Z): right-trapezoid fins")
+    ax1.set_xlabel("x / m")
+    ax1.set_ylabel("z / m")
+    ax1.set_aspect("equal")
+    ax1.grid(alpha=0.25)
+
+    ax2 = fig.add_subplot(1, 3, 2)
+    ax2.scatter(y, z, s=1.6, c=x, cmap="plasma", linewidths=0)
+    ax2.set_title("axial view (Y-Z): 4 fins @ 90 deg")
+    ax2.set_xlabel("y / m")
+    ax2.set_ylabel("z / m")
+    ax2.set_aspect("equal")
+    ax2.grid(alpha=0.25)
+
+    ax3 = fig.add_subplot(1, 3, 3, projection="3d")
+    ax3.scatter(x, y, z, s=1.0, c=x, cmap="plasma", linewidths=0)
+    ax3.set_title("3D")
+    ax3.set_xlabel("x")
+    ax3.set_ylabel("y")
+    ax3.set_zlabel("z")
+    try:
+        ax3.set_box_aspect((np.ptp(x), np.ptp(y), np.ptp(z)))
+    except Exception:
+        pass
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    return True
+
+
+def render_nose_profile(g: MissileGeometry, path: Path) -> bool:
+    """渲染头锥母线放大图（核对锥顶倒角）；缺 matplotlib 时跳过。"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:                                  # pragma: no cover
+        print(f"[warn] skip nose profile (matplotlib unavailable: {exc})")
+        return False
+
+    R = g.tip_fillet_radius
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), dpi=140)
+
+    # 左：锥顶放大（球冠母线 + 相切圆锥 + 尖锥参考线）
+    ax = axes[0]
+    x_tip = min(g.nose_length, max(4.0 * R, 0.05))
+    x = np.linspace(0.0, x_tip, 600)
+    ax.plot(x, g.radius(x), "k-", lw=2, label="r(x)")
+    ax.plot(x, g.body_radius * x / g.nose_length, "r--", lw=1, label="ideal sharp cone")
+    if R > 0.0:
+        t = np.linspace(0.0, np.pi / 2.0, 120)
+        ax.plot(R - R * np.cos(t), R * np.sin(t), "g:", lw=1, label=f"fillet sphere R={R:.4f}")
+        ax.plot([g.nose_tangent_x], [g.nose_tangent_r], "bo", ms=6,
+                label=f"tangent x_t={g.nose_tangent_x:.4f}")
+    ax.set_title("nose tip zoom (cone + tip fillet)")
+    ax.set_xlabel("x / m")
+    ax.set_ylabel("r / m")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    ax.set_aspect("equal")
+
+    # 右：整弹母线（上下对称），标出头锥/圆柱交界
+    ax = axes[1]
+    xa = np.linspace(0.0, g.total_length, 900)
+    ra = g.radius(xa)
+    ax.plot(xa, ra, "k-", lw=2)
+    ax.plot(xa, -ra, "k-", lw=2)
+    ax.axvline(g.nose_length, color="r", ls=":", lw=1,
+               label=f"nose/cylinder joint x={g.nose_length:g}")
+    ax.axhline(0.0, color="gray", lw=0.6)
+    ax.set_title("full body: cone nose + constant-radius cylinder")
+    ax.set_xlabel("x / m")
+    ax.set_ylabel("r / m")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    ax.set_aspect("equal")
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# 六、入口
+# --------------------------------------------------------------------------- #
+def missile_from_main_dimensions(values: dict) -> MissileGeometry:
+    """用总表的 11 个主尺寸构造外形。D 是直径，内部半径取 D/2。"""
+    missing = [key for key in MAIN_DIMENSIONS if key not in values]
+    if missing:
+        raise ValueError("缺少主尺寸：" + ", ".join(missing))
+    diameter = float(values["D"])
+    if not math.isfinite(diameter) or diameter <= 0:
+        raise ValueError("D 必须是大于 0 的有限数。")
+    return MissileGeometry(
+        total_length=float(values["L"]),
+        body_radius=diameter / 2.0,
+        nose_length=float(values["L_N"]),
+        fwd_x_root_le=float(values["L_W"]),
+        fwd_c_root=float(values["C_RW"]),
+        fwd_c_tip=float(values["C_TW"]),
+        fwd_span=float(values["B_W"]),
+        aft_x_root_le=float(values["L_F"]),
+        aft_c_root=float(values["C_RF"]),
+        aft_c_tip=float(values["C_TF"]),
+        aft_span=float(values["B_F"]),
+    )
+
+
+def main_dimensions_from_cases(geometry_id: str) -> dict:
+    """从输入总表取出该 geometry_id 的 11 个主尺寸。各行必须一致。"""
+    if not CASES_CSV.is_file():
+        raise FileNotFoundError(f"找不到输入总表：{CASES_CSV}")
+    with CASES_CSV.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        header = reader.fieldnames or []
+        missing = [key for key in ("geometry_id", *MAIN_DIMENSIONS) if key not in header]
+        if missing:
+            raise ValueError("输入总表缺少列：" + ", ".join(missing))
+        rows = [row for row in reader if (row.get("geometry_id") or "").strip() == geometry_id]
+    if not rows:
+        raise ValueError(f"输入总表里没有 geometry_id={geometry_id!r}。")
+    parsed = []
+    for row in rows:
+        values = {}
+        for key in MAIN_DIMENSIONS:
+            raw = (row.get(key) or "").strip()
+            if raw == "":
+                raise ValueError(f"geometry_id {geometry_id} 的 {key} 是空的。")
+            values[key] = float(raw)
+        parsed.append(values)
+    first = parsed[0]
+    for other in parsed[1:]:
+        if any(abs(first[key] - other[key]) > 1e-9 for key in MAIN_DIMENSIONS):
+            raise ValueError(f"geometry_id {geometry_id} 的各行主尺寸不一致。")
+    return first
+
+
+def main_dimensions_from_params(path: Path) -> dict:
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    missing = [key for key in MAIN_DIMENSIONS if key not in raw]
+    if missing:
+        raise ValueError(f"{path.name} 缺少主尺寸：" + ", ".join(missing))
+    return {key: float(raw[key]) for key in MAIN_DIMENSIONS}
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="导弹外形点云生成 + 校验 + 预览（PointNet 演示）")
+    ap.add_argument("-n", "--n-points", type=int, default=DEFAULT_N_POINTS, help=f"点数（默认 {DEFAULT_N_POINTS}）")
+    ap.add_argument("--seed", type=int, default=DEFAULT_SEED, help="随机种子（固定即完全复现）")
+    ap.add_argument("--gauss", type=float, default=DEFAULT_GAUSS, help="高斯噪声标准差（米），默认无噪声")
+    ap.add_argument("--outdir", type=Path, default=None, help="输出目录，默认 data_lib/datasets/point_clouds")
+    ap.add_argument("--tag", type=str, default=None, help="文件名标签。给出几何标识时默认 <geometry_id>_pointcloud")
+    ap.add_argument("--geometry-id", default=None, help="从 data_lib/inputs/cases.csv 读取该几何的 11 个主尺寸")
+    ap.add_argument("--params", type=Path, default=None, help="含 11 个主尺寸的 JSON，字段名与总表相同")
+    ap.add_argument("--no-mesh", action="store_true", help="不导出参考网格 obj")
+    ap.add_argument("--preview", action="store_true", help="渲染三视图 PNG")
+    ap.add_argument("--nose-profile", action="store_true", help="渲染头锥母线放大图（核对锥顶倒角）")
+    ap.add_argument("--skip-validate", action="store_true", help="跳过几何校验")
+    return ap.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    geometry_id = (args.geometry_id or "").strip()
+    main_dimensions = None
+    try:
+        if args.params and geometry_id:
+            raise ValueError("--params 和 --geometry-id 只能选一个。")
+        if args.params:
+            main_dimensions = main_dimensions_from_params(args.params)
+            geometry_id = geometry_id or args.params.stem
+        elif geometry_id:
+            main_dimensions = main_dimensions_from_cases(geometry_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[ERROR] {exc}")
+        return 1
+    g = missile_from_main_dimensions(main_dimensions) if main_dimensions else MissileGeometry()
+    plans = fin_planforms(g)
+    if args.tag:
+        tag = args.tag
+    elif geometry_id:
+        tag = f"{geometry_id}_pointcloud"
+    else:
+        tag = DEFAULT_TAG_TEMPLATE.format(n_points=args.n_points)
+    outdir = Path(args.outdir) if args.outdir else OUTPUT_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    points, normals, labels, info = build_pointcloud(
+        g, n_total=args.n_points, seed=args.seed, noise=args.gauss
+    )
+
+    ply_path = outdir / OUTPUT_FILES["ply"].format(tag=tag)
+    xyz_path = outdir / OUTPUT_FILES["xyz"].format(tag=tag)
+    labels_path = outdir / OUTPUT_FILES["labels"].format(tag=tag)
+    write_ply_binary(ply_path, points)
+    write_text(xyz_path, (f"{p[0]:.8f} {p[1]:.8f} {p[2]:.8f}" for p in points))
+    write_text(labels_path, (str(int(v)) for v in labels))
+
+    mesh_path = outdir / (f"{tag}.obj" if geometry_id else OUTPUT_FILES["mesh"])
+    if not args.no_mesh:
+        verts, faces = build_mesh(g)
+        write_obj(mesh_path, verts, faces)
+
+    n = len(points)
+    radial = np.linalg.norm(points[:, 1:], axis=1)
+    checks = {}
+    if not args.skip_validate:
+        results = validate(g, points, n_total=args.n_points)
+        checks = {name: ok for name, ok, _ in results}
+
+    meta = {
+        "description": "missile-shaped point cloud: conical nose with a spherical tip fillet "
+                       "+ constant-radius cylinder body (tail radius == body radius, no boat-tail), "
+                       "two fin groups (4 right-trapezoid fins each, 90 deg apart, NACA section). "
+                       "Each fin group is positioned by its leading-edge axial distance from the "
+                       "nose tip (fwd_x_root_le / aft_x_root_le); the aft group is NOT required "
+                       "to be flush with the tail.",
+        "fin_section": g.naca.as_dict(),
+        "generator": "scripts/04_pointnet_demo.py",
+        "project_root": str(PROJECT_ROOT),
+        "geometry": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(g).items()},
+        "main_dimensions": main_dimensions,
+        "fin_planforms": {
+            k: {
+                "x_root_le": v.x_root_le, "x_root_te": v.x_root_te,
+                "x_tip_le": v.x_tip_le, "x_tip_te": v.x_tip_te,
+                "c_root": v.c_root, "c_tip": v.c_tip, "span": v.span,
+                "sweep_le": v.sweep_le, "area_one_fin_m2": v.area(),
+                "is_right_trapezoid": v.is_right_trapezoid(),
+            }
+            for k, v in plans.items()
+        },
+        "sampling": {
+            "mode": "area-weighted uniform",
+            "points_per_group": info["points_per_group"],
+            "points_per_part": info["points_per_part"],
+            "areas_m2": info["areas_m2"],
+            "seed": args.seed,
+            "noise_sigma": args.gauss,
+        },
+        "part_labels": {str(k): v for k, v in PART_LABELS.items()},
+        "bbox_min": points.min(axis=0).tolist(),
+        "bbox_max": points.max(axis=0).tolist(),
+        "r_max": float(radial.max()),
+        "checks": checks,
+        "files": {
+            "ply": ply_path.name,
+            "xyz": xyz_path.name,
+            "labels": labels_path.name,
+            "mesh": None if args.no_mesh else mesh_path.name,
+        },
+    }
+    meta_path = outdir / OUTPUT_FILES["meta"].format(tag=tag)
+    meta_path.write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
+    )
+
+    print(f"[OK] points = {n}  (requested {args.n_points})")
+    print(f"     fin section = NACA {g.naca.designation_body()}")
+    print(f"     bbox min = {np.round(points.min(axis=0), 4).tolist()}")
+    print(f"     bbox max = {np.round(points.max(axis=0), 4).tolist()}")
+    print(f"     r_max    = {radial.max():.4f}  (aft-fin tip radius)")
+    print(f"     per-part: " + ", ".join(f"{k}={v}" for k, v in info["points_per_part"].items()))
+    for name, p in plans.items():
+        print(
+            f"     fin[{name}]: root_x=[{p.x_root_le:.3f},{p.x_root_te:.3f}] "
+            f"tip_x=[{p.x_tip_le:.3f},{p.x_tip_te:.3f}] span={p.span:.3f} "
+            f"c_root={p.c_root:.3f} c_tip={p.c_tip:.3f} right_trapezoid={p.is_right_trapezoid()}"
+        )
+    for path in (ply_path, xyz_path, labels_path, meta_path):
+        print(f"     -> {path}")
+    if not args.no_mesh:
+        print(f"     -> {mesh_path}")
+
+    if not args.skip_validate:
+        width = max(len(name) for name, _, _ in results)
+        print("--- geometry validation ---")
+        for name, ok, detail in results:
+            print(f"[{'PASS' if ok else 'FAIL'}] {name.ljust(width)}  {detail}")
+        failed = [name for name, ok, _ in results if not ok]
+        if failed:
+            print(f"RESULT: FAILED ({len(failed)}): {failed}")
+            return 1
+        print(f"RESULT: ALL {len(results)} CHECKS PASSED")
+
+    if args.preview:
+        png_path = outdir / (f"{tag}_preview.png" if geometry_id else OUTPUT_FILES["preview"])
+        if render_preview(points, png_path):
+            print(f"     -> {png_path}")
+    if args.nose_profile:
+        prof_path = outdir / (f"{tag}_nose_profile.png" if geometry_id else OUTPUT_FILES["nose_profile"])
+        if render_nose_profile(g, prof_path):
+            print(f"     -> {prof_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

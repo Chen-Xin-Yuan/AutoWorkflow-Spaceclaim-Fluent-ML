@@ -42,8 +42,8 @@ DATCOM 建模约定（改动前务必读）：
        力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    9. 翼型剖面沿用 datcom_bin/for005.dat 历史模板的 HEX 参数
-       （默认按弦长归一的薄翼剖面），一般无需改动。
+    9. 舵面翼型是 NACA 四位数，五个参数定义在 scripts/naca_section.py。
+       两套舵面共用同一翼型；点云脚本导入同一份参数。
 
 运行产物（data_lib/runs/low/<geometry_id>/，工作目录里的协议文件名不留在这里）：
     <geometry_id>_for005.dat             本次实际喂给 DATCOM 的输入
@@ -76,6 +76,8 @@ import unicodedata
 from datetime import datetime
 
 import pandas as pd
+
+from naca_section import NACA_SECTION, resolve_naca_section
 
 # =============================================================================
 # 1. 用户配置区
@@ -177,14 +179,9 @@ CRUCIFORM_COUNT = 4
 # 力矩参考点轴向位置（m）。None = 取 L/2（弹身中点）。
 XCG_M = None
 
-# 舵面剖面参数（DATCOM $FINSET 的 HEX 剖面，沿用历史模板；数值为 DATCOM 原生约定）
-FIN_SECTION = {
-    "SECTYP": "HEX",
-    "LER": 0.015,      # 前缘半径
-    "ZUPPER": 0.02238,  # 上表面最大厚度
-    "LMAXU": 0.238,    # 最大厚度位置
-    "LFLATU": 0.524,   # 上表面平顶结束位置
-}
+# 舵面翼型。五个默认值在 scripts/naca_section.py 顶部，点云脚本使用同一份。
+# 演示算例可在 CASES 里用 "fin_section" 字典覆盖其中几项，键名与 NacaSection 字段相同。
+FIN_SECTION = NACA_SECTION
 
 # -----------------------------------------------------------------------------
 # 1.4 算例批量配置（每个元素 = 一个算例 = 结果根下的一个 <name>\ 目录）
@@ -467,9 +464,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     if not alpha_list:
         raise ValueError("ALPHA_LIST 不能为空。")
 
-    section = {"SECTYP": "HEX", "LER": 0.015, "ZUPPER": 0.02238,
-               "LMAXU": 0.238, "LFLATU": 0.524}
-    section.update(fin_section or {})
+    section = resolve_naca_section(FIN_SECTION if fin_section is None else fin_section)
 
     g = geometry
     radius = g["D"] / 2.0
@@ -525,7 +520,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         tip_le = le_m + _fin_le_offset(chord_root, chord_tip, le_mode)
         block = [
             f"$FINSET{index}",
-            f" SECTYP = {section['SECTYP']},",
+            " SECTYP = NACA,",
             f" NPANEL = {_num(cruciform_count)},",
             f" PHIF = {_num_list(phif)},",
             f" XLE = {_num(le_m * M_TO_IN)},",
@@ -534,10 +529,6 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             f" SWEEP = {_num(sweep)},",
             # 本机 DATCOM 对第二组 STA=2.0 会直接终止且无输出，固定写 1.0
             " STA = 1.0,",
-            f" LER = {_num_list([section['LER']] * cruciform_count)},",
-            f" ZUPPER = {_num_list([section['ZUPPER']] * cruciform_count)},",
-            f" LMAXU = {_num_list([section['LMAXU']] * cruciform_count)},",
-            f" LFLATU = {_num_list([section['LFLATU']] * cruciform_count)},",
             "$END",
         ]
         detail = {
@@ -578,6 +569,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         "DIM IN",      # 长度单位英寸
         "DAMP",        # 输出动导数
         "SAVE",
+        section.control_card(1),
+        section.control_card(2),
     ]
     text = "\n".join(lines) + "\n"
 
@@ -602,6 +595,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             "phif_deg": phif,
             "le_mode": le_mode,
             "body_radius_m": radius,
+            "fin_section": section.as_dict(),
             "fins": [front_fin, rear_fin],
         },
     }
@@ -619,7 +613,7 @@ def _value_str(value):
     if isinstance(value, bool):
         return "T" if value else "F"
     if isinstance(value, str):
-        return value          # 原样写入（如 'HEX'、'BODY'）
+        return value          # 原样写入（如 'NACA'、'BODY'）
     return _num(value)
 
 
@@ -1354,6 +1348,11 @@ def render_geometry_report(case_name, meta, for005_text, checks):
         f"PHIF = {', '.join(f'{a:g}' for a in d['phif_deg'])} 度。")
     add("  · 弹体 = 圆锥头部 + 等直径圆柱段；每道舵按 NPANEL = "
         f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
+    section = d["fin_section"]
+    add(f"  · 舵面翼型 NACA {section['designation']}："
+        f"最大中弧 {section['camber_percent']:g}% 弦长，位于 {section['camber_location_tenths'] / 10:.1f} 弦长；"
+        f"最大厚度 {section['thickness_percent']:g}% 弦长，位于 {section['max_thickness_fraction']:.1f} 弦长；"
+        f"前缘半径指数 {section['le_radius_index']}。")
     add("")
     add("一、输入的 11 个主尺寸（README 参数，单位 m）")
     for key in REQUIRED_GEOMETRY_KEYS:
@@ -1665,9 +1664,12 @@ def print_geometry_brief(meta):
     g = meta["geometry_m"]
     d = meta["derived"]
     ref = meta["reference"]
+    section = d["fin_section"]
     print(f"    几何: L = {g['L']:.3f} m, D = {g['D']:.3f} m, L_N = {g['L_N']:.3f} m, "
           f"SREF = {ref['sref_m2']:.6f} m², LREF = {ref['lref_m']:.3f} m, "
           f"XCG = {ref['xcg_m']:.3f} m")
+    print(f"    翼型: NACA {section['designation']}，"
+          f"前缘半径/弦长 = {section['leading_edge_radius_over_chord']:.5f}")
     for fin in d["fins"]:
         print(f"    {fin['name']}: XLE = {fin['root_le_m']:.3f} m, "
               f"根弦 {fin['root_chord_m']:.3f} m, 梢弦 {fin['tip_chord_m']:.3f} m, "

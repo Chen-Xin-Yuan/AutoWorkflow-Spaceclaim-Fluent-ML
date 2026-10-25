@@ -1,10 +1,10 @@
 # AGENTS.md — DATCOM 协作规范
 
-给所有 AI 编码代理（Claude Code / DSH 等）修改本项目代码时的行为准则，动代码前先通读。
+给所有 AI 编码代理（Claude Code / DSH / Codex等）修改本项目代码时的行为准则，动代码前先通读。
 
 ## 布局速览
 - `scripts/`：Python 代码。`01_batch_datcom.py` 读取 `data_lib/inputs/cases.csv`，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸并写点云。另有 `02_ml_train.py`、`03_plot_result.py`、`datcom_parser.py`。
-- `datcom_bin/`（datcom.exe、for005.dat 模板）、`outputs/` `docs/` `fluent_case/` `notebook/` 等：数据/产物，**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。本项目的 `runs/` 只是改名前的旧结果目录。
+- `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。本项目的 `runs/` 只是改名前的旧结果目录。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 
 ## 路径约定：禁止写死绝对路径（项目文件夹可整体移动）
