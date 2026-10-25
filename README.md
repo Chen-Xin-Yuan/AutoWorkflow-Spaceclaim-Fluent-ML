@@ -6,7 +6,7 @@
 
 ### 几何参数定义与范围
 
-本文使用下列 11 个主尺寸描述几何，长度单位统一为米（m）。参数名与建模输入 JSON 的字段一致。
+外形用 14 个几何参数描述：下面 11 个主尺寸，以及随后 3 个舵面翼型参数。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，定义在 `DATCOM/scripts/naca_section.py`，点云脚本读取同一份。
 
 | 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
 |---|---|---|---|---|
@@ -25,6 +25,16 @@
 `—` 表示原图未给出上下限；图中对 `L_N`、`L`、`D` 仅列出基准值，对其余 8 项给出设计范围。`L_W`、`L_F` 在当前建模程序中均指从弹尖到弹体表面处舵面可见前缘的轴向距离。
 
 表中保留原图的设计范围。当前建模程序会将小于 0.001 m 的非负梢弦长自动修正为 0.001 m，具体建模约定见 [SpaceClaim 参数化建模说明](spaceclaim/README.md#参数化建模)。
+
+舵面翼型是对称 NACA 四位数，弯度固定为 0，中弧与弦线重合。三个参数的允许值来自翼型编码。基准值就是 `naca_section.py` 的默认值。控制卡写法见 [DATCOM 说明](DATCOM/README.md) 的「四、舵面翼型」。
+
+| 设计变量 | 定义 | 允许值 | 基准 |
+|---|---|---|---|
+| `thickness_percent` | 最大厚度，占弦长的百分数；只沿厚度方向缩放 | 大于 0、小于 40；写卡时四舍五入到 0.01 | 4.48 |
+| `le_radius_index` | 前缘半径指数。0 是尖前缘，6 是标准圆前缘，再大更钝 | 整数 0–9 | 6 |
+| `max_thickness_tenths` | 最大厚度距前缘的弦向位置，单位是 1/10 弦长 | 2、3、4、5、6 | 3 |
+
+SpaceClaim 使用上表三个翼型参数给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/naca_section.py` 相同。
 
 ### 来流参数与工况组合
 
@@ -76,7 +86,7 @@
 - `依赖` / `生成`：安装或运行产生的目录，**不纳入版本管理，不要手工编辑**，由 `.gitignore` 排除；
 - `预留`：只建立目录与数据约定，尚无已验证实现。
 
-工作区根目录本身就是一个 Git 仓库（分支 `master`，尚无提交）。`spaceclaim`、`fluent_meshing`、`experiments/autoCFD` 已不再是独立仓库，版本控制集中在根目录，排除规则见 `.gitignore`；迁移前的仓库 bundle 仍保留在 `archive/snapshot-pre-recovery-20261015T084726Z/`。下面每个目录都有自己的 `README.md` 说明其直接下级的作用；目录结构与 README 必须同步更新。
+工作区根目录本身就是一个 Git 仓库（分支 `main`）。`spaceclaim`、`fluent_meshing`、`experiments/autoCFD` 已不再是独立仓库，版本控制集中在根目录，排除规则见 `.gitignore`；迁移前的仓库 bundle 仍保留在 `archive/snapshot-pre-recovery-20261015T084726Z/`。下面每个目录都有自己的 `README.md` 说明其直接下级的作用；目录结构与 README 必须同步更新。
 
 ### `spaceclaim/` — SpaceClaim 文档检索 MCP server 与参数化建模
 
@@ -130,9 +140,9 @@
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `inputs/` | 目录 | 参数与原始输入：`cases.csv`（当前 4 行试算，`geometry_id` 暂为 `1`）、`missile_params_example.json`、`params_mine.json` |
+| `inputs/` | 目录 | 参数与原始输入：`cases.csv` 的几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`）。翼型三项在 `DATCOM/scripts/naca_section.py`，几何参数共 14 个。另有 `missile_params_example.json`、`params_mine.json` |
 | `queues/` | 目录 | 阶段队列与训练轮次：`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`。记录仍为空 |
-| `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，点数和最终格式仍待定 |
+| `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，外形由 14 个几何参数决定，点数和最终格式仍待定 |
 | `runs/` | 目录 | 高保真 `high/<run-id>/<阶段>/`，低保真 `low/<geometry_id>/`。运行产物不入库，说明文件入库 |
 | `datcom_data/` | 生成 | 早先 DATCOM 算例结果，保留作历史记录，不入库 |
 | `legacy/` | 目录 | 迁移前的历史产物（`spaceclaim/`、`fluent_meshing/`）与 `migration-manifest.json` 迁移清单 |
@@ -191,23 +201,22 @@ python DATCOM/scripts/01_batch_datcom.py
 
 一次调用通过验收，要同时满足这三条：几何核对报告里的自检都已通过；系数表行数等于这次计算的工况数；每一行的马赫数、攻角和高度都能对上总表。通过后，该几何、该高度下这些工况在 `datcom.json` 里改为已完成。子智能体按队列领取仍待接入，脚本现在可以按总表直接运行。
 
-同一几何再跑时，按 `geometry_id` 命名的归档由这次调用覆盖。`{run_id}_datcom.csv` 以及系数总表里其它高度的行保留。`run_id` 是 `{geometry_id}__{condition_id}__{altitude_m}`。
+同一几何再跑时，按 `geometry_id` 命名的归档由这次调用覆盖。系数总表里其它高度的行保留，本次工况的行被替换。一个几何只有这一张系数表，各高度、各工况都在里面。
 
 | 归档文件 | 作用 |
 |---|---|
 | `{geometry_id}_for005.dat` | 输入卡片 |
 | `{geometry_id}_for006.dat` | 原始输出 |
 | `{geometry_id}_for022.dat` | 外形 |
-| `{geometry_id}_aero_coefficients.csv` | 该几何各高度的系数总表 |
+| `{geometry_id}_aero_coefficients.csv` | 该几何唯一的系数表：工况编号、来流、11 个主尺寸、舵面翼型（NACA 编号与三个参数）和系数，各高度都合并在这一张表里 |
 | `{geometry_id}_geometry_check.txt` | 几何核对 |
 | `{geometry_id}_geometry_check.png` | 几何核对图 |
 | `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
 | `{geometry_id}_datcom.log` | 该次调用的标准输出和标准错误 |
-| `{run_id}_datcom.csv` | 从系数总表抽出的单个工况 |
 
-点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/`；`DATCOM/scripts/` 里原有的训练和画图脚本留在原处。
+点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型取 `naca_section.py` 的三个参数。这 14 个几何参数一起决定外形。默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
 
-当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。前一次试算把几何标识写成 `sample`，归档仍在 `data_lib/runs/low/sample/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
+当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
 
 ### `ML_training/` — 机器学习（预留）
 
@@ -278,8 +287,8 @@ node .\spaceclaim\scripts\missile.mjs --preset .\data_lib\inputs\missile_params_
 ```
 
 `data_lib/inputs/missile_params_example.json` 填写[几何参数表](#几何参数定义与范围)中的 11 个主尺寸基准值
-（`L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`），其余几何与区域配置沿用旧版默认值，
-仍可逐项覆盖。仅生成脚本的运行记为 `GENERATED`，`runtimeVerified` 恒为 false。
+（`L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`）。翼型使用同一节里的三个基准值。
+其余几何与区域配置沿用旧版默认值，仍可逐项覆盖。仅生成脚本的运行记为 `GENERATED`，`runtimeVerified` 恒为 false。
 
 ## 数据与回退
 
