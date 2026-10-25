@@ -10,4 +10,4 @@
 | `sample/` | 生成 | 前一次试算的归档，不入库，不要手工编辑 |
 | `README.md` | 文件 | 本文件 |
 
-`<geometry_id>/` 和 `.work` 由运行创建，不纳入版本管理。同一几何换一个高度再跑时，按几何标识命名的 `for006` 等归档会被这次调用覆盖；`<run_id>_datcom.csv` 和系数总表里的其它高度会保留。`run_id` 是 `<geometry_id>__<condition_id>__<altitude_m>`。
+`<geometry_id>/` 和 `.work` 由运行创建，不纳入版本管理。同一几何换一个高度再跑时，按几何标识命名的 `for006` 等归档会被这次调用覆盖；系数总表里其它高度的行会保留，本次工况的行被替换。一个几何只保留一张系数表 `<geometry_id>_aero_coefficients.csv`，不再按工况拆成 `<run_id>_datcom.csv`（旧版本留下的这类文件在下次运行时自动清掉）。

@@ -8,8 +8,9 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
       --params / --mach / --alpha / --alt，只在 --demo 时使用，用来演示单组基准几何。
 输出：data_lib/runs/low/<geometry_id>/。datcom.exe 运行时的工作目录是
       data_lib/runs/low/.work，里面仍用 for005.dat、for006.dat、for022.dat。
-      算例写完后，这些文件改名为 <geometry_id>_for005.dat 等，并按工况抽出
-      <run_id>_datcom.csv。run_id = <geometry_id>__<condition_id>__<altitude_m>。
+      算例写完后，这些文件改名为 <geometry_id>_for005.dat 等。气动系数只写一张
+      总表 <geometry_id>_aero_coefficients.csv：同一个 geometry_id 的所有工况
+      （含不同高度）都在这一张表里，不再按工况拆成单行 CSV。
 
 用法：
     python 01_batch_datcom.py                       # 读取输入总表并计算
@@ -42,21 +43,20 @@ DATCOM 建模约定（改动前务必读）：
        力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    9. 舵面翼型是 NACA 四位数，五个参数定义在 scripts/naca_section.py。
+    9. 舵面翼型是对称 NACA 四位数，三个参数定义在 scripts/naca_section.py。
        两套舵面共用同一翼型；点云脚本导入同一份参数。
 
 运行产物（data_lib/runs/low/<geometry_id>/，工作目录里的协议文件名不留在这里）：
     <geometry_id>_for005.dat             本次实际喂给 DATCOM 的输入
     <geometry_id>_for006.dat             DATCOM 原始输出
     <geometry_id>_for022.dat             Tecplot ASCII 几何外形（英尺）
-    <geometry_id>_aero_coefficients.csv  该几何的系数总表，不同高度的工况会合并保留
-    <run_id>_datcom.csv                  从总表抽出的单工况一行
+    <geometry_id>_aero_coefficients.csv  该几何唯一的系数表，各高度、各工况都合并在这里
     <geometry_id>_geometry_check.txt     几何模型核对报告
     <geometry_id>_geometry_check.png     几何三视图（脚本自绘，仅供速查）
     <geometry_id>_case_params.json       本算例的几何、来流与派生量快照
     <geometry_id>_datcom.log             datcom.exe 的标准输出和标准错误
     同一 geometry_id 的另一次高度会覆盖上面这些按几何命名的归档；
-    单工况 <run_id>_datcom.csv 和系数总表里的其它高度不会被删掉。
+    系数总表里其它高度的行会保留，不会被覆盖。
 
 输出哪几个系数由顶部 OUTPUT_COEFFICIENTS 决定（默认只要 CL / CD / CM）。
 """
@@ -119,7 +119,9 @@ FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形�
 # 归档文件的叶子名。算例目录里实际文件名是 <算例名>_<叶子名>。
 # .work 里 datcom.exe 仍读写上面的协议原名。
 CSV_NAME = "aero_coefficients.csv"
-CASE_CSV_SUFFIX = "_datcom.csv"
+# 旧版本按工况拆出来的单行表后缀（<run_id>_datcom.csv）。现在不再生成，
+# 这里只用来清理老结果目录里残留的这类文件，避免同一几何的数据继续分散。
+LEGACY_CASE_CSV_SUFFIX = "_datcom.csv"
 PARAMS_NAME = "case_params.json"
 GEOMETRY_TXT_NAME = "geometry_check.txt"   # 几何模型核对报告
 GEOMETRY_PNG_NAME = "geometry_check.png"   # 几何三视图（侧视 / 俯视 / 前视）
@@ -179,7 +181,7 @@ CRUCIFORM_COUNT = 4
 # 力矩参考点轴向位置（m）。None = 取 L/2（弹身中点）。
 XCG_M = None
 
-# 舵面翼型。五个默认值在 scripts/naca_section.py 顶部，点云脚本使用同一份。
+# 舵面翼型。三个默认值在 scripts/naca_section.py 顶部，点云脚本使用同一份。
 # 演示算例可在 CASES 里用 "fin_section" 字典覆盖其中几项，键名与 NacaSection 字段相同。
 FIN_SECTION = NACA_SECTION
 
@@ -1037,21 +1039,25 @@ def write_summary_csv(path, table):
     table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
 
 
-def write_case_csvs(out_dir, table, conditions):
-    """每个工况一行，文件名是 run_id。返回写出的路径。"""
-    written = []
-    if not conditions or "condition_id" not in table.columns:
-        return written
+def remove_stale_case_csvs(out_dir, conditions):
+    """删掉旧版本按工况拆出来的单行表。返回实际删除的文件路径。
+
+    同一个 geometry_id 的数据只保留 <geometry_id>_aero_coefficients.csv 一张表，
+    老结果目录里遗留的 <run_id>_datcom.csv 一并清掉，不再分散。
+    """
+    removed = []
+    if not conditions:
+        return removed
     for item in conditions:
-        matched = table[table["condition_id"] == item["condition_id"]]
-        matched = matched[matched["altitude_m"].astype(str) == item["altitude_text"]]
-        target = os.path.join(out_dir, f"{item['run_id']}{CASE_CSV_SUFFIX}")
-        if matched.empty:
-            print(f"[WARN] 工况 {item['run_id']} 在 DATCOM 结果里没有对应行，未写 {os.path.basename(target)}")
-            continue
-        matched.to_csv(target, index=False, encoding="utf-8-sig", float_format="%.6g")
-        written.append(target)
-    return written
+        target = os.path.join(out_dir, f"{item['run_id']}{LEGACY_CASE_CSV_SUFFIX}")
+        if os.path.isfile(target):
+            try:
+                os.remove(target)
+            except OSError as exc:
+                print(f"[WARN] 无法删除旧的单工况表 {os.path.basename(target)}（{exc}）")
+                continue
+            removed.append(target)
+    return removed
 
 
 _TECPLOT_ZONE = re.compile(r'ZONE\s+T\s*=\s*"([^"]*)"\s*(.*)$', re.IGNORECASE)
@@ -1349,8 +1355,7 @@ def render_geometry_report(case_name, meta, for005_text, checks):
     add("  · 弹体 = 圆锥头部 + 等直径圆柱段；每道舵按 NPANEL = "
         f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
     section = d["fin_section"]
-    add(f"  · 舵面翼型 NACA {section['designation']}："
-        f"最大中弧 {section['camber_percent']:g}% 弦长，位于 {section['camber_location_tenths'] / 10:.1f} 弦长；"
+    add(f"  · 舵面翼型 NACA {section['designation']}（对称）："
         f"最大厚度 {section['thickness_percent']:g}% 弦长，位于 {section['max_thickness_fraction']:.1f} 弦长；"
         f"前缘半径指数 {section['le_radius_index']}。")
     add("")
@@ -1822,15 +1827,15 @@ def run_one_case(case, work_dir):
     shutil.copyfile(for005_path, os.path.join(out_dir, archived_input))
     shutil.copyfile(result_path, os.path.join(out_dir, archived_raw))
 
-    # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数。总表工况再各写一行。
+    # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数。整个几何只写这一张表。
     csv_path = os.path.join(out_dir, archived_filename(name, CSV_NAME))
-    case_csvs = []
+    stale_case_csvs = []
     csv_written = False
     if not df.empty:
         table = attach_case_identity(build_output_table(df, meta), case)
         try:
             write_summary_csv(csv_path, table)
-            case_csvs = write_case_csvs(out_dir, table, case.get("conditions") or [])
+            stale_case_csvs = remove_stale_case_csvs(out_dir, case.get("conditions") or [])
             csv_written = True
         except OSError as exc:
             # 常见原因：CSV 正被 Excel 等程序打开，Windows 上会拒绝写入
@@ -1844,6 +1849,9 @@ def run_one_case(case, work_dir):
         status = append_coefficient_check(geom_txt, df)
         if status:
             print(f"    {status}")
+        if stale_case_csvs:
+            print(f"    已清理旧版单工况表 {len(stale_case_csvs)} 个，"
+                  f"该几何的系数只保留 {os.path.basename(csv_path)}")
 
     # 7) 参数快照：以后想复现某个算例，看这个文件即可
     params = {
@@ -1864,7 +1872,7 @@ def run_one_case(case, work_dir):
         "expected": expected,
         "out_dir": out_dir,
         "csv_path": csv_path if csv_written else None,
-        "case_csvs": case_csvs,
+        "stale_case_csvs": stale_case_csvs,
         "geometry_txt": geom_txt,
         "geometry_png": geom_png,
         "geometry_tecplot": tecplot_path,
@@ -2156,7 +2164,7 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="结果写入 data_lib/runs/low/<geometry_id>/："
                "<geometry_id>_for005.dat、<geometry_id>_for006.dat、<geometry_id>_for022.dat、"
-               "<geometry_id>_aero_coefficients.csv、<run_id>_datcom.csv、"
+               "<geometry_id>_aero_coefficients.csv、"
                "<geometry_id>_geometry_check.txt、<geometry_id>_geometry_check.png、"
                "<geometry_id>_case_params.json、<geometry_id>_datcom.log。"
                "datcom.exe 运行时使用 data_lib/runs/low/.work 里的 for005.dat。",
@@ -2298,8 +2306,9 @@ def main(argv=None):
     print(f"[INFO] 每个算例一个子目录：{archived_filename('<geometry_id>', FOR005_NAME)}（实际输入）"
           f" + {archived_filename('<geometry_id>', FOR006_NAME)}（原始输出）"
           f" + {archived_filename('<geometry_id>', FOR022_NAME)}（Tecplot 几何外形）")
-    print(f"[INFO] 系数总表与单工况 {CASE_CSV_SUFFIX}，几何核对与参数快照、datcom 日志"
-          f"都以算例名开头。工作目录 {WORK_SUBDIR} 在结束后删除。")
+    print(f"[INFO] 每个几何只写一张系数总表 {archived_filename('<geometry_id>', CSV_NAME)}，"
+          f"各高度、各工况都在同一张表里；几何核对、参数快照和 datcom 日志"
+          f"同样以算例名开头。工作目录 {WORK_SUBDIR} 在结束后删除。")
     return 0 if failed == 0 else 1
 
 

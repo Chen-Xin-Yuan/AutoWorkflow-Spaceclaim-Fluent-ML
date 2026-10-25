@@ -18,7 +18,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 | 文件 | 用途 |
 | --- | --- |
-| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入 README 的 11 个主尺寸与来流条件，自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数；同时输出几何核对报告与三视图，便于确认建模是否正确 |
+| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入工作区 README 的 14 个几何参数与来流条件。11 个主尺寸来自总表，3 个翼型参数来自 `naca_section.py`。脚本自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数，并输出几何核对报告与三视图 |
 | `02_ml_train.py` | MLP 神经网络训练 |
 | `03_plot_result.py` | 画图、误差分析、对比 DATCOM/Fluent |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
@@ -27,7 +27,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 
 
-`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸后，主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型取 `naca_section.py` 的三个参数，合计 14 个几何参数；带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
 ### `../data_lib/runs/low/`（运行结果，项目外）
 
@@ -41,8 +41,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | `<geometry_id>_for005.dat` | 本次实际喂给 DATCOM 的输入卡片 |
 | `<geometry_id>_for006.dat` | DATCOM 原始输出 |
 | `<geometry_id>_for022.dat` | DATCOM 写出的 Tecplot ASCII 几何外形（英尺） |
-| `<geometry_id>_aero_coefficients.csv` | 该几何的系数总表。不同高度再次运行时保留已有高度的行 |
-| `<run_id>_datcom.csv` | 从总表抽出的单工况一行。`run_id` 是 `<geometry_id>__<condition_id>__<altitude_m>` |
+| `<geometry_id>_aero_coefficients.csv` | 该几何唯一的系数表。不同高度的工况都合并在这一张表里，再次运行只替换本次工况的行 |
 | `<geometry_id>_geometry_check.txt` | 几何模型核对报告 |
 | `<geometry_id>_geometry_check.png` | 脚本自绘的三视图，仅供速查 |
 | `<geometry_id>_case_params.json` | 本算例的几何、来流、参考量与派生量快照 |
@@ -85,17 +84,19 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 
 ### 1. 气动计算工作流
 
-`01_batch_datcom.py` 的入口参数就是工作区 README「参数化方式与来流条件」里的那套量：
+`01_batch_datcom.py` 的入口参数就是工作区 README「参数化方式与来流条件」里的 14 个几何参数和来流条件：
 
 1. 正式输入是工作区的 `data_lib/inputs/cases.csv`。每一行是一个工况，列依次为
-   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`。同一个
-   `geometry_id` 的几何尺寸必须相同。同一个 `geometry_id` 和同一个 `altitude_m`
-   单元格的来流必须是这些马赫数和攻角的完整组合。
+   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`。
+   翼型三个参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`
+   写在 `scripts/naca_section.py`，前舵和后舵共用。同一个 `geometry_id` 的 11 个主尺寸必须相同。
+   同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
 2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
    `MISSILE_GEOMETRY`、`MACH_LIST`、`ALPHA_LIST` 和 `CASES` 只在 `--demo` 时使用。
 3. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
 4. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
-   每个工况另有 `<run_id>_datcom.csv`。
+   同一个 `geometry_id` 的气动系数只保留 `<geometry_id>_aero_coefficients.csv` 一张表，
+   各高度、各工况都在同一张表里，不再按工况拆成单行 CSV。
 
 几条实测到的模型约定（改输入卡片前务必知道）：
 
@@ -133,7 +134,7 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 
 ## 四、舵面翼型
 
-两组舵面共用 `scripts/naca_section.py` 顶部的三个默认值。改翼型只改那里。点云和 DATCOM 都读这一份，根部和梢部是同一个截面，按当地弦长缩放。弯度固定为 0，中弧与弦线重合，上下对称。后缘按 NACA 公式收到尖点，不另设参数。
+14 个几何参数里的翼型三项，就是 `scripts/naca_section.py` 顶部的三个默认值。改翼型只改那里。点云和 DATCOM 都读这一份，根部和梢部是同一个截面，按当地弦长缩放。弯度固定为 0，中弧与弦线重合，上下对称。后缘按 NACA 公式收到尖点，不另设参数。
 
 下图按默认翼型的厚度方程绘制。厚度方向放大约 4 倍，弦向位置不变，否则 4.48% 的真实厚度在图上只是一条线。虚线是弦线。
 

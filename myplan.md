@@ -64,7 +64,7 @@ SpaceClaim、网格和点云都只由 11 个几何尺寸决定，因此每个 `g
 |---|---|
 | 求解结果 | `{run_id}_fluent_solution.<扩展名>` |
 | 求解日志 | `{run_id}_fluent_solution.log` |
-| DATCOM 单工况系数 | `{run_id}_datcom.csv` |
+| DATCOM 系数 | `{geometry_id}_aero_coefficients.csv`（该几何一张表，各工况、各高度都在里面） |
 | DATCOM 日志 | `{geometry_id}_datcom.log` |
 
 模型、网格和点云由同一几何的各个高度和来流档共用，只跟几何绑定，文件名以 `geometry_id` 开头。这个 `geometry_id` 就是相关 `run_id` 第一段。用第一列能列出这些工况，11 个几何参数在这些行上相同。
@@ -84,9 +84,9 @@ SpaceClaim、网格和点云都只由 11 个几何尺寸决定，因此每个 `g
 | DATCOM 几何核对图 | `{geometry_id}_geometry_check.png` |
 | DATCOM 参数快照 | `{geometry_id}_case_params.json` |
 
-高保真一次执行放在 `data_lib/runs/high/<run-id>/<阶段>/`，`<run-id>` 是 `run-<时间戳>-<短ID>`。低保真归档放在 `data_lib/runs/low/<geometry_id>/`。两类数据分属这两个目录。目录里的文件名仍按上表，带 `run_id` 或 `geometry_id`。失败包中的副本沿用同一文件名。高保真重跑会新建 `<run-id>`。低保真对同一几何再次运行时，按几何标识命名的归档会被这次调用覆盖；`{run_id}_datcom.csv` 和系数总表里其它高度的行保留。同名新文件只有在该次验收通过后才替换队列里的产物路径。
+高保真一次执行放在 `data_lib/runs/high/<run-id>/<阶段>/`，`<run-id>` 是 `run-<时间戳>-<短ID>`。低保真归档放在 `data_lib/runs/low/<geometry_id>/`。两类数据分属这两个目录。目录里的文件名仍按上表，带 `run_id` 或 `geometry_id`。失败包中的副本沿用同一文件名。高保真重跑会新建 `<run-id>`。低保真对同一几何再次运行时，按几何标识命名的归档会被这次调用覆盖；系数表里其它高度的行保留，本次工况的行被替换。同名新文件只有在该次验收通过后才替换队列里的产物路径。
 
-`datcom.exe` 运行当下，工作目录里的协议文件名仍是 `for005.dat`、`for006.dat`、`for022.dat`。工作目录用 `data_lib/runs/low/.work`。算例写完后只保留在 `data_lib/runs/low/{geometry_id}/`，文件名改成上表里带 `geometry_id` 的名字。系数总表里每个工况再抽出一行，写成 `{run_id}_datcom.csv`，也放在这个子目录。`DATCOM/` 下面不保留算例结果。
+`datcom.exe` 运行当下，工作目录里的协议文件名仍是 `for005.dat`、`for006.dat`、`for022.dat`。工作目录用 `data_lib/runs/low/.work`。算例写完后只保留在 `data_lib/runs/low/{geometry_id}/`，文件名改成上表里带 `geometry_id` 的名字。系数表只写一张，放在这个子目录，同一个 `geometry_id` 的各工况、各高度都在里面，不再按工况抽出单行 CSV。`DATCOM/` 下面不保留算例结果。
 
 ## 两条链路
 
@@ -277,7 +277,7 @@ SpaceClaim 现有 MCP 继续只承担文档检索，标准输出保持 JSON-RPC�
 | 数据集 | 写入时机 | 内容 |
 |---|---|---|
 | `data_lib/runs/high/` | 求解行为已完成 | `geometry_id`、`condition_id`、`altitude_m`、`CL`、`CD`、`CM`、参考量、运行路径、验证记录 |
-| `data_lib/runs/low/{geometry_id}/` | 该几何、该高度的 DATCOM 调用已完成 | 原始输出、系数总表，以及每个工况的 `{run_id}_datcom.csv` |
+| `data_lib/runs/low/{geometry_id}/` | 该几何、该高度的 DATCOM 调用已完成 | 原始输出和该几何唯一的系数表 `{geometry_id}_aero_coefficients.csv` |
 | `data_lib/datasets/point_clouds/` | 新 `geometry_id` 进入总表 | 由 11 个几何尺寸确定生成的点云，以及引用它的 `condition_id` 列表 |
 
 三个系数与现有 DATCOM 脚本一致：升力系数 `CL`、阻力系数 `CD`、俯仰力矩系数 `CM`。参考量也沿用该脚本：参考面积是机身横截面积 `π(D/2)²`，参考长度是机身直径 `D`，力矩参考点默认在 `L/2`。高低质量数据使用同名和这一套参考量。飞行高度是每个工况的 `altitude_m`，单位米。训练只读取两侧数据集中已完成且带验证记录的条目。失败运行和未经重新验收的历史数据先经过明确审查，再决定能否进入训练集。
@@ -311,7 +311,7 @@ python DATCOM/scripts/01_batch_datcom.py
 
 一次调用对应一个 `geometry_id` 和一个 `altitude_m`。脚本生成输入卡片并调用 `DATCOM/datcom_bin/datcom.exe`。子智能体把标准输出和标准错误写入 `data_lib/runs/low/{geometry_id}/{geometry_id}_datcom.log`，只盯这份进行中的日志。
 
-算例目录使用 `data_lib/runs/low/{geometry_id}/`。高保真产物放在 `data_lib/runs/high/<run-id>/<阶段>/`。两类数据都在 `data_lib/runs` 下面，目录分开。同一几何的不同高度分次调用，避免一次调用里只能写一个高度。验收通过要同时满足：几何核对报告没有未通过的自检，系数表的行数等于这次领取的工况数，每一行的马赫数、攻角和高度都能对上总表。通过后，该几何、该高度下这些工况的队列行改为已完成。每个工况的 `{run_id}_datcom.csv` 与 `{geometry_id}_for006.dat` 都留在 `data_lib/runs/low/{geometry_id}/`。
+算例目录使用 `data_lib/runs/low/{geometry_id}/`。高保真产物放在 `data_lib/runs/high/<run-id>/<阶段>/`。两类数据都在 `data_lib/runs` 下面，目录分开。同一几何的不同高度分次调用，避免一次调用里只能写一个高度。验收通过要同时满足：几何核对报告没有未通过的自检，系数表的行数等于这次领取的工况数，每一行的马赫数、攻角和高度都能对上总表。通过后，该几何、该高度下这些工况的队列行改为已完成。每个工况的系数行都在 `{geometry_id}_aero_coefficients.csv` 里，它和 `{geometry_id}_for006.dat` 都留在 `data_lib/runs/low/{geometry_id}/`。
 
 调用时不从命令行传几何和来流。总表里有哪些 `Ma`、`alpha_deg` 和 `altitude_m`，就计算哪些组合。脚本配置区里的马赫列表、几何基准值和单个飞行高度只属于 `--demo`。
 
