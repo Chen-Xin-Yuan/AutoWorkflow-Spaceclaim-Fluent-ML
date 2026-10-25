@@ -50,7 +50,9 @@ DATCOM 建模约定（改动前务必读）：
     <geometry_id>_for005.dat             本次实际喂给 DATCOM 的输入
     <geometry_id>_for006.dat             DATCOM 原始输出
     <geometry_id>_for022.dat             Tecplot ASCII 几何外形（英尺）
-    <geometry_id>_aero_coefficients.csv  该几何唯一的系数表，各高度、各工况都合并在这里
+    <geometry_id>_aero_coefficients.csv  该几何唯一的系数表，各高度、各工况都合并在这里。
+                                         每行 = 工况编号 + 来流 + 11 个主尺寸 +
+                                         舵面翼型（NACA 编号与三个参数）+ 气动系数
     <geometry_id>_geometry_check.txt     几何模型核对报告
     <geometry_id>_geometry_check.png     几何三视图（脚本自绘，仅供速查）
     <geometry_id>_case_params.json       本算例的几何、来流与派生量快照
@@ -249,6 +251,23 @@ GEOMETRY_CN_NAMES = {
     "C_TF": "后舵梢弦C_TF(m)",
     "B_F": "后舵展长B_F(m)",
 }
+
+# 舵面翼型也进系数表：翼型由 scripts/naca_section.py 的三个参数决定，同一个
+# geometry_id 的所有工况共用一副截面。表里带上这四列，才能直接看出这批系数
+# 对应哪种 NACA 翼型，不必再去翻 case_params.json。
+FIN_SECTION_CN_NAMES = {
+    "designation": "舵面翼型",
+    "thickness_percent": "翼型相对厚度(%)",
+    "le_radius_index": "翼型前缘半径指数",
+    "max_thickness_tenths": "翼型最大厚度位置(1/10弦长)",
+}
+# 列顺序：翼型编号在前，随后是三个控制参数。
+FIN_SECTION_FIELDS = (
+    "designation",
+    "thickness_percent",
+    "le_radius_index",
+    "max_thickness_tenths",
+)
 
 # 每个主尺寸最终落到 DATCOM 的哪个卡片变量（核对报告里逐项标注，方便对照 for005.dat）
 GEOMETRY_CARD_HINT = {
@@ -962,8 +981,9 @@ def build_output_table(df, meta):
     """
     把解析结果整理成最终输出的 CSV 表（一行一个工况）。
 
-    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + OUTPUT_COEFFICIENTS
-    里的气动系数，输入参数一律用中文表头，便于直接对照 README 参数。
+    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 舵面翼型（NACA 编号
+    与三个控制参数）+ OUTPUT_COEFFICIENTS 里的气动系数。输入参数一律用中文表头，
+    便于直接对照 README 参数；翼型几列让每行都能看出算的是哪种舵面截面。
 
     Returns
     -------
@@ -971,6 +991,8 @@ def build_output_table(df, meta):
     """
     geometry = meta["geometry_m"]
     altitude_m = meta["flow"]["altitude_m"]
+    # 翼型参数随几何一起记在 derived 里（build_for005 写入 NacaSection.as_dict()）。
+    section = (meta.get("derived") or {}).get("fin_section") or {}
 
     rows = []
     for _, row in df.iterrows():
@@ -981,14 +1003,27 @@ def build_output_table(df, meta):
         }
         for key in REQUIRED_GEOMETRY_KEYS:
             record[GEOMETRY_CN_NAMES[key]] = geometry[key]
+        for key in FIN_SECTION_FIELDS:
+            record[FIN_SECTION_CN_NAMES[key]] = _fin_section_cell(section, key)
         for datcom_name, cn_name in OUTPUT_COEFFICIENTS:
             record[cn_name] = row.get(datcom_name, float("nan"))
         rows.append(record)
 
     columns = [CSV_FLOW_NAMES[key] for key in ("mach", "alpha", "alt")]
     columns += [GEOMETRY_CN_NAMES[key] for key in REQUIRED_GEOMETRY_KEYS]
+    columns += [FIN_SECTION_CN_NAMES[key] for key in FIN_SECTION_FIELDS]
     columns += [cn_name for _datcom_name, cn_name in OUTPUT_COEFFICIENTS]
     return pd.DataFrame(rows, columns=columns)
+
+
+def _fin_section_cell(section, key):
+    """翼型列的值。编号补上 NACA 前缀，其它参数原样给出。"""
+    value = section.get(key)
+    if value is None:
+        return float("nan")
+    if key == "designation":
+        return f"NACA {value}"
+    return value
 
 
 def _flow_matches(row, mach, alpha):
@@ -1022,7 +1057,11 @@ def attach_case_identity(table, case):
 
 
 def write_summary_csv(path, table):
-    """写入系数总表。同一几何再次运行时，只替换本次工况，保留其它高度的行。"""
+    """写入系数总表。同一几何再次运行时，只替换本次工况，保留其它高度的行。
+
+    保留的旧行如果缺这次新增的列（例如后来才加的翼型四列），这些单元格留空，
+    不去猜旧行当时用的是哪副翼型。
+    """
     identity = ["geometry_id", "condition_id", "altitude_m"]
     if os.path.isfile(path) and set(identity) <= set(table.columns):
         old = pd.read_csv(path, encoding="utf-8-sig")
@@ -1035,7 +1074,10 @@ def write_summary_csv(path, table):
                 index for index, row in old.iterrows()
                 if (str(row["geometry_id"]), str(row["condition_id"]), str(row["altitude_m"])) not in fresh
             ]
-            table = pd.concat([old.iloc[keep], table], ignore_index=True)
+            merged = pd.concat([old.iloc[keep], table], ignore_index=True, sort=False)
+            # 以本次的列顺序为准；旧表里多出来的列（如果换过 OUTPUT_COEFFICIENTS）放最后。
+            order = list(table.columns) + [c for c in merged.columns if c not in table.columns]
+            table = merged.reindex(columns=order)
     table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
 
 

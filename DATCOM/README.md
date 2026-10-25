@@ -19,11 +19,8 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | 文件 | 用途 |
 | --- | --- |
 | `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入工作区 README 的 14 个几何参数与来流条件。11 个主尺寸来自总表，3 个翼型参数来自 `naca_section.py`。脚本自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数，并输出几何核对报告与三视图 |
-| `02_ml_train.py` | MLP 神经网络训练 |
-| `03_plot_result.py` | 画图、误差分析、对比 DATCOM/Fluent |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
 | `naca_section.py` | 对称舵面 NACA 翼型的三个参数和外形方程。批量 DATCOM 与点云共用这一份。三个参数怎样定出截面，见文末「四、舵面翼型」 |
-| `datcom_parser.py` | 解析 `for006.dat` 的工具函数 |
 
 
 
@@ -51,11 +48,14 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 会得到 9 个区（1 个 `FUSELAGE` + 前舵 4 片 `FINSET 1` + 后舵 4 片 `FINSET 2`）。
 注意文件长度单位是**英尺**（DATCOM 几何输出固定用英尺，与输入卡片里的英寸无关）。
 
-`aero_coefficients.csv` 只输出上面 3 个系数，需要别的系数（例如 `CNA`、`XCP`）时在脚本顶部
-`OUTPUT_COEFFICIENTS` 里加一行即可。注意：CSV 若正被 Excel 打开，Windows 会拒绝覆盖写入，
-脚本会给出警告并保留其余产物，关闭 Excel 后重跑即可。
+`aero_coefficients.csv` 一行一个工况，列依次为：`geometry_id`、`condition_id`、`altitude_m`，马赫数、攻角、飞行高度，11 个主尺寸，舵面翼型的四列（`舵面翼型` 是 NACA 编号，如 `NACA 0004.48-63`；后三列是 `naca_section.py` 的三个参数），最后是 3 个气动系数。翼型几列让每一行都能自证算的是哪种舵面截面，不必再去翻 `case_params.json`。
 
-归档目录名就是 `geometry_id`。当前工作区总表有 4 行试算，几何标识暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，结果在 `../data_lib/runs/low/1/`。前一次试算的归档留在 `../data_lib/runs/low/sample/`。
+系数只输出上面 3 个，需要别的系数（例如 `CNA`、`XCP`）时在脚本顶部
+`OUTPUT_COEFFICIENTS` 里加一行即可。注意：CSV 若正被 Excel 打开，Windows 会拒绝覆盖写入，
+脚本会给出警告并保留其余产物，关闭 Excel 后重跑即可。同一张表里更早的行如果缺后来新增的列，
+这些单元格留空，脚本不去猜旧行的取值。
+
+归档目录名就是 `geometry_id`。当前工作区总表有 4 行试算，几何标识暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，结果在 `../data_lib/runs/low/1/`。
 
 ### `.vscode/`
 
@@ -170,6 +170,8 @@ NACA-1-4-0004.48-63
 ```
 
 所以默认卡片是 `NACA-1-4-0004.48-63` 和 `NACA-2-4-0004.48-63`。物理厚度等于厚度比乘当地弦长：后舵根弦 0.38 m 时整片厚约 17 mm，前舵梢弦 0.06 m 时约 2.7 mm。
+
+这三个参数也写进系数表：`舵面翼型`、`翼型相对厚度(%)`、`翼型前缘半径指数`、`翼型最大厚度位置(1/10弦长)` 四列，同一 `geometry_id` 的每一行都带着当时用的这副翼型。
 
 ---
 
