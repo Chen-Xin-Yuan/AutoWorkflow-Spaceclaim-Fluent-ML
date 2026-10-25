@@ -4,7 +4,7 @@
 
 ## 布局速览
 - `scripts/`：Python 代码。几何参数一共 14 个：`data_lib/inputs/cases.csv` 里的 11 个主尺寸，加上 `naca_section.py` 里前舵和后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。`01_batch_datcom.py` 读取总表，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM，翼型取 `naca_section.py` 的当前值。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，翼型与批量计算共用这一份，并写点云。翼型参数与外形方程在 `naca_section.py`。
-- `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。本项目的 `runs/` 只是改名前的旧结果目录。
+- `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。项目目录里不再保留旧结果目录。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 
 ## 路径约定：禁止写死绝对路径（项目文件夹可整体移动）
@@ -14,7 +14,7 @@
 - `scripts/` 下的脚本用
   `os.path.dirname(os.path.dirname(os.path.abspath(__file__)))` 得到项目根
   （脚本在 scripts/ 内，其上一级即项目根）。
-- `notebook/` 等无 `__file__` 的运行环境，用"从当前目录向上查找含
+- 将来若加 `notebook/` 这类无 `__file__` 的运行环境，用"从当前目录向上查找含
   datcom_bin 的目录"推导项目根。
 - 改代码 / 新增脚本时同样遵守本约定，不要重新引入写死的路径。
 

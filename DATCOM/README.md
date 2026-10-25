@@ -76,7 +76,7 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 
 - 所有脚本 / 代码均不写死绝对路径，项目根目录由代码自动推导：
   - `scripts/` 下脚本用 `__file__` 推导（项目根 = `scripts/` 的上一级）。
-  - `notebook/` 无 `__file__`，用“从当前目录向上查找含 `datcom_bin` 的目录”推导。
+  - 将来若加 `notebook/` 这类无 `__file__` 的运行环境，用“从当前目录向上查找含 `datcom_bin` 的目录”推导。
 - 因此整个 `DATCOM` 文件夹可整体移动 / 改名到任意位置，无需修改任何路径配置；直接运行 `scripts/01_batch_datcom.py` 即可。
 - 新增代码务必遵守同一约定：不要出现 `C:\Users\...` 这类写死的路径。
 
@@ -130,7 +130,7 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 
 结果现在写到项目外的 `../data_lib/runs/low/`，由上级工作区 `.gitignore` 忽略运行产物。点云写到 `../data_lib/datasets/point_clouds/`，点云文件同样不入库。
 
-`outputs/`、`__pycache__/` 等产物同样不入库（由上级 `.gitignore` 统一覆盖）。
+`__pycache__/` 等产物同样不入库（由上级 `.gitignore` 统一覆盖）。
 
 ## 四、舵面翼型
 
