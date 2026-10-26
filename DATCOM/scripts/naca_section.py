@@ -2,16 +2,13 @@
 """NACA 四位数翼型（可带修正前缘和最大厚度位置）。
 
 批量 DATCOM 和点云脚本都从这里读默认值，避免两套舵面外形不一致。
-要改翼型，只改下面五个默认值。
+翼型上下对称，中弧与弦线重合。要改翼型，只改下面三个默认值。
 
-DATCOM 控制卡写成 ``NACA-<组号>-4-<弯度><位置><厚度>-<前缘指数><厚度位置>``。
-例如默认值对应 ``NACA-1-4-0004.48-63``：无弯度、厚度为弦长的 4.48%、
+DATCOM 控制卡写成 ``NACA-<组号>-4-00<厚度>-<前缘指数><厚度位置>``。
+例如默认值对应 ``NACA-1-4-0004.48-63``：厚度为弦长的 4.48%、
 标准圆前缘、最大厚度在 30% 弦长、后缘按 NACA 公式收到尖点。
 
-五个参数：
-    camber_percent            最大中弧，弦长的百分数，整数 0–9。0 表示上下对称。
-    camber_location_tenths    最大中弧距前缘的位置，单位是 1/10 弦长。
-                              弯度为 0 时必须为 0；有弯度时为 1–9。
+三个参数：
     thickness_percent         最大厚度，弦长的百分数，写卡时四舍五入到 0.01。
     le_radius_index           前缘半径指数，整数 0–9。0 是尖前缘，6 是标准圆前缘。
                               半径按 (指数/6)² 相对标准圆前缘缩放。
@@ -117,19 +114,13 @@ def _reference_half_array(x, xm, a0, a1, a2, a3, d0, d1, d2, d3):
 
 @dataclass(frozen=True)
 class NacaSection:
-    """一组舵面共用的 NACA 四位数翼型。"""
+    """一组舵面共用的对称 NACA 四位数翼型。"""
 
-    camber_percent: int = 0
-    camber_location_tenths: int = 0
     thickness_percent: float = 4.48
     le_radius_index: int = 6
     max_thickness_tenths: int = 3
 
     def __post_init__(self):
-        camber = _exact_int("camber_percent", self.camber_percent, 0, 9)
-        location = _exact_int(
-            "camber_location_tenths", self.camber_location_tenths, 0, 9
-        )
         le_index = _exact_int("le_radius_index", self.le_radius_index, 0, 9)
         station = _exact_int("max_thickness_tenths", self.max_thickness_tenths, 2, 6)
         thickness = round(float(self.thickness_percent) + 1e-12, 2)
@@ -137,12 +128,6 @@ class NacaSection:
             raise ValueError("thickness_percent 必须是大于 0、小于 40 的有限数。")
         if station not in _TE_SLOPE_BY_TENTHS:
             raise ValueError("max_thickness_tenths 只允许 2、3、4、5、6。")
-        if camber == 0 and location != 0:
-            raise ValueError("弯度为 0 时，camber_location_tenths 必须为 0。")
-        if camber != 0 and location == 0:
-            raise ValueError("有弯度时，camber_location_tenths 必须是 1–9。")
-        object.__setattr__(self, "camber_percent", camber)
-        object.__setattr__(self, "camber_location_tenths", location)
         object.__setattr__(self, "le_radius_index", le_index)
         object.__setattr__(self, "max_thickness_tenths", station)
         object.__setattr__(self, "thickness_percent", thickness)
@@ -153,24 +138,13 @@ class NacaSection:
         return self.thickness_percent / 100.0
 
     @property
-    def camber_ratio(self) -> float:
-        return self.camber_percent / 100.0
-
-    @property
-    def camber_location(self) -> float:
-        return self.camber_location_tenths / 10.0
-
-    @property
     def max_thickness_fraction(self) -> float:
         return self.max_thickness_tenths / 10.0
 
     def designation_body(self) -> str:
         """控制卡里翼型名本身，不含组号。例如 ``0004.48-63``。"""
         thickness = f"{self.thickness_percent:05.2f}"
-        return (
-            f"{self.camber_percent}{self.camber_location_tenths}{thickness}"
-            f"-{self.le_radius_index}{self.max_thickness_tenths}"
-        )
+        return f"00{thickness}-{self.le_radius_index}{self.max_thickness_tenths}"
 
     def control_card(self, finset_index: int) -> str:
         """Missile DATCOM 的 NACA 控制卡。finset_index 为 1–4。"""
@@ -190,49 +164,18 @@ class NacaSection:
         return np.maximum(y, 0.0) * (self.thickness_ratio / _REFERENCE_THICKNESS)
 
     def half_thickness_ratio(self, x: float) -> float:
-        """对称厚度分布的半厚度 y/c。x 是平均弧线参数，0 为前缘，1 为后缘。"""
+        """半厚度 y/c。x 从 0（前缘）到 1（后缘）。"""
         return float(self._scaled_half_array(np.asarray([x], dtype=float))[0])
 
-    def mean_line(self, x: float) -> tuple[float, float]:
-        """返回 (中弧 y/c, dy/dx)。无弯度时都是 0。"""
-        camber = self.camber_ratio
-        location = self.camber_location
-        if camber == 0.0:
-            return 0.0, 0.0
-        x = min(max(float(x), 0.0), 1.0)
-        if x <= location:
-            yc = camber / location ** 2 * (2.0 * location * x - x * x)
-            slope = 2.0 * camber / location ** 2 * (location - x)
-        else:
-            tail = (1.0 - location) ** 2
-            yc = camber / tail * ((1.0 - 2.0 * location) + 2.0 * location * x - x * x)
-            slope = 2.0 * camber / tail * (location - x)
-        return yc, slope
-
     def surface_offsets(self, x: float) -> tuple[float, float, float, float]:
-        """给定弧线参数 x，返回上下表面的 (x_u, y_u, x_l, y_l)，都相对弦长。"""
+        """返回上下表面的 (x_u, y_u, x_l, y_l)，都相对弦长。"""
         yt = self.half_thickness_ratio(x)
-        yc, slope = self.mean_line(x)
-        if slope == 0.0:
-            return float(x), yc + yt, float(x), yc - yt
-        theta = math.atan(slope)
-        sine, cosine = math.sin(theta), math.cos(theta)
-        return (
-            x - yt * sine,
-            yc + yt * cosine,
-            x + yt * sine,
-            yc - yt * cosine,
-        )
+        x = float(x)
+        return x, yt, x, -yt
 
     def interior_xy(self, x: float, s: float) -> tuple[float, float]:
         """厚度方向参数 s∈[-1, 1]。+1 为上表面，-1 为下表面。返回 (x/c, y/c)。"""
-        yt = self.half_thickness_ratio(x)
-        yc, slope = self.mean_line(x)
-        theta = math.atan(slope) if slope else 0.0
-        return (
-            x - s * yt * math.sin(theta),
-            yc + s * yt * math.cos(theta),
-        )
+        return float(x), s * self.half_thickness_ratio(x)
 
     def sample_interior(self, count: int, rng) -> tuple[np.ndarray, np.ndarray]:
         """按截面积均匀抽取截面内的点，返回 (x/c, y/c)。"""
@@ -247,36 +190,22 @@ class NacaSection:
         span = grid[index + 1] - grid[index]
         x = grid[index] + rng.random(count) * span
         s = rng.random(count) * 2.0 - 1.0
-        yt = self._scaled_half_array(x)
-        yc = np.empty(count)
-        slope = np.empty(count)
-        for i, value in enumerate(x):
-            yc[i], slope[i] = self.mean_line(float(value))
-        theta = np.arctan(slope)
-        return x - s * yt * np.sin(theta), yc + s * yt * np.cos(theta)
+        return x, s * self._scaled_half_array(x)
 
     def section_area_ratio(self) -> float:
         """翼型截面积 / 弦长²。"""
         x = np.linspace(0.0, 1.0, 401)
-        yt = self._scaled_half_array(x)
-        slopes = np.array([self.mean_line(float(value))[1] for value in x])
-        band = 2.0 * yt * np.sqrt(1.0 + slopes * slopes)
+        band = 2.0 * self._scaled_half_array(x)
         integrate = getattr(np, "trapezoid", None) or np.trapz
         return float(integrate(band, x))
 
     def max_offset_ratio(self) -> float:
         """表面偏离弦线的最大距离 / 弦长。"""
         x = np.linspace(0.0, 1.0, 401)
-        peak = 0.0
-        for value in x:
-            _, yu, _, yl = self.surface_offsets(float(value))
-            peak = max(peak, abs(yu), abs(yl))
-        return peak
+        return float(np.max(self._scaled_half_array(x)))
 
     def as_dict(self) -> dict:
         return {
-            "camber_percent": self.camber_percent,
-            "camber_location_tenths": self.camber_location_tenths,
             "thickness_percent": self.thickness_percent,
             "le_radius_index": self.le_radius_index,
             "max_thickness_tenths": self.max_thickness_tenths,
@@ -305,8 +234,6 @@ def resolve_naca_section(value=None) -> NacaSection:
         return value
     if isinstance(value, dict):
         fields = (
-            "camber_percent",
-            "camber_location_tenths",
             "thickness_percent",
             "le_radius_index",
             "max_thickness_tenths",

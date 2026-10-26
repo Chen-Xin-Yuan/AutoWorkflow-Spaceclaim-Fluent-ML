@@ -179,10 +179,10 @@ def measure_body(body):
 
 
 def measure_center_of_mass(body):
-    # The seed fin is a constant-thickness prism, so this lands on its planform centroid. It is the
-    # only reading that notices the fins being slid along the cylinder: extents, face areas and
-    # volume are all invariant under that slide, so a missing nose-blunting compensation is
-    # invisible to every other measurement.
+    # The seed fin is a ruled NACA loft, so this lands on the solid centroid computed with the
+    # section. It is the only reading that notices the fins being slid along the cylinder: extents,
+    # face areas and volume are all invariant under that slide, so a missing nose-blunting
+    # compensation is invisible to every other measurement.
     try:
         point = MeasureHelper.GetCenterOfMass(Selection.Create(body))
         return {"x": to_metres(point.X), "y": to_metres(point.Y), "z": to_metres(point.Z)}
@@ -591,27 +591,42 @@ def build_body(geometry):
     return revolved
 
 
-def build_fin(fin):
+def sketch_section(section):
+    """Closed NACA polyline on a spanwise plane. Sketch X is axial and sketch Y is the thickness."""
     before = bodies()
-    segments = []
-    points = fin["points"]
+    plane = Plane.Create(Frame.Create(Point.Create(0, metres(section["radius"]), 0), Direction.DirX, Direction.DirZ))
+    ViewHelper.SetSketchPlane(plane)
+    points = section["points"]
     for index in range(len(points)):
         start = points[index]
         end = points[(index + 1) % len(points)]
-        segments.append({"type": "line", "from": start, "to": end})
-    draw(segments)
+        SketchLine.Create(Point2D.Create(metres(start[0]), metres(start[1])),
+                          Point2D.Create(metres(end[0]), metres(end[1])))
     profile = solidify(before)
-    options = ExtrudeFaceOptions()
+    if len(list(profile.Faces)) != 1:
+        raise Exception("Fin section sketch did not produce a single profile face.")
+    return profile
+
+
+def build_fin(fin):
+    before = bodies()
+    profiles = [sketch_section(section) for section in fin["sections"]]
+    options = LoftOptions()
     # ForceIndependent keeps the fin a separate body even though its root is embedded in the body,
-    # which is what makes the circular pattern of the two seed fins possible.
+    # which is what makes the circular pattern of the two seed fins possible. A ruled loft follows
+    # the straight planform edges; each polyline edge stays its own face.
     options.ExtrudeType = ExtrudeType.ForceIndependent
-    options.PullSymmetric = True
-    result = ExtrudeFaces.Execute(FaceSelection.Create(list(profile.Faces)[0]), Direction.DirZ, metres(fin["thickness"] / 2.0), options)
+    options.IsRuled = True
+    options.IsMinimalTopology = False
+    result = Loft.Create(Selection.Create(profiles), None, options)
     if not result.Success:
-        raise Exception("ExtrudeFaces returned Success=False for the " + fin["name"] + " fin.")
+        raise Exception("Loft returned Success=False for the " + fin["name"] + " fin.")
+    sheets = [item for item in fresh_bodies(before) if len(list(item.Faces)) <= 1]
+    if sheets:
+        Delete.Execute(Selection.Create(sheets))
     created = [item for item in fresh_bodies(before) if len(list(item.Faces)) > 1]
     if not created:
-        raise Exception("ExtrudeFaces did not create an independent solid for the " + fin["name"] + " fin.")
+        raise Exception("Loft did not create an independent solid for the " + fin["name"] + " fin.")
     return created
 
 

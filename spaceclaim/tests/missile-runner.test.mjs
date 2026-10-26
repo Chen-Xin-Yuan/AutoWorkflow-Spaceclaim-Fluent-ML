@@ -331,7 +331,7 @@ test("the extent expectation follows the cruciform phase and count", () => {
   // A rotated or higher-count cruciform has a smaller bounding box than D + 2·max(B); the gate must
   // expect the real box, otherwise a correct model would be rejected.
   const rotated = buildModelRequest({ explicit: { fin_phase: "x" } });
-  assert.ok(Math.abs(rotated.geometry.expectedExtents.lateral - 0.4610336213) < 1e-9);
+  assert.ok(Math.abs(rotated.geometry.expectedExtents.lateral - 0.4544486655) < 1e-9);
   assert.equal(grade(rotated, passingResult(rotated)).ok, true);
   const naive = passingResult(rotated);
   naive.measurements.extentsM.lateral = rotated.geometry.tip_to_tip;
@@ -340,7 +340,7 @@ test("the extent expectation follows the cruciform phase and count", () => {
 
   const six = buildModelRequest({ explicit: { cruciform_count: 6 } });
   assert.ok(Math.abs(six.geometry.expectedExtents.lateral - 0.64) < 1e-9);
-  assert.ok(Math.abs(six.geometry.expectedExtents.vertical - 0.5602562584) < 1e-9);
+  assert.ok(Math.abs(six.geometry.expectedExtents.vertical - 0.5555999915) < 1e-9);
   assert.equal(grade(six, passingResult(six)).ok, true);
 });
 
@@ -431,7 +431,9 @@ test("generate-only mode writes the request without needing an installation", as
   assert.match(out.executableError, /SpaceClaim\.exe not found/);
   const document = JSON.parse(await readFile(out.paramsPath, "utf8"));
   assert.equal(document.params.k_nose, 0.005);
-  assert.equal(document.sources.t_fin, "default");
+  assert.equal(document.sources.thickness_percent, "default");
+  assert.equal(document.params.le_radius_index, 6);
+  assert.equal(document.params.max_thickness_tenths, 3);
   assert.ok(document.geometry.expectedAreas.faces.some((face) => face.kind === "tip"));
   assert.ok(document.geometry.expectedAreas.faces.some((face) => face.kind === "shoulder"));
   assert.equal(document.output.model, out.modelPath);
@@ -458,7 +460,8 @@ test("a preset carries only the eleven primary dimensions and defaults fill the 
   for (const field of Object.keys(eleven)) assert.equal(request.sources[field], "preset");
   assert.equal(request.sources.k_nose, "default");
   assert.equal(request.sources.enclosure_name, "default");
-  assert.equal(request.params.t_fin, 0.012);
+  assert.equal(request.params.thickness_percent, 4.48);
+  assert.equal(request.sources.thickness_percent, "default");
   assert.equal(request.params.model_offset, -4.0);
 });
 

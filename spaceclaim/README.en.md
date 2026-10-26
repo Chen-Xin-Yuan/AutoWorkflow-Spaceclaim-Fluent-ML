@@ -136,9 +136,13 @@ All lengths are in metres. The model axis is X; the nose points toward −X. `L_
 | `C_RF` | `0.38` | Rear root chord |
 | `C_TF` | `0.19` | Rear tip chord |
 | `B_F` | `0.22` | Rear span |
-| `t_fin` | `0.012` | Fin thickness |
+| `thickness_percent` | `4.48` | Maximum fin thickness, percent of local chord; shared by both stages |
+| `le_radius_index` | `6` | Leading-edge radius index. `0` is sharp, `6` is the standard round nose |
+| `max_thickness_tenths` | `3` | Chordwise station of maximum thickness, in tenths of chord |
 | `k_nose` | `0.005` | Shoulder-round radius coefficient, `r_f = L × k_nose` |
 | `k_tip` | `0.002` | Tangent spherical nose-tip radius coefficient, `r_t = L × k_tip` |
+
+The workspace geometry set has 14 parameters: the 11 lengths above, plus three shared NACA fin-section parameters, `thickness_percent`, `le_radius_index`, and `max_thickness_tenths`. Their allowed values match `DATCOM/scripts/naca_section.py`: thickness is greater than 0 and less than 40 and is rounded to 0.01; the leading-edge index is an integer from 0 to 9 and scales the standard nose radius by `(index/6)²`; the thickness station is 2, 3, 4, 5, or 6. The planform stays the trapezoid fixed by root chord, tip chord, span, and trailing-edge alignment. Each fin is a symmetric NACA four-digit section scaled by the local chord and ruled from the buried root to the tip. This module also uses the nose fillets `k_nose` and `k_tip`.
 
 | Convention input | Default | Supported behavior |
 | --- | --- | --- |

@@ -34,7 +34,7 @@ const python = await client.callTool({ name: "find_python_command", arguments: {
 assert.match(python.content[0].text, /inferred/);
 const recipe = await client.callTool({ name: "get_geometry_recipe", arguments: { task: "矩形拉伸", parameters: { depth: 20 } } });
 assert.match(recipe.content[0].text, /steps/);
-const validated = await client.callTool({ name: "validate_missile_params", arguments: { k_nose: 0.006, t_fin: 0.015 } });
+const validated = await client.callTool({ name: "validate_missile_params", arguments: { k_nose: 0.006, thickness_percent: 5, le_radius_index: 6, max_thickness_tenths: 3 } });
 assert.match(validated.content[0].text, /optimisationPool/);
 const rejected = await client.callTool({ name: "validate_missile_params", arguments: { k_nose: 0.05 } });
 assert.equal(rejected.isError, undefined);

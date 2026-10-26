@@ -6,6 +6,8 @@ import {
   deriveRegions,
   finPhaseDegrees,
   finPlanform,
+  nacaHalfThicknessRatio,
+  nacaReferenceCoefficients,
   noseFilletLimits,
   polygonCentroid,
   polygonMoments,
@@ -159,14 +161,17 @@ test("expected extents match the measured boxes for rotated and higher-count cru
   assert.ok(Math.abs(baselineExtents.lateral - 0.64) < 1e-12);
   assert.ok(Math.abs(baselineExtents.vertical - 0.64) < 1e-12);
 
-  // Values measured on the real install for these two overrides.
+  // Analytic envelope of the NACA polyline. The + cruciform is still set by the fin tips;
+  // the rotated and six-fin boxes include the airfoil thickness.
   const rotated = deriveGeometry(buildModelRequest({ explicit: { fin_phase: "x" } }).params).expectedExtents;
-  assert.ok(Math.abs(rotated.lateral - 0.4610336213) < 1e-9, `rotated lateral ${rotated.lateral}`);
-  assert.ok(Math.abs(rotated.vertical - 0.4610336213) < 1e-9);
+  assert.ok(rotated.lateral < baselineExtents.lateral, "an x cruciform fits in a smaller square than the + cruciform");
+  assert.ok(Math.abs(rotated.lateral - rotated.vertical) < 1e-12);
+  assert.ok(Math.abs(rotated.lateral - 0.4544486655) < 1e-9, `rotated lateral ${rotated.lateral}`);
 
   const six = deriveGeometry(buildModelRequest({ explicit: { cruciform_count: 6 } }).params).expectedExtents;
   assert.ok(Math.abs(six.lateral - 0.64) < 1e-12);
-  assert.ok(Math.abs(six.vertical - 0.5602562584) < 1e-9, `six-fin vertical ${six.vertical}`);
+  assert.ok(six.vertical < six.lateral);
+  assert.ok(Math.abs(six.vertical - 0.5555999915) < 1e-9, `six-fin vertical ${six.vertical}`);
 });
 
 test("fin planforms keep the trailing edges aligned", () => {
@@ -331,13 +336,24 @@ test("the body centre of mass pins the model to its absolute axial placement", (
   assert.ok(Math.abs(solidOfRevolutionCenterOfMass(shifted) - (com + 0.5)) < 1e-9);
 });
 
-test("the seed fin centroid is the planform centroid the gate measures", () => {
+test("the seed fin centroid is the NACA solid centroid the gate measures", () => {
   const geometry = deriveGeometry(buildModelRequest({}).params);
   for (const fin of geometry.fins) {
-    const centroid = polygonCentroid(fin.points);
-    assert.ok(Math.abs(fin.centroid[0] - centroid[0]) < 1e-12);
-    assert.ok(Math.abs(fin.centroid[1] - centroid[1]) < 1e-12);
-    assert.ok(fin.centroid[0] > fin.leStation && fin.centroid[0] < fin.points[2][0], `${fin.name} centroid must sit inside the chord`);
+    const planform = polygonCentroid(fin.points);
+    assert.ok(fin.centroid[0] > fin.buried_le && fin.centroid[0] < fin.te, `${fin.name} centroid must sit inside the chord`);
+    assert.ok(fin.centroid[1] > fin.root_radius && fin.centroid[1] < fin.tip_radius, `${fin.name} centroid must sit on the span`);
+    assert.equal(fin.centroid[2], 0);
+    // Thickness grows with chord, so the solid sits inboard of the flat-plate centroid.
+    assert.ok(fin.centroid[1] < planform[1], `${fin.name} solid centroid ${fin.centroid[1]} planform ${planform[1]}`);
+    const root = fin.sections[0];
+    const tip = fin.sections[1];
+    assert.equal(root.points.length, tip.points.length);
+    assert.ok(Math.abs(root.points[0][0] - fin.buried_le) < 1e-12);
+    assert.ok(Math.abs(root.points[0][1]) < 1e-12);
+    assert.ok(Math.abs(tip.points[0][0] - fin.tip_le) < 1e-12);
+    const trailing = root.points.filter((point) => Math.abs(point[0] - fin.te) < 1e-12);
+    assert.equal(trailing.length, 2);
+    assert.ok(trailing[0][1] > 0 && trailing[1][1] < 0);
   }
   // A square rotated into the first quadrant has its centroid at the corner average.
   assert.deepEqual(polygonCentroid([[0, 0], [2, 0], [2, 2], [0, 2]]).map((value) => Number(value.toFixed(12))), [1, 1]);
@@ -432,5 +448,20 @@ test("default geometry uses an aligned cruciform with four fins per station", ()
   assert.equal(geometry.cruciform_count, 4);
   assert.equal(geometry.fin_phase_deg, 0);
   assert.deepEqual(geometry.fins.map((fin) => fin.name), ["front", "rear"]);
-  assert.equal(geometry.fins.every((fin) => fin.thickness === 0.012), true);
+  assert.equal(geometry.airfoil.thickness_percent, 4.48);
+  assert.equal(geometry.airfoil.le_radius_index, 6);
+  assert.equal(geometry.airfoil.max_thickness_tenths, 3);
+  assert.equal(geometry.fins[0].sections.length, 2);
+  assert.equal(geometry.fins[1].sections.length, 2);
+});
+
+test("the default NACA section matches the shared thickness equation", () => {
+  const coefficients = nacaReferenceCoefficients(6, 3);
+  const ratio = 4.48 / 100;
+  assert.ok(Math.abs(nacaHalfThicknessRatio(0.3, coefficients, ratio) - ratio / 2) < 1e-12);
+  assert.ok(Math.abs(nacaHalfThicknessRatio(0, coefficients, ratio)) < 1e-15);
+  assert.ok(Math.abs(nacaHalfThicknessRatio(1, coefficients, ratio) - 0.002 * ratio / 0.2) < 1e-12);
+  const sharp = nacaReferenceCoefficients(0, 3);
+  assert.equal(sharp.a0, 0);
+  assert.ok(Math.abs(nacaHalfThicknessRatio(0, sharp, ratio)) < 1e-15);
 });

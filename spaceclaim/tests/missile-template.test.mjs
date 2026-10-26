@@ -87,15 +87,19 @@ test("the script reads its parameters and reports both success and failure", () 
   }
   assert.match(script, /SketchArc\.CreateSweepArc/);
   assert.match(script, /ExtrudeType\.ForceIndependent/);
+  assert.match(script, /Loft\.Create/);
+  assert.match(script, /options\.IsRuled = True/);
   assert.match(script, /Pattern\.CreateCircular/);
   assert.match(script, /Combine\.Merge/);
 });
 
 test("the request document carries values, sources, geometry and outputs", () => {
-  const request = buildModelRequest({ explicit: { t_fin: 0.02 } });
+  const request = buildModelRequest({ explicit: { thickness_percent: 5.5, le_radius_index: 4, max_thickness_tenths: 4 } });
   const document = buildRequestDocument(request, { model: "m.scdoc", result: "r.json", diagnostic: "d.txt" });
-  assert.equal(document.params.t_fin, 0.02);
-  assert.equal(document.sources.t_fin, "explicit");
+  assert.equal(document.params.thickness_percent, 5.5);
+  assert.equal(document.sources.thickness_percent, "explicit");
+  assert.equal(document.params.le_radius_index, 4);
+  assert.equal(document.params.max_thickness_tenths, 4);
   assert.equal(document.sources.L, "default");
   assert.equal(document.geometry.body.fillet.enabled, true);
   assert.equal(document.output.model, "m.scdoc");

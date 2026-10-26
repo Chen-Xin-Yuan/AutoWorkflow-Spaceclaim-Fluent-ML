@@ -4,6 +4,8 @@
 
 `ansys-scdmdoc-mcp` is a Windows-local MCP server for searching the official ANSYS SpaceClaim/SCDM API Help CHM and producing API-grounded SCDM Python candidates.
 
+The parent workspace describes missile geometry with 14 parameters: 11 length dimensions plus three shared NACA fin-section parameters (`thickness_percent`, `le_radius_index`, `max_thickness_tenths`). This module's schema uses those three parameters, plus `k_nose` and `k_tip`. Fin planforms stay trapezoidal. The cross-section is the symmetric NACA four-digit airfoil from `DATCOM/scripts/naca_section.py`, scaled by the local chord and ruled from the buried root to the tip. Leave the NACA fields in `naca_section.py`; this module copies the equation and the default values rather than importing that file.
+
 ## Non-negotiable boundaries
 
 - Runtime target: Windows and Node.js 18+.

@@ -25,7 +25,9 @@ export const GEOMETRY_PARAMS = [
   { field: "C_RF", label: "后舵根弦长", unit: "m", default: 0.38, range: [0.1, 0.4] },
   { field: "C_TF", label: "后舵梢弦长", unit: "m", default: 0.19, range: [0, 0.25] },
   { field: "B_F", label: "后舵展长", unit: "m", default: 0.22, range: [0.1, 0.3] },
-  { field: "t_fin", label: "舵面厚度（舵宽）", unit: "m", default: 0.012, range: null },
+  { field: "thickness_percent", label: "舵面最大厚度（弦长的百分数，前后舵共用）", unit: "% chord", default: 4.48, range: null },
+  { field: "le_radius_index", label: "前缘半径指数（0 尖前缘，6 标准圆前缘，按 (指数/6)² 缩放）", unit: "", kind: "integer", default: 6, range: null },
+  { field: "max_thickness_tenths", label: "最大厚度距前缘的位置（1/10 弦长）", unit: "", kind: "integer", default: 3, range: null },
   { field: "k_nose", label: "鼻锥与柱段交接处倒圆半径系数（r_f = L · k_nose）", unit: "", default: 0.005, range: [0, 0.01] },
   { field: "k_tip", label: "鼻锥尖端倒圆半径系数（r_t = L · k_tip，与锥面相切的球面钝化）", unit: "", default: 0.002, range: [0, 0.01] },
 ];

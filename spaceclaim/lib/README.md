@@ -12,7 +12,7 @@
 | `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs/high` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。 |
 | `spaceclaim-runner.mjs` | 文件前部集中模型/请求/脚本/结果/诊断/图片/清单/错误文件名、300000 ms 超时与原有执行默认值；模型名可由 `fileName` 覆盖。输出根按 `options.outputDir` → `SCDM_MISSILE_OUTPUT` → 工作区 `dataRoot` 选择。清单名是与 `workspace-runtime.mjs` 的 `RUN_MANIFEST_FILENAME` 共享的协议名，必须保持一致。 |
 | `extract.mjs` / `python-map.mjs` | 不读写文件；文件前部集中原有搜索条数默认值 25 / 5，由函数参数或 `options.limit` 覆盖。候选模板的参数仍在前部 `INTENTS` 中。 |
-| `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。生成模板的路径由请求/环境传入，模板内容与数值计算未更改。 |
+| `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。翼型截面由几何模块按 NACA 三参数计算后写入请求，模板只按请求放样。 |
 | `fixture-acceptance.mjs` | 不读写文件；头部说明 fixture 的既有验收约定，不将契约常量重新声明为运行参数。 |
 
 这些整理保留已有默认值、文件格式、调用接口与验收逻辑。可用 `node --check lib/<module>.mjs` 做语法检查，正常代码检查仍按仓库 `AGENTS.md` 执行；语法检查或离线测试不能证明 ANSYS 运行产物已经验收。
@@ -27,7 +27,7 @@
 | [`python-map.mjs`](python-map.mjs) | 将圆周阵列、圆柱、拉伸等意图映射为 API 搜索结果及 `inferred` Python 候选；组合几何步骤配方。 |
 | [`missile-schema.mjs`](missile-schema.mjs) | 参数字段、单位、默认值、可用约定与优化区间的统一声明，供 MCP、CLI 和请求文件派生使用。 |
 | [`missile-params.mjs`](missile-params.mjs) | 按显式参数 → 预设 → 默认值合并，转换类型、检查几何与区域约束，生成错误、警告、修正和模型请求。 |
-| [`missile-geometry.mjs`](missile-geometry.mjs) | 计算鼻锥与倒圆剖面、舵面轮廓和站位、体积/面积/质心、包围盒、BOI 与外壳的预期几何。 |
+| [`missile-geometry.mjs`](missile-geometry.mjs) | 计算鼻锥与倒圆剖面、梯形舵面平面形状、NACA 横截面、站位、体积/面积/质心、包围盒、BOI 与外壳的预期几何。 |
 | [`missile-template.mjs`](missile-template.mjs) | 组装请求 JSON 并渲染目标 API 版本的 SpaceClaim Python；模板读取参数、建模、合并、创建区域和命名选择、保存模型并报告结果。预览导出失败不单独判定几何失败。 |
 | [`spaceclaim-runner.mjs`](spaceclaim-runner.mjs) | 解析 SpaceClaim 与 API 版本，生成脚本/参数，可选启动 SpaceClaim，并依据新模型与结构化结果检查几何、区域、选择集及结构树处理。 |
 | [`fixture-acceptance.mjs`](fixture-acceptance.mjs) | 解析圆周阵列 fixture 的 `key=value` 结果，检查六个角度、360° 覆盖、单一合并实体及非零面数。 |

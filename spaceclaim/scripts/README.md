@@ -47,7 +47,7 @@ fixture 通过 `SCDM_RUNTIME_MODEL`、`SCDM_RUNTIME_RESULT` 和 `SCDM_RUNTIME_DI
 npm run missile -- --list
 npm run missile -- --help
 npm run missile -- --preset params-preset.json --generate-only --json
-npm run missile -- --k_nose 0.006 --t_fin 0.015 --timeout 300000 --json
+npm run missile -- --k_nose 0.006 --thickness_percent 5 --le_radius_index 6 --max_thickness_tenths 3 --timeout 300000 --json
 ```
 
 | 选项 | 含义 |

@@ -26,7 +26,7 @@
         根部弦长 c_root > 梢部弦长 c_tip；前缘后掠量 sweep_le ≡ c_root - c_tip，
         由前者自动派生（不单独填参数），保证后缘始终垂直于弹轴。
     建模方式: 在子午面 (x, r) 内画侧视梯形（根部贴在弹体圆柱表面上），
-    厚度按 NACA 翼型加在周向。翼型五个参数见 scripts/naca_section.py，
+    厚度按对称 NACA 翼型加在周向。翼型三个参数见 scripts/naca_section.py，
     与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
 
 采样: 默认按 CFD 关键部位加密，总点数不变。舵面、前缘/后缘、根梢、锥顶倒角、
@@ -84,8 +84,8 @@ MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
 
-# 舵面翼型与批量 DATCOM 共用 scripts/naca_section.py 顶部的五个参数。
-# 改弯度、弯度位置、厚度、前缘半径指数或最大厚度位置时，只改那一处。
+# 舵面翼型与批量 DATCOM 共用 scripts/naca_section.py 顶部的三个参数。
+# 改厚度、前缘半径指数或最大厚度位置时，只改那一处。翼型保持上下对称。
 FIN_SECTION = NACA_SECTION
 DEFAULT_N_POINTS = 16384
 DEFAULT_SEED = 0

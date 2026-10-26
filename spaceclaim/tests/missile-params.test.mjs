@@ -16,7 +16,7 @@ test("every geometry parameter can be overridden on its own", () => {
     assert.equal(merged.values[field], override, `${field} did not accept an override`);
     assert.equal(merged.sources[field], "explicit", `${field} must be recorded as explicit`);
     const request = buildModelRequest({ explicit: { [field]: override } });
-    if (field === "t_fin" || field === "k_nose" || field === "D" || field === "L" || field === "L_N") continue;
+    if (field === "k_nose" || field === "D" || field === "L" || field === "L_N") continue;
     assert.equal(request.sources[field], "explicit");
   }
 });
@@ -67,6 +67,14 @@ test("numeric strings are coerced and junk is rejected", () => {
   assert.match(nonInteger.errors.join("\n"), /cruciform_count 必须是整数/);
 });
 
+test("thickness_percent rounds to the NACA card hundredth", () => {
+  const request = buildModelRequest({ explicit: { thickness_percent: 4.484 } });
+  assert.equal(request.ok, true, request.errors.join(" | "));
+  assert.equal(request.params.thickness_percent, 4.48);
+  assert.equal(request.corrections[0].field, "thickness_percent");
+  assert.equal(request.corrections[0].to, 4.48);
+});
+
 test("the baseline parameter set validates cleanly", () => {
   const request = buildModelRequest({});
   assert.equal(request.ok, true);
@@ -84,7 +92,12 @@ test("hard errors reject geometrically impossible sets", () => {
     [{ C_RW: 0 }, /C_RW 必须大于 0/],
     [{ B_W: 0 }, /B_W 必须大于 0/],
     [{ C_TW: -0.01 }, /C_TW 不能为负/],
-    [{ t_fin: 0 }, /t_fin 必须大于 0/],
+    [{ thickness_percent: 0 }, /thickness_percent 必须是大于 0、小于 40/],
+    [{ thickness_percent: 40 }, /thickness_percent 必须是大于 0、小于 40/],
+    [{ le_radius_index: -1 }, /le_radius_index 必须是 0 到 9/],
+    [{ le_radius_index: 10 }, /le_radius_index 必须是 0 到 9/],
+    [{ max_thickness_tenths: 1 }, /max_thickness_tenths 只允许/],
+    [{ max_thickness_tenths: 7 }, /max_thickness_tenths 只允许/],
     [{ L_W: 0.3 }, /前舵轴向位置 L_W/],
     [{ C_RW: 2.0 }, /前舵超出弹尾/],
     [{ L_F: 3.4 }, /后舵超出弹尾/],
@@ -309,5 +322,7 @@ test("k_nose below the geometric ceiling still builds", () => {
 test("the optimisation pool is exposed as data for later sweeps", () => {
   assert.ok(optimisationPool().includes("k_nose"));
   assert.ok(optimisationPool().includes("L_W"));
-  assert.ok(!optimisationPool().includes("t_fin"));
+  assert.ok(!optimisationPool().includes("thickness_percent"));
+  assert.ok(!optimisationPool().includes("le_radius_index"));
+  assert.ok(!optimisationPool().includes("max_thickness_tenths"));
 });

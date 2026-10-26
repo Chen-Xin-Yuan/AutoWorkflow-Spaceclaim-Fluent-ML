@@ -6,8 +6,137 @@
  * calls; it contains no geometry constants of its own.
  *
  * 输入：调用方提供的参数/剖面；输出：内存中的派生结果，不读写文件。
- * 常用参数及默认值统一在 missile-schema.mjs 文件前部；本模块函数参数与数值计算保持原样。
+ * 常用参数及默认值统一在 missile-schema.mjs 文件前部。
+ * 翼型方程与 DATCOM/scripts/naca_section.py 的对称 NACA 四位数一致；下面的参考厚度、
+ * 前缘系数和后缘斜率是该方程的常数，不是可调设计参数。AIRFOIL_SAMPLES_PER_SIDE 只决定
+ * 放样折线的弦向分辨率。
  */
+
+/** Chordwise samples on each side of the airfoil polyline. Leading-edge spacing is cosine-clustered. */
+export const AIRFOIL_SAMPLES_PER_SIDE = 32;
+
+const NACA_REFERENCE_THICKNESS = 0.20;
+const NACA_REFERENCE_HALF_THICKNESS = 0.10;
+const NACA_REFERENCE_TE_HALF = 0.002;
+const NACA_REFERENCE_A0 = 0.2969;
+const NACA_TE_SLOPE_BY_TENTHS = { 2: 0.200, 3: 0.234, 4: 0.315, 5: 0.465, 6: 0.700 };
+
+function solveLinear(matrix, rhs) {
+  const size = rhs.length;
+  const rows = matrix.map((row, index) => [...row, rhs[index]]);
+  for (let col = 0; col < size; col += 1) {
+    let pivot = col;
+    for (let row = col + 1; row < size; row += 1) {
+      if (Math.abs(rows[row][col]) > Math.abs(rows[pivot][col])) pivot = row;
+    }
+    if (Math.abs(rows[pivot][col]) < 1e-14) {
+      throw new Error("NACA 厚度方程无解，请调整前缘半径指数或最大厚度位置。");
+    }
+    [rows[col], rows[pivot]] = [rows[pivot], rows[col]];
+    const scale = rows[col][col];
+    for (let colJ = col; colJ < size + 1; colJ += 1) rows[col][colJ] /= scale;
+    for (let row = 0; row < size; row += 1) {
+      if (row === col) continue;
+      const factor = rows[row][col];
+      for (let colJ = col; colJ < size + 1; colJ += 1) rows[row][colJ] -= factor * rows[col][colJ];
+    }
+  }
+  return rows.map((row) => row[size]);
+}
+
+/** Coefficients of the 20% reference thickness form. The real section is scaled by thickness/0.20. */
+export function nacaReferenceCoefficients(leRadiusIndex, maxThicknessTenths) {
+  const xm = maxThicknessTenths / 10;
+  const a0 = NACA_REFERENCE_A0 * (leRadiusIndex / 6);
+  const d0 = NACA_REFERENCE_TE_HALF;
+  const d1 = NACA_TE_SLOPE_BY_TENTHS[maxThicknessTenths];
+  if (d1 === undefined) throw new Error(`max_thickness_tenths '${maxThicknessTenths}' 没有对应的后缘斜率。`);
+  const z = 1 - xm;
+  const [d2, d3] = solveLinear(
+    [[z * z, z * z * z], [2 * z, 3 * z * z]],
+    [NACA_REFERENCE_HALF_THICKNESS - d0 - d1 * z, -d1],
+  );
+  const curvature = 2 * d2 + 6 * d3 * z;
+  const root = Math.sqrt(xm);
+  const [a1, a2, a3] = solveLinear(
+    [[xm, xm * xm, xm ** 3], [1, 2 * xm, 3 * xm * xm], [0, 2, 6 * xm]],
+    [
+      NACA_REFERENCE_HALF_THICKNESS - a0 * root,
+      -0.5 * a0 / root,
+      curvature + 0.25 * a0 * xm ** -1.5,
+    ],
+  );
+  return { a0, a1, a2, a3, d0, d1, d2, d3, xm };
+}
+
+/** Half-thickness y/c. x is 0 at the leading edge and 1 at the trailing edge. */
+export function nacaHalfThicknessRatio(x, coefficients, thicknessRatio) {
+  let y;
+  if (x <= coefficients.xm) {
+    const xf = Math.max(x, 0);
+    y = coefficients.a0 * Math.sqrt(xf) + coefficients.a1 * xf + coefficients.a2 * xf ** 2 + coefficients.a3 * xf ** 3;
+  } else {
+    const z = 1 - x;
+    y = coefficients.d0 + coefficients.d1 * z + coefficients.d2 * z ** 2 + coefficients.d3 * z ** 3;
+  }
+  return Math.max(y, 0) * (thicknessRatio / NACA_REFERENCE_THICKNESS);
+}
+
+function polygonAreaCentroid(points) {
+  let crossSum = 0;
+  let momentX = 0;
+  let momentY = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [x1, y1] = points[index];
+    const [x2, y2] = points[(index + 1) % points.length];
+    const cross = x1 * y2 - x2 * y1;
+    crossSum += cross;
+    momentX += (x1 + x2) * cross;
+    momentY += (y1 + y2) * cross;
+  }
+  return { area: crossSum / 2, cx: momentX / (3 * crossSum), cy: momentY / (3 * crossSum) };
+}
+
+/**
+ * Closed nondimensional airfoil, LE → upper surface → TE → lower surface → LE.
+ * Coordinates are (x/c, y/c). The loop is not closed by repeating the first point.
+ */
+export function buildNacaAirfoil({ thickness_percent, le_radius_index, max_thickness_tenths }, samples = AIRFOIL_SAMPLES_PER_SIDE) {
+  const thicknessRatio = thickness_percent / 100;
+  const coefficients = nacaReferenceCoefficients(le_radius_index, max_thickness_tenths);
+  const loop = [];
+  for (let index = 0; index <= samples; index += 1) {
+    const xi = 0.5 * (1 - Math.cos((Math.PI * index) / samples));
+    loop.push([xi, nacaHalfThicknessRatio(xi, coefficients, thicknessRatio)]);
+  }
+  for (let index = samples; index >= 1; index -= 1) {
+    const xi = 0.5 * (1 - Math.cos((Math.PI * index) / samples));
+    loop.push([xi, -nacaHalfThicknessRatio(xi, coefficients, thicknessRatio)]);
+  }
+  return { coefficients, thicknessRatio, loop, properties: polygonAreaCentroid(loop) };
+}
+
+/**
+ * Volume centroid of a straight loft between two similar sections.
+ * Chord and leading edge vary linearly with radius; section area scales with chord squared.
+ */
+export function taperedLoftCentroid({ le0, c0, r0, le1, c1, r1, areaRatio, xiBar }) {
+  const span = r1 - r0;
+  const dc = c1 - c0;
+  const dle = le1 - le0;
+  const c2 = c0 * c0 + c0 * dc + (dc * dc) / 3;
+  const c2t = (c0 * c0) / 2 + (2 * c0 * dc) / 3 + (dc * dc) / 4;
+  const c3 = c0 ** 3 + 1.5 * c0 * c0 * dc + c0 * dc * dc + (dc ** 3) / 4;
+  const volume = areaRatio * span * c2;
+  return {
+    volume,
+    centroid: [
+      (le0 * c2 + dle * c2t + xiBar * c3) / c2,
+      (r0 * c2 + span * c2t) / c2,
+      0,
+    ],
+  };
+}
 
 export function bodyRadius(D) {
   return D / 2;
@@ -327,27 +456,61 @@ export function finPlanform({ le_x, root_chord, tip_chord, span, root_radius, bo
 }
 
 /**
- * Planform corners of one fin instance in 3D, for every combination of cruciform phase and count.
- * `angle` is measured from +Y towards +Z; the plate thickness runs along the in-plane normal.
+ * Airfoil polyline of one fin instance. `angle` is measured from +Y towards +Z.
+ * Section offset is the signed thickness along the in-plane normal; the planform itself stays in the radial plane.
  */
-function finInstanceCorners(fin, angleDeg) {
+function finInstancePoints(fin, angleDeg) {
   const angle = (angleDeg * Math.PI) / 180;
   const radial = [Math.cos(angle), Math.sin(angle)];
   const normal = [-Math.sin(angle), Math.cos(angle)];
-  const half = fin.thickness / 2;
-  const corners = [];
-  for (const [x, r] of fin.points) {
-    for (const sign of [1, -1]) {
-      corners.push([x, r * radial[0] + sign * half * normal[0], r * radial[1] + sign * half * normal[1]]);
+  const points = [];
+  for (const section of fin.sections) {
+    for (const [x, offset] of section.points) {
+      points.push([
+        x,
+        section.radius * radial[0] + offset * normal[0],
+        section.radius * radial[1] + offset * normal[1],
+      ]);
     }
   }
-  return corners;
+  return points;
 }
 
 /**
- * True bounding box of the finished model: the body plus every fin instance.
+ * Root and tip sections of one planform. The same nondimensional NACA loop is scaled by the local chord,
+ * so the leading and trailing edges stay on the trapezoid while the thickness follows the airfoil.
+ */
+export function finAirfoilSections(fin, airfoil) {
+  const sectionAt = (radius) => {
+    const span = fin.tip_radius - fin.root_radius;
+    const fraction = (radius - fin.root_radius) / span;
+    const le = fin.buried_le + (fin.tip_le - fin.buried_le) * fraction;
+    const chord = fin.te - le;
+    return {
+      radius,
+      le,
+      chord,
+      points: airfoil.loop.map(([xi, eta]) => [le + xi * chord, eta * chord]),
+    };
+  };
+  const sections = [sectionAt(fin.root_radius), sectionAt(fin.tip_radius)];
+  const solid = taperedLoftCentroid({
+    le0: sections[0].le,
+    c0: sections[0].chord,
+    r0: sections[0].radius,
+    le1: sections[1].le,
+    c1: sections[1].chord,
+    r1: sections[1].radius,
+    areaRatio: Math.abs(airfoil.properties.area),
+    xiBar: airfoil.properties.cx,
+  });
+  return { sections, centroid: solid.centroid, volume: solid.volume };
+}
+
+/**
+ * True bounding box of the finished model: the body plus every fin airfoil vertex.
  * The simple `D + 2·max(B)` formula only holds for a four-fin "+" cruciform, so the expectation
- * is computed from the real fin corner positions instead.
+ * is computed from the lofted section points instead.
  */
 export function expectedExtents(geometry) {
   const { L, D, fins, cruciform_count, fin_phase_deg } = geometry;
@@ -356,7 +519,7 @@ export function expectedExtents(geometry) {
   for (const fin of fins) {
     for (let index = 0; index < cruciform_count; index += 1) {
       const angle = fin_phase_deg + (360 * index) / cruciform_count;
-      for (const [, y, z] of finInstanceCorners(fin, angle)) {
+      for (const [, y, z] of finInstancePoints(fin, angle)) {
         maxY = Math.max(maxY, Math.abs(y));
         maxZ = Math.max(maxZ, Math.abs(z));
       }
@@ -563,6 +726,7 @@ export function deriveGeometry(params) {
   const root_radius = R - root_overlap;
   const front = finPlanform({ le_x: params.L_W + offset, root_chord: params.C_RW, tip_chord: params.C_TW, span: params.B_W, root_radius, body_radius: R, le_mode });
   const rear = finPlanform({ le_x: params.L_F + offset, root_chord: params.C_RF, tip_chord: params.C_TF, span: params.B_F, root_radius, body_radius: R, le_mode });
+  const airfoil = buildNacaAirfoil(params);
   const faces = revolvedFaceAreas(body.segments);
   // Station where the cone hands over to the cylinder, after the blunting shift.
   const cylinder = body.segments.find((segment) => segment.kind === "cylinder");
@@ -576,25 +740,36 @@ export function deriveGeometry(params) {
     expectedVolume: expectedSolidVolume(body.segments),
     bodyCenterOfMass: solidOfRevolutionCenterOfMass(body.segments),
     fins: [
-      { name: "front", thickness: params.t_fin, ...front },
-      { name: "rear", thickness: params.t_fin, ...rear },
+      { name: "front", ...front },
+      { name: "rear", ...rear },
     ],
+    airfoil: {
+      thickness_percent: params.thickness_percent,
+      le_radius_index: params.le_radius_index,
+      max_thickness_tenths: params.max_thickness_tenths,
+      thicknessRatio: airfoil.thicknessRatio,
+      samplesPerSide: AIRFOIL_SAMPLES_PER_SIDE,
+      edges: airfoil.loop.length,
+    },
     cruciform_count: params.cruciform_count,
     fin_phase_deg: finPhaseDegrees(fin_phase),
     tip_to_tip: D + 2 * Math.max(params.B_W, params.B_F),
-    // Each fin instance meets the body in five faces: the two plate sides (trimmed by the cylinder),
-    // the leading-edge face, the trailing-edge face and the tip chord. The buried root face is
-    // absorbed by the union. The acceptance gate checks the named selection against this.
-    expectedFinFaceCount: 5 * params.cruciform_count * 2,
+    // Ruled loft of the closed polyline: one side face per edge, plus the tip cap. The root cap
+    // lies inside the body and is absorbed by Combine.Merge. Both stages and every pattern copy
+    // contribute the same count.
+    expectedFinFaceCount: (airfoil.loop.length + 1) * params.cruciform_count * 2,
     model_offset: offset,
     nose_tip_x: offset,
     tip_offset: body.tip.offset,
     nose_junction_x: cylinder ? cylinder.from[0] : params.L_N + offset,
   };
   for (const fin of result.fins) {
-    // The seed fin is a prism along the plate normal, so its centre of mass sits at the planform
-    // polygon's centroid. This is what proves the station the model was actually built at.
-    fin.centroid = polygonCentroid(fin.points);
+    // The seed fin is a ruled loft of similar NACA sections, so its centre of mass is the solid
+    // centroid. The axial component is what the acceptance gate reads back.
+    const solid = finAirfoilSections(fin, airfoil);
+    fin.sections = solid.sections;
+    fin.centroid = solid.centroid;
+    fin.volume = solid.volume;
     // The station that is actually visible - and measurable - on the finished model: where the
     // leading edge meets the body surface. It is what `L_W` / `L_F` are defined to be.
     fin.leAtSurface = fin.le_at_surface;

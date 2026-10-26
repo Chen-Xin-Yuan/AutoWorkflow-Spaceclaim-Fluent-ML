@@ -68,6 +68,7 @@ SpaceClaim 使用上表三个翼型参数给前后舵放样，平面形状仍由
 | DATCOM | 低保真气动力程序与模板。正式入口读总表，结果写到 `data_lib/runs/low/` |
 | data_lib | 输入总表、阶段队列、高低保真运行、点云与来源索引 |
 | ML_training | 机器学习预留 |
+| multiagents_workbench | 第 1 课多智能体协作：只读 cases.csv 查询几何与工况，不启动 ANSYS 或 DATCOM |
 | feedback | 异常日志、参数快照和失败产物，大输入通过校验值引用 |
 | docx | 文献、汇报、提示词、通用 skill 和资料导航 |
 | experiments/autoCFD | 保留的独立研究项目 |
@@ -223,6 +224,19 @@ python DATCOM/scripts/01_batch_datcom.py
 | 下级 | 类型 | 作用 |
 |---|---|---|
 | `README.md` | 预留 | 仅建立目录与约定，尚未实现训练流程 |
+
+### `multiagents_workbench/` — 多智能体协作（第 1 课）
+
+只读 `cases.csv` 查询几何和工况。不启动 SpaceClaim、Fluent 或 DATCOM，也不写总表。启动方式见该目录的 `README.md`。
+
+| 下级 | 类型 | 作用 |
+|---|---|---|
+| `geometry_agent/` | 目录 | Geometry Agent，绑定 `127.0.0.1:10011`，按 `geometry_id` 返回 11 个主尺寸（米） |
+| `condition_agent/` | 目录 | Condition Agent，绑定 `127.0.0.1:10012`，按本文件的 C01–C30 网格回报马赫数与攻角，并核对总表是否有该行 |
+| `host/` | 目录 | 命令行客户端，按句子把问题发给上面两个 Agent |
+| `requirements.txt` | 文件 | Python 依赖，固定 `a2a-sdk==1.1.0` |
+| `README.md` | 文件 | 虚拟环境与三条启动命令 |
+| `.venv/` | 依赖 | 本课隔离虚拟环境，**不纳入版本管理，不要手工编辑**，由根 `.gitignore` 的 `.venv/` 排除 |
 
 ### `archive/` — 完整备份与迁移快照
 

@@ -13,6 +13,12 @@ import { deriveGeometry, deriveRegions, noseFilletLimits, resolveModelPlacement,
 // 下列为原有校验常量，所有数值及校验逻辑保持不变。
 export const MIN_TIP_CHORD = 1e-3;
 const NUMBER_KINDS = new Set(["number", "integer"]);
+const ALLOWED_THICKNESS_TENTHS = [2, 3, 4, 5, 6];
+
+/** Same rounding as DATCOM's NACA card: hundredths of a percent, with a tiny bias off the .xx5 edge. */
+export function roundThicknessPercent(value) {
+  return Math.round((value + 1e-12) * 100) / 100;
+}
 
 function kindOf(param) {
   if (param.kind) return param.kind;
@@ -89,7 +95,18 @@ export function validateMissileParams(values) {
     need(num(span) > 0, `${span} 必须大于 0。`);
     need(num(tip) >= 0, `${tip} 不能为负。`);
   }
-  need(num("t_fin") > 0, "t_fin 必须大于 0（合并为单一实体要求舵面有厚度）。");
+  const rawThickness = num("thickness_percent");
+  need(Number.isFinite(rawThickness), "thickness_percent 必须是大于 0、小于 40 的有限数。");
+  if (Number.isFinite(rawThickness)) {
+    const rounded = roundThicknessPercent(rawThickness);
+    if (rounded !== rawThickness) {
+      corrections.push({ field: "thickness_percent", from: rawThickness, to: rounded, reason: "翼型厚度按 NACA 写卡规则四舍五入到 0.01。" });
+      values.thickness_percent = rounded;
+    }
+    need(num("thickness_percent") > 0 && num("thickness_percent") < 40, "thickness_percent 必须是大于 0、小于 40 的有限数。");
+  }
+  need(Number.isInteger(num("le_radius_index")) && num("le_radius_index") >= 0 && num("le_radius_index") <= 9, "le_radius_index 必须是 0 到 9 的整数。");
+  need(ALLOWED_THICKNESS_TENTHS.includes(num("max_thickness_tenths")), "max_thickness_tenths 只允许 2、3、4、5、6。");
 
   // Axial placement measured from the nose tip to the fin root leading edge.
   need(num("L_W") >= num("L_N"), `前舵轴向位置 L_W (${num("L_W")}) 必须不早于锥柱交接处 L_N (${num("L_N")})。`);

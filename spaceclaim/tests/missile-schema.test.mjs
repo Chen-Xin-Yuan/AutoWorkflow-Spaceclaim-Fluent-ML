@@ -17,8 +17,8 @@ import {
 const PLAN_PATH = new URL("../docs/superpowers/plans/2026-09-17-missile-parametric-scdoc.md", import.meta.url);
 
 test("declares every documented geometry parameter with a default", () => {
-  assert.equal(GEOMETRY_PARAMS.length, 14);
-  assert.deepEqual(GEOMETRY_FIELDS, ["L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F", "t_fin", "k_nose", "k_tip"]);
+  assert.equal(GEOMETRY_PARAMS.length, 16);
+  assert.deepEqual(GEOMETRY_FIELDS, ["L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F", "thickness_percent", "le_radius_index", "max_thickness_tenths", "k_nose", "k_tip"]);
   for (const param of GEOMETRY_PARAMS) {
     assert.equal(typeof param.default, "number", `${param.field} needs a numeric default`);
     assert.ok(param.label, `${param.field} needs a label`);
@@ -38,15 +38,20 @@ test("defaults reproduce the agreed baseline", () => {
   assert.equal(values.C_RF, 0.38);
   assert.equal(values.C_TF, 0.19);
   assert.equal(values.B_F, 0.22);
-  assert.equal(values.t_fin, 0.012);
+  assert.equal(values.thickness_percent, 4.48);
+  assert.equal(values.le_radius_index, 6);
+  assert.equal(values.max_thickness_tenths, 3);
   assert.equal(values.k_nose, 0.005);
   assert.equal(values.k_tip, 0.002);
 });
 
-test("t_fin is an overridable input, not a frozen constant", () => {
-  const param = schemaEntry("t_fin");
-  assert.equal(param.default, 0.012);
-  assert.equal(param.range, null, "t_fin stays out of the optimisation pool but must remain settable");
+test("the NACA section parameters stay settable and out of the optimisation pool", () => {
+  for (const field of ["thickness_percent", "le_radius_index", "max_thickness_tenths"]) {
+    const param = schemaEntry(field);
+    assert.equal(param.range, null, `${field} stays out of the optimisation pool but must remain settable`);
+  }
+  assert.equal(schemaEntry("le_radius_index").kind, "integer");
+  assert.equal(schemaEntry("max_thickness_tenths").kind, "integer");
 });
 
 test("optimisation pool is derived from data and covers the agreed ranges", () => {

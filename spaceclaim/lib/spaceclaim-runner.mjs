@@ -172,10 +172,10 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
 
   // Where the fins actually sit. The model frame origin is the nose tip, so the station is literally
   // the distance from the nose; extents, areas and volume cannot see an axial slide. The seed fin is
-  // a constant-thickness prism, so its measured centre of mass is the planform centroid, and the
-  // analytic centroid offset converts that back into the visible leading-edge station. This has to
-  // be a tight *absolute* tolerance: burying the root along the swept leading edge instead of
-  // radially moves the centroid by only 1.2 mm, which a loose relative check would sleep through.
+  // a ruled NACA loft, so its measured centre of mass is the solid centroid, and the analytic
+  // centroid offset converts that back into the visible leading-edge station. This has to be a tight
+  // *absolute* tolerance: burying the root along the swept leading edge instead of radially moves
+  // the centroid by only 1.2 mm, which a loose relative check would sleep through.
   const stationTolerance = 1e-4;
   const finPositions = result?.finPositions ?? [];
   for (const fin of geometry?.fins ?? []) {
@@ -261,7 +261,7 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
     // The split of the body family is structural: the tip cap, the cone, and cylinder + shoulder + base.
     const bodyKinds = geometry?.expectedAreas?.faces?.filter((face) => ["shoulder", "cylinder", "base"].includes(face.kind)).length ?? 0;
     add("弹体面划分与解析轮廓一致", (selectionReport.missile_nose_tip?.faces ?? 0) === (hasTip ? 1 : 0) && (selectionReport.missile_nose?.faces ?? 0) === 1 && (selectionReport.missile_body?.faces ?? 0) === bodyKinds, `tip=${selectionReport.missile_nose_tip?.faces ?? 0} nose=${selectionReport.missile_nose?.faces} body=${selectionReport.missile_body?.faces} expectedBody=${bodyKinds}`);
-    add("舵面面数 = 每片 5 面 × 全部实例", selectionReport.missile_fin?.faces === geometry?.expectedFinFaceCount, `fin=${selectionReport.missile_fin?.faces} expected=${geometry?.expectedFinFaceCount}`);
+    add("舵面面数与翼型放样拓扑一致", selectionReport.missile_fin?.faces === geometry?.expectedFinFaceCount, `fin=${selectionReport.missile_fin?.faces} expected=${geometry?.expectedFinFaceCount}`);
     // Both caps of the enclosure, one face each and the right size; the wall is the side surface.
     const capArea = Math.PI * request.regions.enclosure.radius ** 2;
     add("inlet / outlet 是外壳两端盖各一个面", selectionReport.inlet?.faces === 1 && selectionReport.outlet?.faces === 1 && relativeDifference(selectionReport.inlet?.areaM2, capArea) <= 1e-3 && relativeDifference(selectionReport.outlet?.areaM2, capArea) <= 1e-3, `inlet=${selectionReport.inlet?.areaM2} outlet=${selectionReport.outlet?.areaM2} expected=${capArea}`);
