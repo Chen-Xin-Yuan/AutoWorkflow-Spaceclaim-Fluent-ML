@@ -66,8 +66,13 @@ test("optimisation pool is derived from data and covers the agreed ranges", () =
 });
 
 test("convention parameters expose their implemented value set", () => {
-  assert.deepEqual(CONVENTION_FIELDS, ["fin_phase", "root_overlap", "le_mode", "fillet_location", "cruciform_count", "scdm_api_version"]);
+  assert.deepEqual(CONVENTION_FIELDS, ["fin_phase", "root_overlap", "le_mode", "fin_section", "hex_flat_start", "hex_flat_end", "fillet_location", "cruciform_count", "scdm_api_version"]);
   assert.deepEqual(schemaEntry("fin_phase").options, ["+", "x"]);
+  assert.deepEqual(schemaEntry("fin_section").options, ["naca", "hexagon"]);
+  assert.deepEqual(schemaEntry("fin_section").implemented, ["naca", "hexagon"]);
+  assert.equal(schemaEntry("fin_section").default, "naca");
+  assert.equal(schemaEntry("hex_flat_start").default, 0.2);
+  assert.equal(schemaEntry("hex_flat_end").default, 0.8);
   assert.deepEqual(schemaEntry("le_mode").implemented, ["trailing_aligned"]);
   assert.deepEqual(schemaEntry("fillet_location").options, ["cone_cylinder", "nose_tip", "both"]);
   assert.deepEqual(schemaEntry("fillet_location").implemented, ["cone_cylinder", "nose_tip", "both"]);

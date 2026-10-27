@@ -142,13 +142,18 @@ All lengths are in metres. The model axis is X; the nose points toward −X. `L_
 | `k_nose` | `0.005` | Shoulder-round radius coefficient, `r_f = L × k_nose` |
 | `k_tip` | `0.002` | Tangent spherical nose-tip radius coefficient, `r_t = L × k_tip` |
 
-The workspace geometry set has 14 parameters: the 11 lengths above, plus three shared NACA fin-section parameters, `thickness_percent`, `le_radius_index`, and `max_thickness_tenths`. Their allowed values match `DATCOM/scripts/naca_section.py`: thickness is greater than 0 and less than 40 and is rounded to 0.01; the leading-edge index is an integer from 0 to 9 and scales the standard nose radius by `(index/6)²`; the thickness station is 2, 3, 4, 5, or 6. The planform stays the trapezoid fixed by root chord, tip chord, span, and trailing-edge alignment. Each fin is a symmetric NACA four-digit section scaled by the local chord and ruled from the buried root to the tip. This module also uses the nose fillets `k_nose` and `k_tip`.
+The workspace geometry set has 14 parameters: the 11 lengths above, plus three shared NACA fin-section parameters, `thickness_percent`, `le_radius_index`, and `max_thickness_tenths`. Their allowed values match `DATCOM/scripts/naca_section.py`: thickness is greater than 0 and less than 40 and is rounded to 0.01; the leading-edge index is an integer from 0 to 9 and scales the standard nose radius by `(index/6)²`; the thickness station is 2, 3, 4, 5, or 6. The planform stays the trapezoid fixed by root chord, tip chord, span, and trailing-edge alignment. This module also uses the nose fillets `k_nose` and `k_tip`.
+
+`fin_section` selects the cross-section and defaults to `naca`. `naca` is the symmetric four-digit section, scaled by the local chord and ruled from the buried root to the tip; `le_radius_index` and `max_thickness_tenths` apply only then. `hexagon` is a symmetric hexagon with a sharp leading edge and a sharp trailing edge. Maximum thickness is still `thickness_percent`. The upper and lower surfaces stay parallel to the chord from `hex_flat_start` to `hex_flat_end`, 20% to 80% of the local chord by default. The hexagonal section ignores the leading-edge index and the thickness station. Lofting, the circular pattern, and the merge are the same as for NACA.
 
 | Convention input | Default | Supported behavior |
 | --- | --- | --- |
 | `fin_phase` | `"+"` | `"+"` or `"x"`; `"x"` adds a 45° rotation |
 | `root_overlap` | `0.005` | Positive inward overlap, smaller than either fin span |
 | `le_mode` | `"trailing_aligned"` | Only trailing-edge alignment is accepted; `leading_aligned` and `symmetric` are rejected |
+| `fin_section` | `"naca"` | `"naca"` or `"hexagon"` |
+| `hex_flat_start` | `0.2` | Chord fraction where the hexagonal flat begins; used only by `hexagon` |
+| `hex_flat_end` | `0.8` | Chord fraction where the hexagonal flat ends; requires `0 < hex_flat_start < hex_flat_end < 1` |
 | `fillet_location` | `"both"` | `"cone_cylinder"`, `"nose_tip"`, or `"both"`; a zero coefficient disables that rounding |
 | `cruciform_count` | `4` | An even integer ≥ 2, per stage; real circular pattern over 360° |
 | `scdm_api_version` | `""` | Accepted compatibility field; currently does not override the version inferred by the runner |
@@ -181,6 +186,7 @@ npm run missile -- --list
 
 # Generate only; no SpaceClaim launch
 npm run missile -- --generate-only --k_nose 0.006 --json
+npm run missile -- --fin_section hexagon --timeout 300000 --json
 
 # Load an existing workspace input file and execute SpaceClaim
 npm run missile -- --preset ..\data_lib\inputs\model-params.json --name model.scdoc --json

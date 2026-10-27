@@ -34,7 +34,7 @@
 | `le_radius_index` | 前缘半径指数。0 是尖前缘，6 是标准圆前缘，再大更钝 | 整数 0–9 | 6 |
 | `max_thickness_tenths` | 最大厚度距前缘的弦向位置，单位是 1/10 弦长 | 2、3、4、5、6 | 3 |
 
-SpaceClaim 使用上表三个翼型参数给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/naca_section.py` 相同。
+SpaceClaim 默认使用上表三个翼型参数给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/naca_section.py` 相同。`fin_section=hexagon` 时改为尖前缘、尖后缘的对称六边形，厚度仍用 `thickness_percent`，等厚段由 `hex_flat_start`、`hex_flat_end` 决定；这一选择只存在于 SpaceClaim 建模，不改变上表的 14 个几何参数。
 
 ### 来流参数与工况组合
 

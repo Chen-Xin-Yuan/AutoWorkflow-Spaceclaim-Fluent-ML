@@ -162,6 +162,9 @@
 | `fin_phase` | 十字舵相位 | `"+"`（0/90/180/270） | `"+"` / `"x"`（45° 起） |
 | `root_overlap` | 舵根沿展向嵌入弹体的重叠量 δ | 0.005 m | 任意 `> 0`（必须小于 `B_*`） |
 | `le_mode` | 梯形舵第四约束 | `"trailing_aligned"`（后缘齐平） | 当前仅支持此值，见下 |
+| `fin_section` | 舵面横截面 | `"naca"` | `"naca"` / `"hexagon"` |
+| `hex_flat_start` | 六边形等厚段起点，占当地弦长 | 0.2 | 仅 `hexagon` 使用，且 `0 < hex_flat_start < hex_flat_end < 1` |
+| `hex_flat_end` | 六边形等厚段终点，占当地弦长 | 0.8 | 仅 `hexagon` 使用 |
 | `fillet_location` | 倒圆位置 | `"both"`（交接处 + 弹尖） | `cone_cylinder` / `nose_tip` / `both` |
 | `cruciform_count` | 每级舵面片数 | 4 | 正偶数 |
 | `scdm_api_version` | 目标脚本 API 版本 | 由所选 `AWP_ROOT<number>` 解析 | 版本字符串 |
@@ -573,3 +576,5 @@ P1→P2→P3→P4 闭合后沿切向对称拉伸 `t_fin`，得一片舵实体。
 ## 后续变更
 
 舵面横截面改为对称 NACA 四位数。schema 使用 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`，平面形状仍由弦长与展长决定。上文里的 `t_fin` 记录保留为当时的等厚度实现。
+
+`fin_section` 在此之后增加 `hexagon`。六边形与 NACA 共用 `thickness_percent` 和同一条根梢放样；等厚段由 `hex_flat_start`、`hex_flat_end` 决定，前缘和后缘保持尖点。默认仍是 `naca`。

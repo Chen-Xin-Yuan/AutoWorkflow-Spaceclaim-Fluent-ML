@@ -86,6 +86,7 @@ node scripts/missile.mjs --list
 node scripts/missile.mjs --help
 node scripts/missile.mjs --preset ..\data_lib\inputs\missile_params_example.json --generate-only
 node scripts/missile.mjs --k_nose 0.006 --name missile.scdoc --timeout 300000 --json
+node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 ```
 
 预设文件示例属于工作区数据目录；使用独立检出时需自行准备 JSON 文件。需要另选输出位置时，使用仓库外目录，例如 `--out ..\data_lib\runs`；程序会在其中新建唯一运行子目录。
@@ -101,13 +102,17 @@ node scripts/missile.mjs --k_nose 0.006 --name missile.scdoc --timeout 300000 --
 | `k_nose` | 锥柱交接倒圆半径 / `L` | 0.005 |
 | `k_tip` | 弹尖球面钝化半径 / `L` | 0.002 |
 
-工作区几何参数一共 14 个：上表前 11 个主尺寸，加上前后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。允许值与 `DATCOM/scripts/naca_section.py` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。横截面是对称 NACA 四位数，按当地弦长缩放，在埋入根部与梢部之间直线放样。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
+工作区几何参数一共 14 个：上表前 11 个主尺寸，加上前后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。允许值与 `DATCOM/scripts/naca_section.py` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
+
+横截面由 `fin_section` 选择，默认 `naca`。`naca` 是对称 NACA 四位数，按当地弦长缩放，在埋入根部与梢部之间直线放样；此时 `le_radius_index` 和 `max_thickness_tenths` 进入剖面。`hexagon` 是尖前缘、尖后缘的对称六边形：最大厚度仍是 `thickness_percent`，上下表面在 `hex_flat_start` 与 `hex_flat_end` 之间与弦线平行，默认从当地弦长的 20% 到 80%。六边形不使用前缘半径指数和最大厚度位置，放样、圆周阵列和合并与 NACA 相同。
 
 | 约定与区域参数 | 默认值与支持范围 |
 | --- | --- |
 | `fin_phase` | `+`；也支持 `x`。 |
 | `root_overlap` | 0.005 m；必须为正且小于最小展长。 |
 | `le_mode` | 当前只实现 `trailing_aligned`；其余声明的模式会被拒绝。 |
+| `fin_section` | `naca`；也支持 `hexagon`。 |
+| `hex_flat_start` / `hex_flat_end` | 0.2 / 0.8，占当地弦长。只在 `hexagon` 时决定等厚段；须满足 `0 < hex_flat_start < hex_flat_end < 1`。 |
 | `fillet_location` | `both`；也支持 `cone_cylinder`、`nose_tip`。 |
 | `cruciform_count` | 每级 4 片；接受大于等于 2 的偶数。 |
 | `scdm_api_version` | 默认空字符串；执行器自动检测目标 API 版本，生成脚本使用检测结果。 |

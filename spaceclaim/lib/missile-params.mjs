@@ -150,6 +150,11 @@ export function validateMissileParams(values) {
   need(finPhase.implemented.includes(num("fin_phase")), `fin_phase '${num("fin_phase")}' 暂不支持，仅支持 ${finPhase.implemented.join(" / ")}。`);
   const leMode = schemaEntry("le_mode");
   need(leMode.implemented.includes(num("le_mode")), `le_mode '${num("le_mode")}' 暂不支持，仅支持 ${leMode.implemented.join(" / ")}（不会静默回退）。`);
+  const finSection = schemaEntry("fin_section");
+  need(finSection.implemented.includes(num("fin_section")), `fin_section '${num("fin_section")}' 暂不支持，仅支持 ${finSection.implemented.join(" / ")}。`);
+  const flatStart = num("hex_flat_start");
+  const flatEnd = num("hex_flat_end");
+  need(Number.isFinite(flatStart) && Number.isFinite(flatEnd) && flatStart > 0 && flatEnd < 1 && flatStart < flatEnd, "六边形等厚段需要 0 < hex_flat_start < hex_flat_end < 1。");
   const filletLocation = schemaEntry("fillet_location");
   need(filletLocation.implemented.includes(num("fillet_location")), `fillet_location '${num("fillet_location")}' 暂不支持，仅支持 ${filletLocation.implemented.join(" / ")}（不会静默回退）。`);
   need(num("root_overlap") > 0, "root_overlap 必须大于 0，否则舵根会脱离弹体。");

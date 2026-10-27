@@ -22,7 +22,7 @@ test("every geometry parameter can be overridden on its own", () => {
 });
 
 test("every convention parameter can be overridden on its own", () => {
-  const overrides = { fin_phase: "x", root_overlap: 0.008, le_mode: "trailing_aligned", fillet_location: "cone_cylinder", cruciform_count: 6, scdm_api_version: "V241", output_dir: "C:/tmp", file_name: "x.scdoc" };
+  const overrides = { fin_phase: "x", root_overlap: 0.008, le_mode: "trailing_aligned", fin_section: "hexagon", hex_flat_start: 0.15, hex_flat_end: 0.75, fillet_location: "cone_cylinder", cruciform_count: 6, scdm_api_version: "V241", output_dir: "C:/tmp", file_name: "x.scdoc" };
   for (const param of ALL_PARAMS) {
     if (!(param.field in overrides)) continue;
     const merged = mergeParams({ [param.field]: overrides[param.field] });
@@ -106,6 +106,10 @@ test("hard errors reject geometrically impossible sets", () => {
     [{ k_nose: 0.03 }, /必须小于机身半径/],
     [{ fin_phase: "y" }, /fin_phase 'y' 暂不支持/],
     [{ le_mode: "leading_aligned" }, /le_mode 'leading_aligned' 暂不支持/],
+    [{ fin_section: "diamond" }, /fin_section 'diamond' 暂不支持/],
+    [{ hex_flat_start: 0 }, /六边形等厚段需要/],
+    [{ hex_flat_start: 0.9, hex_flat_end: 0.8 }, /六边形等厚段需要/],
+    [{ hex_flat_end: 1 }, /六边形等厚段需要/],
     [{ root_overlap: 0 }, /root_overlap 必须大于 0/],
     [{ root_overlap: 0.25 }, /必须小于最小展长/],
     [{ cruciform_count: 3 }, /cruciform_count 必须是大于等于 2 的偶数/],

@@ -92,15 +92,15 @@ An AI application can interpret natural language, choose [parameters](lib/missil
 | 主体 / Body | `L_N=0.49`, `L=3.69`, `D=0.18` |
 | 前舵 / Front fins | `L_W=1.72`, `C_RW=0.23`, `C_TW=0.06`, `B_W=0.23` |
 | 后舵 / Rear fins | `L_F=3.2`, `C_RF=0.38`, `C_TF=0.19`, `B_F=0.22` |
-| 翼型、倒圆 / Airfoil, fillets | `thickness_percent=4.48`, `le_radius_index=6`, `max_thickness_tenths=3`, `k_nose=0.005`, `k_tip=0.002`, `fillet_location=both` |
+| 翼型、倒圆 / Airfoil, fillets | `fin_section=naca`, `thickness_percent=4.48`, `le_radius_index=6`, `max_thickness_tenths=3`, `hex_flat_start=0.2`, `hex_flat_end=0.8`, `k_nose=0.005`, `k_tip=0.002`, `fillet_location=both` |
 | 舵面约定 / Fin conventions | `fin_phase=+`, `root_overlap=0.005`, `le_mode=trailing_aligned`, `cruciform_count=4` |
 | 外壳 / Enclosure | `enclosure_shape=cylinder`, `enclosure_radius=2.7`, `enclosure_front=3.69`, `enclosure_back=16.45`, `enclosure_name=Enclosure` |
 | 加密区 / BOI | `boi_radius=0.45`, `boi_front=0.5`, `boi_back=2.5`, `boi_name=BOI` |
 | 定位 / Placement | `model_placement=ensemble`, `model_offset=-4`; 默认弹尖站位 / default nose-tip station `x=1.38` |
 
-工作区几何参数一共 14 个：11 个主尺寸，加上前后舵共用的翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`（定义与 `DATCOM/scripts/naca_section.py` 相同）。平面形状仍是梯形。横截面按当地弦长缩放为对称 NACA 四位数，并在根梢之间直线放样。本模块另用倒圆系数 `k_nose`、`k_tip`。
+工作区几何参数一共 14 个：11 个主尺寸，加上前后舵共用的翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`（定义与 `DATCOM/scripts/naca_section.py` 相同）。平面形状仍是梯形。`fin_section` 默认 `naca`：横截面按当地弦长缩放为对称 NACA 四位数，并在根梢之间直线放样。`hexagon` 为尖前缘、尖后缘的对称六边形，等厚段由 `hex_flat_start` 到 `hex_flat_end`（默认 0.2 到 0.8）。本模块另用倒圆系数 `k_nose`、`k_tip`。
 
-The workspace geometry set has 14 parameters: 11 lengths, plus the shared airfoil parameters `thickness_percent`, `le_radius_index`, and `max_thickness_tenths`, defined the same way as `DATCOM/scripts/naca_section.py`. The planform stays trapezoidal. The section is a symmetric NACA four-digit airfoil scaled by the local chord and ruled from root to tip. This module also uses fillet coefficients `k_nose` and `k_tip`.
+The workspace geometry set has 14 parameters: 11 lengths, plus the shared airfoil parameters `thickness_percent`, `le_radius_index`, and `max_thickness_tenths`, defined the same way as `DATCOM/scripts/naca_section.py`. The planform stays trapezoidal. `fin_section` defaults to `naca`: the section is a symmetric NACA four-digit airfoil scaled by the local chord and ruled from root to tip. `hexagon` is a sharp-edged symmetric hexagon whose flat runs from `hex_flat_start` to `hex_flat_end` (0.2 to 0.8 by default). This module also uses fillet coefficients `k_nose` and `k_tip`.
 
 优先级为显式字段 > JSON 预设 > 默认值。优化区间仅产生警告；梢弦 `[0, 0.001)` 自动抬至 `0.001 m`。仅实现 `le_mode=trailing_aligned` 和圆柱外壳；相位支持 `+`、`x`，每级舵面数须为不小于 2 的偶数。倒圆位置支持 `cone_cylinder`、`nose_tip`、`both`，定位支持 `ensemble`、`missile`、`offset`。
 
@@ -111,6 +111,7 @@ node scripts/missile.mjs --list
 node scripts/missile.mjs --generate-only
 node scripts/missile.mjs --preset ..\data_lib\inputs\missile_params_example.json --generate-only
 node scripts/missile.mjs --k_nose 0.006 --timeout 300000 --json
+node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 node scripts/missile.mjs --out ..\data_lib\runs --name custom.scdoc --generate-only
 ```
 

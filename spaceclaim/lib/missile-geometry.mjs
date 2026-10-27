@@ -7,9 +7,10 @@
  *
  * 输入：调用方提供的参数/剖面；输出：内存中的派生结果，不读写文件。
  * 常用参数及默认值统一在 missile-schema.mjs 文件前部。
- * 翼型方程与 DATCOM/scripts/naca_section.py 的对称 NACA 四位数一致；下面的参考厚度、
- * 前缘系数和后缘斜率是该方程的常数，不是可调设计参数。AIRFOIL_SAMPLES_PER_SIDE 只决定
- * 放样折线的弦向分辨率。
+ * `fin_section=naca` 时，翼型方程与 DATCOM/scripts/naca_section.py 的对称 NACA 四位数一致；
+ * 下面的参考厚度、前缘系数和后缘斜率是该方程的常数，不是可调设计参数。
+ * AIRFOIL_SAMPLES_PER_SIDE 只决定 NACA 放样折线的弦向分辨率。
+ * `fin_section=hexagon` 时，剖面是尖前缘、尖后缘的对称六边形，厚度和等厚段起止都来自参数集。
  */
 
 /** Chordwise samples on each side of the airfoil polyline. Leading-edge spacing is cosine-clustered. */
@@ -114,6 +115,38 @@ export function buildNacaAirfoil({ thickness_percent, le_radius_index, max_thick
     loop.push([xi, -nacaHalfThicknessRatio(xi, coefficients, thicknessRatio)]);
   }
   return { coefficients, thicknessRatio, loop, properties: polygonAreaCentroid(loop) };
+}
+
+/**
+ * Symmetric hexagonal section: sharp leading edge, constant thickness between the two
+ * chord fractions, and a sharp trailing edge. Coordinates are (x/c, y/c).
+ * The loop is not closed by repeating the first point.
+ */
+export function buildHexagonAirfoil({ thickness_percent, hex_flat_start, hex_flat_end }) {
+  const thicknessRatio = thickness_percent / 100;
+  const half = thicknessRatio / 2;
+  const flatStart = hex_flat_start;
+  const flatEnd = hex_flat_end;
+  if (!(thicknessRatio > 0) || !(flatStart > 0 && flatEnd > flatStart && flatEnd < 1)) {
+    throw new Error("六边形翼面需要正厚度，以及 0 < hex_flat_start < hex_flat_end < 1。");
+  }
+  const loop = [
+    [0, 0],
+    [flatStart, half],
+    [flatEnd, half],
+    [1, 0],
+    [flatEnd, -half],
+    [flatStart, -half],
+  ];
+  return { thicknessRatio, loop, properties: polygonAreaCentroid(loop), flatStart, flatEnd };
+}
+
+/** NACA polyline or hexagonal loop, selected by `fin_section`. Missing section keeps the NACA path. */
+export function buildFinAirfoil(params, samples = AIRFOIL_SAMPLES_PER_SIDE) {
+  const kind = params.fin_section ?? "naca";
+  if (kind === "hexagon") return { kind, ...buildHexagonAirfoil(params) };
+  if (kind === "naca") return { kind, ...buildNacaAirfoil(params, samples) };
+  throw new Error(`Unsupported fin_section '${kind}'.`);
 }
 
 /**
@@ -477,8 +510,8 @@ function finInstancePoints(fin, angleDeg) {
 }
 
 /**
- * Root and tip sections of one planform. The same nondimensional NACA loop is scaled by the local chord,
- * so the leading and trailing edges stay on the trapezoid while the thickness follows the airfoil.
+ * Root and tip sections of one planform. The same nondimensional section is scaled by the local chord,
+ * so the leading and trailing edges stay on the trapezoid while the thickness follows that section.
  */
 export function finAirfoilSections(fin, airfoil) {
   const sectionAt = (radius) => {
@@ -726,7 +759,7 @@ export function deriveGeometry(params) {
   const root_radius = R - root_overlap;
   const front = finPlanform({ le_x: params.L_W + offset, root_chord: params.C_RW, tip_chord: params.C_TW, span: params.B_W, root_radius, body_radius: R, le_mode });
   const rear = finPlanform({ le_x: params.L_F + offset, root_chord: params.C_RF, tip_chord: params.C_TF, span: params.B_F, root_radius, body_radius: R, le_mode });
-  const airfoil = buildNacaAirfoil(params);
+  const airfoil = buildFinAirfoil(params);
   const faces = revolvedFaceAreas(body.segments);
   // Station where the cone hands over to the cylinder, after the blunting shift.
   const cylinder = body.segments.find((segment) => segment.kind === "cylinder");
@@ -744,11 +777,14 @@ export function deriveGeometry(params) {
       { name: "rear", ...rear },
     ],
     airfoil: {
+      kind: airfoil.kind,
       thickness_percent: params.thickness_percent,
       le_radius_index: params.le_radius_index,
       max_thickness_tenths: params.max_thickness_tenths,
+      hex_flat_start: params.hex_flat_start,
+      hex_flat_end: params.hex_flat_end,
       thicknessRatio: airfoil.thicknessRatio,
-      samplesPerSide: AIRFOIL_SAMPLES_PER_SIDE,
+      samplesPerSide: airfoil.kind === "naca" ? AIRFOIL_SAMPLES_PER_SIDE : null,
       edges: airfoil.loop.length,
     },
     cruciform_count: params.cruciform_count,
@@ -764,7 +800,7 @@ export function deriveGeometry(params) {
     nose_junction_x: cylinder ? cylinder.from[0] : params.L_N + offset,
   };
   for (const fin of result.fins) {
-    // The seed fin is a ruled loft of similar NACA sections, so its centre of mass is the solid
+    // The seed fin is a ruled loft of similar sections, so its centre of mass is the solid
     // centroid. The axial component is what the acceptance gate reads back.
     const solid = finAirfoilSections(fin, airfoil);
     fin.sections = solid.sections;

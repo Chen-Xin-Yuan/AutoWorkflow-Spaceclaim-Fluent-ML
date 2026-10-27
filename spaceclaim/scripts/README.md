@@ -48,6 +48,7 @@ npm run missile -- --list
 npm run missile -- --help
 npm run missile -- --preset params-preset.json --generate-only --json
 npm run missile -- --k_nose 0.006 --thickness_percent 5 --le_radius_index 6 --max_thickness_tenths 3 --timeout 300000 --json
+npm run missile -- --fin_section hexagon --hex_flat_start 0.2 --hex_flat_end 0.8 --timeout 300000 --json
 ```
 
 | 选项 | 含义 |

@@ -179,7 +179,7 @@ def measure_body(body):
 
 
 def measure_center_of_mass(body):
-    # The seed fin is a ruled NACA loft, so this lands on the solid centroid computed with the
+    # The seed fin is a ruled section loft, so this lands on the solid centroid computed with the
     # section. It is the only reading that notices the fins being slid along the cylinder: extents,
     # face areas and volume are all invariant under that slide, so a missing nose-blunting
     # compensation is invisible to every other measurement.
@@ -592,7 +592,7 @@ def build_body(geometry):
 
 
 def sketch_section(section):
-    """Closed NACA polyline on a spanwise plane. Sketch X is axial and sketch Y is the thickness."""
+    """Closed section polyline on a spanwise plane. Sketch X is axial and sketch Y is the thickness."""
     before = bodies()
     plane = Plane.Create(Frame.Create(Point.Create(0, metres(section["radius"]), 0), Direction.DirX, Direction.DirZ))
     ViewHelper.SetSketchPlane(plane)

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   bodyProfile,
+  buildFinAirfoil,
+  buildHexagonAirfoil,
   deriveGeometry,
   deriveRegions,
   finPhaseDegrees,
@@ -448,6 +450,7 @@ test("default geometry uses an aligned cruciform with four fins per station", ()
   assert.equal(geometry.cruciform_count, 4);
   assert.equal(geometry.fin_phase_deg, 0);
   assert.deepEqual(geometry.fins.map((fin) => fin.name), ["front", "rear"]);
+  assert.equal(geometry.airfoil.kind, "naca");
   assert.equal(geometry.airfoil.thickness_percent, 4.48);
   assert.equal(geometry.airfoil.le_radius_index, 6);
   assert.equal(geometry.airfoil.max_thickness_tenths, 3);
@@ -464,4 +467,46 @@ test("the default NACA section matches the shared thickness equation", () => {
   const sharp = nacaReferenceCoefficients(0, 3);
   assert.equal(sharp.a0, 0);
   assert.ok(Math.abs(nacaHalfThicknessRatio(0, sharp, ratio)) < 1e-15);
+});
+
+test("a hexagonal section is a sharp symmetric hexagon scaled by the local chord", () => {
+  const hex = buildHexagonAirfoil({ thickness_percent: 4.48, hex_flat_start: 0.2, hex_flat_end: 0.8 });
+  const half = 4.48 / 100 / 2;
+  assert.deepEqual(hex.loop, [
+    [0, 0],
+    [0.2, half],
+    [0.8, half],
+    [1, 0],
+    [0.8, -half],
+    [0.2, -half],
+  ]);
+  assert.ok(Math.abs(hex.properties.cx - 0.5) < 1e-12);
+  assert.ok(Math.abs(hex.properties.cy) < 1e-12);
+  assert.ok(Math.abs(Math.abs(hex.properties.area) - half * (1 - 0.2 + 0.8)) < 1e-12);
+
+  const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
+  assert.equal(request.ok, true, request.errors.join(" | "));
+  assert.equal(request.geometry.airfoil.kind, "hexagon");
+  assert.equal(request.geometry.airfoil.edges, 6);
+  assert.equal(request.geometry.airfoil.samplesPerSide, null);
+  assert.equal(request.geometry.expectedFinFaceCount, 7 * request.params.cruciform_count * 2);
+  const section = request.geometry.fins[1].sections[0];
+  const [leading, forwardShoulder, aftShoulder, trailing] = section.points;
+  assert.ok(Math.abs(leading[1]) < 1e-12);
+  assert.ok(Math.abs(trailing[1]) < 1e-12);
+  assert.ok(Math.abs((forwardShoulder[0] - leading[0]) / section.chord - 0.2) < 1e-12);
+  assert.ok(Math.abs((aftShoulder[0] - leading[0]) / section.chord - 0.8) < 1e-12);
+  assert.ok(Math.abs((trailing[0] - leading[0]) / section.chord - 1) < 1e-12);
+  assert.ok(Math.abs(forwardShoulder[1] - half * section.chord) < 1e-12);
+  assert.ok(Math.abs(aftShoulder[1] - half * section.chord) < 1e-12);
+
+  const moved = buildModelRequest({ explicit: { fin_section: "hexagon", hex_flat_start: 0.15, hex_flat_end: 0.7 } });
+  const tip = moved.geometry.fins[0].sections[1];
+  assert.ok(Math.abs((tip.points[1][0] - tip.points[0][0]) / tip.chord - 0.15) < 1e-12);
+  assert.ok(Math.abs((tip.points[2][0] - tip.points[0][0]) / tip.chord - 0.7) < 1e-12);
+  const sharpNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 0 } });
+  const roundNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 9 } });
+  assert.deepEqual(sharpNose.geometry.fins[0].sections[0].points, roundNose.geometry.fins[0].sections[0].points);
+  assert.ok(request.geometry.fins[0].volume > buildModelRequest({}).geometry.fins[0].volume);
+  assert.equal(buildFinAirfoil({ thickness_percent: 4.48, le_radius_index: 6, max_thickness_tenths: 3 }).kind, "naca");
 });
