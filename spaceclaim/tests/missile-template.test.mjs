@@ -88,7 +88,32 @@ test("the script reads its parameters and reports both success and failure", () 
   assert.match(script, /SketchArc\.CreateSweepArc/);
   assert.match(script, /ExtrudeType\.ForceIndependent/);
   assert.match(script, /Loft\.Create/);
+  assert.match(script, /Fin section sketch did not produce a new profile body/);
+  assert.match(script, /Profile curve was not created/);
+  assert.match(script, /Scale\.Execute\(Selection\.Create\(profile\), Point\.Create\(0, 0, 0\), 1\.0 \/ scale\)/);
+  assert.match(script, /ConstantRound\.Execute/);
+  assert.match(script, /ExtrudeType\.Cut/);
+  assert.match(script, /planform-arc/);
+  assert.equal(script.includes("round_tip_corners"), false);
+  assert.equal(script.includes("tip-cap"), false);
+  assert.match(script, /No fin-to-body junction edges were found to fillet/);
+  assert.match(script, /No fin-to-body junction edges were found for the /);
+  assert.match(script, /allowReducedRadius/);
+  assert.match(script, /probeRadii/);
+  assert.match(script, /forwardMinRadius/);
+  // The seam is selected by position on the cylinder, and the whole loop is rounded as one chain.
+  // A length filter would leave free ends at tangent transitions and the kernel refuses those.
+  assert.match(script, /seamToleranceM/);
+  assert.match(script, /def edge_endpoints_m\(edge\)/);
+  assert.match(script, /The whole seam loop of one station/);
+  assert.equal(/length >= radius \* 2\.0/.test(script), false);
+  assert.equal(/round_with_clamp|round_at_radius|round_once/.test(script), false);
+  assert.match(script, /Fin section sketch did not produce a new profile body/);
   assert.match(script, /options\.IsRuled = True/);
+  assert.match(script, /section\.get\("frame"\)/);
+  assert.match(script, /spanAxis/);
+  assert.match(script, /sectionFillets/);
+  assert.match(script, /sectionAngles/);
   assert.match(script, /Pattern\.CreateCircular/);
   assert.match(script, /Combine\.Merge/);
 });

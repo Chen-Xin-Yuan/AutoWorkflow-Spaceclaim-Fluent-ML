@@ -33,6 +33,7 @@ export const MODEL_SCRIPT = `# -*- coding: utf-8 -*-
 # Every geometric value is read from the JSON request; this file holds no geometry constants.
 
 import json
+import math
 import os
 import traceback
 from System.IO import File
@@ -591,30 +592,566 @@ def build_body(geometry):
     return revolved
 
 
+def sketch_point(point, scale):
+    return Point2D.Create(metres(float(point[0]) * scale), metres(float(point[1]) * scale))
+
+
+def sketch_profile(segments, scale):
+    """Lines and circular arcs in the current sketch plane. Arc sense uses the body-profile contract."""
+    for segment in segments:
+        if segment["type"] == "line":
+            result = SketchLine.Create(sketch_point(segment["from"], scale), sketch_point(segment["to"], scale))
+        elif segment["type"] == "arc":
+            # The clockwise flag matches the body profile. On the fin plane the same flag selects
+            # the minor arc through the design extreme; a sketch probe measured that arc as a circle.
+            result = SketchArc.CreateSweepArc(sketch_point(segment["center"], scale),
+                                               sketch_point(segment["from"], scale),
+                                               sketch_point(segment["to"], scale),
+                                               bool(segment["sense"]))
+        else:
+            raise Exception("Unknown profile segment type: " + str(segment["type"]))
+        # A too-flat sweep reports success and still creates no curve. Leaving that gap makes the
+        # sketch disappear, so refuse it instead of lofting whatever body was already there.
+        if len(list(result.CreatedCurves)) != 1:
+            raise Exception("Profile curve was not created. A fillet must stay one circular arc.")
+
+
+def vector_direction(vector):
+    x = float(vector[0])
+    y = float(vector[1])
+    z = float(vector[2])
+    if abs(x - 1.0) < 1e-12 and abs(y) < 1e-12 and abs(z) < 1e-12:
+        return Direction.DirX
+    if abs(y - 1.0) < 1e-12 and abs(x) < 1e-12 and abs(z) < 1e-12:
+        return Direction.DirY
+    if abs(z - 1.0) < 1e-12 and abs(x) < 1e-12 and abs(y) < 1e-12:
+        return Direction.DirZ
+    return Direction.Create(x, y, z)
+
+
+def section_plane(section, scale):
+    """Spanwise sketch plane. A frame tilts it off the fuselage tangent; otherwise it stays radial."""
+    frame = section.get("frame")
+    radius = float(section["radius"]) * scale
+    if not frame:
+        return Plane.Create(Frame.Create(Point.Create(0, metres(radius), 0), Direction.DirX, Direction.DirZ))
+    normal = frame["normal"]
+    origin = Point.Create(metres(float(normal[0]) * radius), metres(float(normal[1]) * radius), metres(float(normal[2]) * radius))
+    return Plane.Create(Frame.Create(origin, Direction.DirX, vector_direction(frame["thickness"])))
+
+
 def sketch_section(section):
-    """Closed section polyline on a spanwise plane. Sketch X is axial and sketch Y is the thickness."""
+    """Closed section on a spanwise plane. Sketch X is axial and sketch Y is the thickness."""
     before = bodies()
-    plane = Plane.Create(Frame.Create(Point.Create(0, metres(section["radius"]), 0), Direction.DirX, Direction.DirZ))
+    # Short shoulder arcs are drawn enlarged, on a plane at the same multiple of the span station,
+    # then scaled about the origin. Uniform scale returns both the true radius and the station.
+    scale = float(section.get("sketchScale") or 1.0)
+    plane = section_plane(section, scale)
     ViewHelper.SetSketchPlane(plane)
-    points = section["points"]
-    for index in range(len(points)):
-        start = points[index]
-        end = points[(index + 1) % len(points)]
-        SketchLine.Create(Point2D.Create(metres(start[0]), metres(start[1])),
-                          Point2D.Create(metres(end[0]), metres(end[1])))
+    if section.get("segments"):
+        sketch_profile(section["segments"], scale)
+    else:
+        points = section["points"]
+        for index in range(len(points)):
+            start = points[index]
+            end = points[(index + 1) % len(points)]
+            SketchLine.Create(Point2D.Create(metres(start[0]), metres(start[1])),
+                              Point2D.Create(metres(end[0]), metres(end[1])))
     profile = solidify(before)
+    # newest_body falls back to the previous body when the sketch creates nothing. A dropped
+    # micro-edge profile then looks like a one-face section, both loft inputs are that same body,
+    # and Loft.Create reports an empty selection.
+    if not any(profile is item for item in fresh_bodies(before)):
+        raise Exception("Fin section sketch did not produce a new profile body.")
+    if len(list(profile.Faces)) != 1:
+        raise Exception("Fin section sketch did not produce a single profile face.")
+    if scale > 1.0:
+        scaled = Scale.Execute(Selection.Create(profile), Point.Create(0, 0, 0), 1.0 / scale)
+        if not scaled.Success:
+            raise Exception("Could not scale the filleted section back to its true size.")
+    return profile
+
+
+def curve_points(edge):
+    shape = edge.Shape
+    points = []
+    try:
+        points.append(shape.StartPoint)
+        points.append(shape.EndPoint)
+    except Exception:
+        pass
+    for sample in (
+        lambda: shape.Geometry.Evaluate(0.5).Point,
+        lambda: shape.Evaluate(0.5).Point,
+    ):
+        try:
+            points.append(sample())
+            break
+        except Exception:
+            pass
+    if len(points) < 2:
+        raise Exception("Could not sample a fin edge.")
+    return points
+
+
+def edge_length_m(edge):
+    try:
+        return abs(to_metres(edge.Shape.Length))
+    except Exception:
+        points = curve_points(edge)
+        return abs(to_metres(points[0].X) - to_metres(points[-1].X))
+
+
+def execute_round(edges, radius_m):
+    """ConstantRound is the documented constant-radius edge fillet. Selection shape is tried both ways."""
+    options = ConstantRoundOptions()
+    length = metres(radius_m)
+    errors = []
+    makers = []
+    try:
+        makers.append(lambda items: Selection.Create(items))
+    except Exception:
+        pass
+    try:
+        makers.append(lambda items: EdgeSelection.Create(items))
+    except Exception:
+        pass
+    for make in makers:
+        try:
+            result = ConstantRound.Execute(make(list(edges)), length, options)
+        except Exception as error:
+            errors.append(str(error))
+            continue
+        if getattr(result, "Success", False):
+            return result, errors
+        errors.append("Success=False")
+    return None, errors
+
+
+def created_face_count(result):
+    if result is None:
+        return 0
+    try:
+        return len(list(result.CreatedFaces))
+    except Exception:
+        return 0
+
+
+def sheet_area_m2(body):
+    try:
+        value = MeasureHelper.MeasureArea(Selection.Create(list(body.Faces)[0]))
+        if value is None:
+            return None
+        return abs(float(value))
+    except Exception:
+        return None
+
+
+def cylinder_radius_m(face):
+    try:
+        value = MeasureHelper.CylinderDiameter(Selection.Create(face))
+        if value is None:
+            return None
+        return abs(float(value)) / 2.0
+    except Exception:
+        return None
+
+
+def sketch_planform_sliver(segments, clearance, span_axis, thickness_axis):
+    """Closed corner sliver in the span-chord plane, offset outside the fin, ready to cut through it."""
+    before = bodies()
+    origin = Point.Create(
+        metres(-float(thickness_axis[0]) * float(clearance)),
+        metres(-float(thickness_axis[1]) * float(clearance)),
+        metres(-float(thickness_axis[2]) * float(clearance)),
+    )
+    plane = Plane.Create(Frame.Create(origin, Direction.DirX, vector_direction(span_axis)))
+    ViewHelper.SetSketchPlane(plane)
+    sketch_profile(segments, 1.0)
+    profile = solidify(before)
+    if not any(profile is item for item in fresh_bodies(before)):
+        raise Exception("Fin section sketch did not produce a new profile body.")
     if len(list(profile.Faces)) != 1:
         raise Exception("Fin section sketch did not produce a single profile face.")
     return profile
 
 
+def sliver_segments(corner, flip):
+    segments = []
+    for segment in corner["removal"]:
+        copy = dict(segment)
+        if flip and copy.get("type") == "arc":
+            copy["sense"] = not bool(segment["sense"])
+        segments.append(copy)
+    return segments
+
+
+def sketch_matching_sliver(corner, clearance, span_axis, thickness_axis):
+    """The sliver is the sharp tip corner outside the planform arc. The other arc sense is the complement."""
+    expected = float(corner["sliverAreaM2"])
+    chosen = None
+    for flip in (False, True):
+        sheet = sketch_planform_sliver(sliver_segments(corner, flip), clearance, span_axis, thickness_axis)
+        area = sheet_area_m2(sheet)
+        if area is not None and abs(area - expected) <= expected * 3.0:
+            if chosen is not None and any(chosen[0] is item for item in bodies()):
+                Delete.Execute(Selection.Create(chosen[0]))
+            chosen = (sheet, area)
+            break
+        if any(sheet is item for item in bodies()):
+            Delete.Execute(Selection.Create(sheet))
+    if chosen is None:
+        raise Exception(
+            corner["name"] + " planform arc did not close the corner sliver at radius "
+            + str(corner["radius"]) + " m. Not substituting a smaller edge fillet."
+        )
+    return chosen[0]
+
+
+def cut_planform_corner(fin_body, corner, clearance, span_axis, thickness_axis):
+    sheet = sketch_matching_sliver(corner, clearance, span_axis, thickness_axis)
+    options = ExtrudeFaceOptions()
+    options.ExtrudeType = ExtrudeType.Cut
+    result = ExtrudeFaces.Execute(
+        FaceSelection.Create(list(sheet.Faces)[0]),
+        vector_direction(thickness_axis),
+        metres(float(clearance) * 2.0),
+        options,
+    )
+    if not getattr(result, "Success", False):
+        raise Exception(corner["name"] + " planform arc cut failed at radius " + str(corner["radius"]) + " m.")
+    if any(sheet is item for item in bodies()):
+        Delete.Execute(Selection.Create(sheet))
+    if not any(fin_body is item for item in bodies()):
+        raise Exception(corner["name"] + " planform arc cut removed the fin body.")
+
+
+def cut_planform_tip_corners(body, fin):
+    """Replace each sharp tip planform corner with the 3 mm arc already computed for that fin.
+
+    The arc lies in the span-chord plane and is tangent to the tip chord and to the leading or
+    trailing edge. Cutting with that arc leaves one cylindrical face of the requested radius.
+    ConstantRound is not used here: the tip section is too thin to hold a 3 mm edge fillet.
+    """
+    spec = fin.get("tipCornerFillet")
+    if not spec:
+        return None
+    requested = float(spec["radius"])
+    span_axis = spec.get("spanAxis") or [0, 1, 0]
+    thickness_axis = spec.get("thicknessAxis") or [0, 0, 1]
+    before_faces = len(list(body.Faces))
+    for corner in (spec["leading"], spec["trailing"]):
+        cut_planform_corner(body, corner, spec["cutClearanceM"], span_axis, thickness_axis)
+    band = float(spec.get("tolerance", 0.1))
+    radii = []
+    for face in body.Faces:
+        radius = cylinder_radius_m(face)
+        if radius is not None and abs(radius - requested) / requested <= band:
+            radii.append(radius)
+    if len(radii) < 2:
+        for edge in body.Edges:
+            try:
+                value = MeasureHelper.ArcRadius(Selection.Create(edge))
+            except Exception:
+                continue
+            if value is None:
+                continue
+            radius = abs(float(value))
+            if abs(radius - requested) / requested <= band:
+                radii.append(radius)
+    if len(radii) < 2:
+        raise Exception(
+            fin["name"] + " planform arc measured " + str(radii) + ", not " + str(requested) + " m. Not substituting a smaller edge fillet."
+        )
+    return {
+        "label": "tip-planform",
+        "kind": "planform-arc",
+        "edges": 2,
+        "requestedM": requested,
+        "radiusM": min(radii),
+        "radiiM": radii,
+        "clamped": False,
+        "faces": len(list(body.Faces)) - before_faces,
+        "success": True,
+    }
+
+
+def edge_endpoints_m(edge):
+    """Both trimmed endpoints in metres.
+
+    The sampled mid-parameter point is deliberately not used here: a curve's geometry parameter is
+    not normalised to the trimmed edge, so Evaluate(0.5) on a straight edge lands up to half a metre
+    away from it. Averaging that in moved the edge midpoint, and with it the station window and the
+    radius test, off the real seam.
+    """
+    shape = edge.Shape
+    start = shape.StartPoint
+    end = shape.EndPoint
+    return (to_metres(start.X), to_metres(start.Y), to_metres(start.Z)), (to_metres(end.X), to_metres(end.Y), to_metres(end.Z))
+
+
+def edge_midpoint_m(edge):
+    start, end = edge_endpoints_m(edge)
+    return ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0, (start[2] + end[2]) / 2.0)
+
+
+def junction_edges(body, spec):
+    """Every edge that runs along the fuselage cylinder, joined to any face pair.
+
+    The fin-to-body seam is the set of edges whose midpoint sits on the cylinder. Requiring one
+    adjacent face centroid inside and one outside the body dropped the short shoulder-arc segments
+    of that seam and left each fin loop open; the kernel then refused every millimetre-scale round
+    on the open chain. Whether a face beside the seam happens to be the whole cylinder or a local
+    patch beside the fin does not change the seam itself.
+    """
+    body_radius = float(spec["bodyRadius"])
+    tolerance = float(spec.get("seamToleranceM") or 0.001)
+    selected = []
+    seen = []
+    for face in body.Faces:
+        for edge in face.Edges:
+            if any(edge is item for item in seen):
+                continue
+            seen.append(edge)
+            x, y, z = edge_midpoint_m(edge)
+            if abs((y * y + z * z) ** 0.5 - body_radius) > tolerance:
+                continue
+            selected.append((edge, x))
+    return selected
+
+
+def edge_x_bounds(edge, fallback):
+    try:
+        start, end = edge_endpoints_m(edge)
+        return min(start[0], end[0]), max(start[0], end[0])
+    except Exception:
+        pass
+    return fallback, fallback
+
+
+def probe_radii(spec, station):
+    """Largest-first radii. The aft station stays on the requested value."""
+    requested = float(spec["radius"])
+    if not station.get("allowReducedRadius"):
+        return [requested]
+    floor = float(spec.get("forwardMinRadius") or requested)
+    ordered = []
+    for item in spec.get("probeRadii") or [requested]:
+        value = float(item)
+        if value > requested + 1e-12 or value + 1e-12 < floor:
+            continue
+        if any(abs(value - previous) < 1e-12 for previous in ordered):
+            continue
+        ordered.append(value)
+    if not any(abs(requested - previous) < 1e-12 for previous in ordered):
+        ordered.insert(0, requested)
+    ordered.sort(reverse=True)
+    return ordered
+
+
+def station_edges(found, station, used):
+    """The whole seam loop of one station. Every edge joins; the loop is rounded as one chain."""
+    group = []
+    for edge, x in found:
+        if any(edge is item for item in used):
+            continue
+        if x < float(station["xMin"]) or x > float(station["xMax"]):
+            continue
+        try:
+            length = edge_length_m(edge)
+        except Exception:
+            length = 0.0
+        group.append((edge, x, length))
+    return group
+
+
+def created_face_radii(result):
+    """Cylinder radius of every face the round created, in metres.
+
+    A constant blend along a straight seam is one cylinder, so the created surfaces can be read back
+    instead of trusting the command's Success flag. Blend surfaces on the curved corners are not
+    cylinders and simply do not report a radius; that is why the acceptance gate counts what it does
+    get.
+    """
+    radii = []
+    try:
+        faces = list(result.CreatedFaces)
+    except Exception:
+        return radii
+    for face in faces:
+        radius = cylinder_radius_m(face)
+        if radius and radius > 0:
+            radii.append(round(radius, 9))
+    return radii
+
+
+def junction_report(station, kept, radii, requested, faces, measured_radii=None):
+    bounds = []
+    for edge, fallback, _length in kept:
+        lo, hi = edge_x_bounds(edge, fallback)
+        bounds.append(lo)
+        bounds.append(hi)
+    radius_m = min(radii)
+    return {
+        "label": "root-junction",
+        "edges": len(kept),
+        "requestedM": float(requested),
+        "radiusM": float(radius_m),
+        "radiusMaxM": float(max(radii)),
+        "clamped": radius_m < float(requested) - 1e-9,
+        "faces": faces,
+        "measuredRadiiM": list(measured_radii or []),
+        "success": True,
+        "station": str(station["name"]),
+        "xMin": min(bounds),
+        "xMax": max(bounds),
+    }
+
+
+def junction_covers(report, station, spec):
+    chord = float(station["te"]) - float(station["le"])
+    mid = (float(station["te"]) + float(station["le"])) / 2.0
+    span = report["xMax"] - report["xMin"]
+    enough = report["edges"] >= int(spec.get("minEdges") or 1)
+    return report["xMin"] < mid and report["xMax"] > mid and span + 1e-9 >= chord * 0.5 and enough
+
+
+def round_root_junction(body, spec):
+    """One ConstantRound over each station's whole seam loop, largest requested radius first.
+
+    A partial chain is not rounded: dropping the sub-millimetre shoulder-arc segments left free
+    ends at tangent transitions and SpaceClaim refused every radius down to 0.2 mm, while the same
+    loop as a whole is accepted at 1.5 mm on the forward fin and 3 mm on the aft fin. The forward
+    station steps down through the probe list and never below its floor; the aft station only ever
+    tries the requested radius, so a refused 3 mm fails the run instead of being silently reduced.
+    """
+    found = junction_edges(body, spec)
+    if not found:
+        raise Exception("No fin-to-body junction edges were found to fillet.")
+    stations = spec.get("stations") or []
+    if not stations:
+        raise Exception("Root junction fillet has no fin stations.")
+    reports = []
+    used = []
+    requested = float(spec["radius"])
+    for station in stations:
+        radii = probe_radii(spec, station)
+        group = station_edges(found, station, used)
+        if not group:
+            raise Exception("No fin-to-body junction edges were found for the " + str(station["name"]) + " fin.")
+        edges = [edge for edge, _x, _length in group]
+        errors = []
+        chosen = None
+        for radius in radii:
+            result, attempt_errors = execute_round(edges, radius)
+            errors.extend(attempt_errors)
+            if result is None:
+                continue
+            chosen = junction_report(station, group, [radius] * len(group), requested, created_face_count(result), created_face_radii(result))
+            break
+        if chosen is None:
+            raise Exception(
+                str(station["name"]) + " junction did not accept a round from "
+                + str(radii[0]) + " m down to " + str(radii[-1]) + " m on "
+                + str(len(group)) + " edges. " + " | ".join(errors[-3:])
+            )
+        used.extend(edges)
+        if not junction_covers(chosen, station, spec):
+            raise Exception(
+                str(station["name"]) + " junction round of " + str(chosen["radiusM"])
+                + " m did not cover the root chord (" + str(chosen["edges"]) + " edges, x "
+                + str(chosen["xMin"]) + ".." + str(chosen["xMax"]) + ")."
+            )
+        reports.append(chosen)
+    return reports
+
+
+def profile_leading_arc(profile):
+    """Radius and foremost station of the arc that owns the section's minimum axial coordinate."""
+    chosen_radius = None
+    chosen_x = None
+    for edge in profile.Edges:
+        try:
+            radius = abs(to_metres(MeasureHelper.ArcRadius(Selection.Create(edge))))
+        except Exception:
+            continue
+        if not radius or radius <= 0:
+            continue
+        try:
+            points = curve_points(edge)
+        except Exception:
+            continue
+        xs = [to_metres(point.X) for point in points]
+        if not xs:
+            continue
+        station = min(xs)
+        if chosen_x is None or station < chosen_x:
+            chosen_x = station
+            chosen_radius = radius
+    return chosen_radius, chosen_x
+
+
+def profile_plane_angle(profile):
+    """Angle between the section-plane normal and the uncanted radial axis."""
+    face = list(profile.Faces)[0]
+    normal = None
+    try:
+        normal = face.Shape.Geometry.Frame.DirZ
+    except Exception:
+        normal = None
+    if normal is None:
+        points = []
+        for edge in profile.Edges:
+            try:
+                points.extend(curve_points(edge))
+            except Exception:
+                continue
+        found = None
+        for index in range(max(0, len(points) - 2)):
+            first = points[index]
+            second = points[index + 1]
+            third = points[index + 2]
+            ux = float(second.X) - float(first.X)
+            uy = float(second.Y) - float(first.Y)
+            uz = float(second.Z) - float(first.Z)
+            vx = float(third.X) - float(first.X)
+            vy = float(third.Y) - float(first.Y)
+            vz = float(third.Z) - float(first.Z)
+            nx = uy * vz - uz * vy
+            ny = uz * vx - ux * vz
+            nz = ux * vy - uy * vx
+            if nx * nx + ny * ny + nz * nz > 1e-20:
+                found = (nx, ny, nz)
+                break
+        if found is None:
+            raise Exception("Could not read the section plane normal.")
+        class PointNormal(object):
+            def __init__(self, x, y, z):
+                self.X = x
+                self.Y = y
+                self.Z = z
+        normal = PointNormal(found[0], found[1], found[2])
+    return math.atan2(abs(float(normal.Z)), abs(float(normal.Y))), [float(normal.X), float(normal.Y), float(normal.Z)]
+
+
 def build_fin(fin):
     before = bodies()
     profiles = [sketch_section(section) for section in fin["sections"]]
+    section_fillets = []
+    for index, profile in enumerate(profiles):
+        radius, min_x = profile_leading_arc(profile)
+        section_fillets.append({
+            "name": fin["name"],
+            "le": float(fin["sections"][index]["le"]),
+            "radiusM": radius,
+            "minXM": min_x,
+        })
+    angle, normal = profile_plane_angle(profiles[0])
+    section_angle = {"name": fin["name"], "angleRad": angle, "normal": normal}
     options = LoftOptions()
     # ForceIndependent keeps the fin a separate body even though its root is embedded in the body,
-    # which is what makes the circular pattern of the two seed fins possible. A ruled loft follows
-    # the straight planform edges; each polyline edge stays its own face.
+    # which is what makes the circular pattern of the two seed fins possible. A ruled loft carries
+    # each profile curve, including each circular fillet, as its own face along the span.
     options.ExtrudeType = ExtrudeType.ForceIndependent
     options.IsRuled = True
     options.IsMinimalTopology = False
@@ -627,7 +1164,7 @@ def build_fin(fin):
     created = [item for item in fresh_bodies(before) if len(list(item.Faces)) > 1]
     if not created:
         raise Exception("Loft did not create an independent solid for the " + fin["name"] + " fin.")
-    return created
+    return created, section_fillets, section_angle
 
 
 def run():
@@ -646,9 +1183,15 @@ def run():
 
         fin_bodies = []
         fin_positions = []
+        edge_fillets = []
+        section_fillets = []
+        section_angles = []
+        tip_round_faces = 0
         for fin in geometry["fins"]:
             before_fin = bodies()
-            created = build_fin(fin)
+            created, fillets, angle = build_fin(fin)
+            section_fillets.extend(fillets)
+            section_angles.append(angle)
             fin_bodies.extend(created)
             diagnostics["freshAfter_" + fin["name"]] = len(fresh_bodies(before_fin))
             for index, item in enumerate(created):
@@ -657,6 +1200,13 @@ def run():
                     "index": index,
                     "centerOfMassM": measure_center_of_mass(item),
                 })
+            # Centre of mass is recorded on the ruled loft, which is what the station check compares.
+            # The planform arcs only consume the tip corners and do not move the leading edge at the body.
+            if fin.get("tipCornerFillet"):
+                for item in created:
+                    report = cut_planform_tip_corners(item, fin)
+                    edge_fillets.append(report)
+                    tip_round_faces += report.get("faces", 0)
         if not fin_bodies:
             raise Exception("No fin bodies were created.")
 
@@ -688,6 +1238,16 @@ def run():
         if len(merged) != 1:
             raise Exception("Expected 1 merged body, got " + str(len(merged)) + ".")
         name_body(merged[0], "Missile")
+        junction_faces = 0
+        if geometry.get("rootJunctionFillet"):
+            for junction in round_root_junction(merged[0], geometry["rootJunctionFillet"]):
+                edge_fillets.append(junction)
+                junction_faces += junction.get("faces", 0)
+        diagnostics["sectionFillets"] = section_fillets
+        diagnostics["sectionAngles"] = section_angles
+        diagnostics["edgeFillets"] = edge_fillets
+        # Tip rounds are copied by the circular pattern. Junction rounds are applied once on the merged body.
+        diagnostics["roundCreatedFaces"] = tip_round_faces * geometry["cruciform_count"] + junction_faces
 
         phase = geometry.get("fin_phase_deg", 0)
         if phase:

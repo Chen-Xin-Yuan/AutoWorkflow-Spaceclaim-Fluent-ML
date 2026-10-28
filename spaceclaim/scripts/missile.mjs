@@ -15,7 +15,8 @@ import { readFile } from "node:fs/promises";
 // 输入：--preset JSON（相对路径基于调用者当前目录）；显式 CLI 参数覆盖预设。
 // 输出：--out/--name 覆盖下列默认值；空 outputDir 保留 SCDM_MISSILE_OUTPUT /
 // workspace.json 的默认目录解析，在运行时创建唯一 run 目录；失败保留到 feedback。
-// 产物：request.json、run.json、params.json、model.py；执行后还包括模型/结果/诊断。
+// 成功执行后的目录只留 params.json、model.py 和模型文件。验收结果打印在控制台。
+// 失败时运行目录移到 feedback。仅生成脚本时仍写运行清单。
 // 几何参数默认值及允许范围只在 ../lib/missile-schema.mjs 定义，--list 可查看。
 const DEFAULT_OPTIONS = {
   preset: "",
@@ -124,8 +125,9 @@ async function main() {
   }
   for (const check of result.acceptance.checks) console.log(`${check.ok ? "通过" : "失败"}  ${check.name}  :: ${check.detail}`);
   console.log(`\n模型: ${result.modelPath}`);
-  console.log(`结果: ${result.resultPath}`);
-  if (result.diagnostic) console.log(`诊断: ${result.diagnostic.split(/\r?\n/).slice(0, 4).join(" / ")}`);
+  console.log(`参数: ${result.paramsPath}`);
+  console.log(`脚本: ${result.scriptPath}`);
+  if (!result.ok && result.diagnostic) console.log(`诊断: ${result.diagnostic.split(/\r?\n/).slice(0, 4).join(" / ")}`);
   if (!result.ok) {
     console.error(`\n验收未通过（status=${result.status}），产物保留在 ${result.runDir}`);
     return 1;

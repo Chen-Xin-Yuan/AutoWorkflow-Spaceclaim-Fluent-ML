@@ -14,9 +14,9 @@ npm test
 | [`python-map.test.mjs`](python-map.test.mjs) | `inferred` 候选、拉伸配方、圆周阵列与合并 API 的映射；不执行这些 Python 候选。 |
 | [`missile-schema.test.mjs`](missile-schema.test.mjs) | 参数声明、默认值、可覆盖项、优化区间、已实现的约定、脚本输入字段及计划中的字段记录。 |
 | [`missile-params.test.mjs`](missile-params.test.mjs) | 显式值/预设/默认值优先级、类型转换、未知字段拒绝、硬约束、修正、警告和区域包容关系。 |
-| [`missile-geometry.test.mjs`](missile-geometry.test.mjs) | 倒圆相切、剖面、面积/体积/质心、舵面轮廓与站位、相位/片数、模型定位、BOI 和外壳的解析预期。 |
-| [`missile-template.test.mjs`](missile-template.test.mjs) | API 版本头、请求文档、参数驱动模板、区域/命名选择/物理抑制等模板内容及可选预览行为。 |
-| [`missile-runner.test.mjs`](missile-runner.test.mjs) | 基于构造结果的验收门槛、缺失/过期产物和错误几何的拒绝、安装解析及无需安装的仅生成模式。 |
+| [`missile-geometry.test.mjs`](missile-geometry.test.mjs) | 倒圆相切、剖面、六边形肩部与后缘 1 mm、前缘 1.8 mm 的连续圆弧（弦长与最大厚度不变、前缘站位不变、必要时只缩小放不下的半径、过短圆弧先放大再缩回、前舵按斜边半角转过、舵尖为与两边相切的 3 mm 平面圆弧且零点几毫米判失败、后舵根为 3 mm 圆角、前舵根在 1.5–3 mm 内取内核接受的最大半径且探针半径单调不越界、接缝选边容差在几何模块前部、根梢是两条不同剖面）、面积/体积/质心、舵面轮廓与站位、相位/片数、模型定位、BOI 和外壳的解析预期。 |
+| [`missile-template.test.mjs`](missile-template.test.mjs) | API 版本头、请求文档、参数驱动模板、接缝按柱面选边且整圈一次倒圆（不按边长筛边、无逐边回退）、区域/命名选择/物理抑制等模板内容及可选预览行为。 |
+| [`missile-runner.test.mjs`](missile-runner.test.mjs) | 基于构造结果的验收门槛（前舵交接圆角低于 1.5 mm 判失败、后舵不是 3 mm 判失败）、缺失/过期产物和错误几何的拒绝、安装解析及无需安装的仅生成模式。 |
 | [`fixture-acceptance.test.mjs`](fixture-acceptance.test.mjs) | 圆周阵列结果解析、六个角度、合并实体数、非零拓扑，以及未知 fixture 的拒绝。 |
 | [`protocol.test.mjs`](protocol.test.mjs) | 无 CHM 时清晰退出；有 CHM 环境时检查 MCP 仅生成状态与证据标签。 |
 | [`chm.test.mjs`](chm.test.mjs) | 显式启用后，实际提取本机官方 CHM 并检查缓存复用。 |

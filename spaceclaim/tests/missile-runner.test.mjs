@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildModelRequest } from "../lib/missile-params.mjs";
-import { apiVersionForExecutable, buildMissile, defaultRunRoot, evaluateAcceptance, resolveSpaceClaimExecutable } from "../lib/spaceclaim-runner.mjs";
+import { apiVersionForExecutable, buildMissile, defaultRunRoot, evaluateAcceptance, resolveSpaceClaimExecutable, retainModelOutputs } from "../lib/spaceclaim-runner.mjs";
 
 const regionResult = (request) => Object.fromEntries(["enclosure", "boi"].map((name) => [name, {
   faces: 3,
@@ -162,18 +162,18 @@ test("a non-ASCII enclosure name is graded by comparison, not by read-back", () 
   // which is why every read-back degrades to <unreadable>. The name is still settable, and the
   // String.Equals comparison in the script is what proves it landed, so an unreadable component list
   // must not fail the run. This is the path the parameter keeps open.
-  const request = buildModelRequest({ explicit: { enclosure_name: "外壳", boi_name: "加密区" } });
+  const request = buildModelRequest({ explicit: { enclosure_name: "外壳", boi_name: "加密区 BOI" } });
   assert.equal(request.ok, true, request.errors.join(" | "));
   const result = passingResult(request);
   result.diagnostics.componentNames = ["<unreadable>"];
-  result.diagnostics.namedObjects = { Missile: true, BOI: true, "外壳": true, "加密区": true };
+  result.diagnostics.namedObjects = { Missile: true, BOI: true, "外壳": true, "加密区 BOI": true };
   const graded = grade(request, result);
   assert.equal(graded.ok, true, JSON.stringify(graded.checks.filter((check) => !check.ok)));
   assert.ok(graded.checks.map((check) => check.name).includes("外壳组件名为 外壳"));
 
   // ...but a name that does not compare equal is still caught.
   const mismatched = passingResult(request);
-  mismatched.diagnostics.namedObjects = { Missile: true, BOI: true, "外壳": false, "加密区": true };
+  mismatched.diagnostics.namedObjects = { Missile: true, BOI: true, "外壳": false, "加密区 BOI": true };
   assert.equal(grade(request, mismatched).ok, false);
 });
 
@@ -472,6 +472,136 @@ test("invalid parameters short-circuit before any file is written", async () => 
   assert.equal(out.status, "invalid-parameters");
   assert.match(out.errors.join("\n"), /前舵超出弹尾/);
   await assert.rejects(() => readFile(path.join(out.runDir, "params.json"), "utf8"));
+});
+
+test("a sub-millimetre tip clamp is not a 3 mm planform arc", () => {
+  const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
+  const collapsed = passingResult(request);
+  collapsed.diagnostics.edgeFillets = [
+    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.000206, requestedM: 0.003, clamped: true },
+    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.000503, requestedM: 0.003, clamped: true },
+    ...junctionReports(request),
+  ];
+  const failed = grade(request, collapsed);
+  assert.equal(failed.checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, false);
+  assert.equal(failed.checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
+
+  const sharp = passingResult(request);
+  sharp.diagnostics.edgeFillets = [
+    { label: "tip-planform", success: true, radiusM: 0.003, clamped: false },
+    { label: "tip-planform", success: true, radiusM: 0.003, clamped: false },
+    ...junctionReports(request),
+  ];
+  assert.equal(grade(request, sharp).checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, false);
+
+  const arcs = passingResult(request);
+  arcs.diagnostics.edgeFillets = [
+    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.003, requestedM: 0.003, clamped: false },
+    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.003, requestedM: 0.003, clamped: false },
+    ...junctionReports(request),
+  ];
+  const passed = grade(request, arcs);
+  assert.equal(passed.checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, true);
+  assert.equal(passed.checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, true);
+  assert.equal(passed.checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
+
+  const aftOnly = passingResult(request);
+  aftOnly.diagnostics.edgeFillets = junctionReports(request).filter((round) => round.station === "rear");
+  assert.equal(grade(request, aftOnly).checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, false);
+
+  const modest = passingResult(request);
+  const reduced = junctionReports(request);
+  reduced[0] = junctionAt(reduced[0], 0.002, true, request.params.cruciform_count);
+  modest.diagnostics.edgeFillets = reduced;
+  assert.equal(grade(request, modest).checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, true);
+  assert.equal(grade(request, modest).checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
+
+  const tiny = passingResult(request);
+  const subMillimetre = junctionReports(request);
+  subMillimetre[0] = junctionAt(subMillimetre[0], 0.000132, true, request.params.cruciform_count);
+  tiny.diagnostics.edgeFillets = subMillimetre;
+  assert.equal(grade(request, tiny).checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, false);
+
+  // Just under the 1.5 mm floor is a failure too: the band has to be met, not approached.
+  const belowFloor = passingResult(request);
+  const under = junctionReports(request);
+  under[0] = junctionAt(under[0], 0.0012, true, request.params.cruciform_count);
+  belowFloor.diagnostics.edgeFillets = under;
+  assert.equal(grade(request, belowFloor).checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, false);
+
+  // A kernel success whose created surfaces do not measure back at that radius proves nothing.
+  const unmeasured = passingResult(request);
+  const surfaces = junctionReports(request);
+  surfaces[0] = { ...surfaces[0], measuredRadiiM: [] };
+  unmeasured.diagnostics.edgeFillets = surfaces;
+  assert.equal(grade(request, unmeasured).checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, false);
+
+  const aftClamped = passingResult(request);
+  const aftReduced = junctionReports(request);
+  aftReduced[1] = junctionAt(aftReduced[1], 0.002, true, request.params.cruciform_count);
+  aftClamped.diagnostics.edgeFillets = aftReduced;
+  assert.equal(grade(request, aftClamped).checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, false);
+});
+
+function junctionReports(request) {
+  return request.geometry.rootJunctionFillet.stations.map((station) => ({
+    label: "root-junction",
+    station: station.name,
+    success: true,
+    radiusM: 0.003,
+    clamped: false,
+    edges: request.params.cruciform_count * 4,
+    measuredRadiiM: Array.from({ length: request.params.cruciform_count }, () => 0.003),
+    xMin: station.le + (station.te - station.le) * 0.1,
+    xMax: station.te - (station.te - station.le) * 0.1,
+  }));
+}
+
+/** One junction record with its used radius and the measured blend cylinders kept consistent. */
+function junctionAt(report, radiusM, clamped, count) {
+  return { ...report, radiusM, clamped, measuredRadiiM: Array.from({ length: count }, () => radiusM) };
+}
+
+test("a passed run keeps only the parameter file, the script and the model", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "scdm-runner-keep-"));
+  for (const name of ["params.json", "model.py", "missile.scdoc", "result.json", "diagnostic.txt", "run.json", "request.json", "preview.png", "error.txt"]) {
+    await writeFile(path.join(root, name), "x");
+  }
+  await retainModelOutputs(root, "missile.scdoc");
+  assert.deepEqual((await readdir(root)).sort(), ["missile.scdoc", "model.py", "params.json"]);
+});
+
+test("hexagon leading-edge radius and the forward-fin angle are graded from the model", () => {
+  const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
+  const result = passingResult(request);
+  result.diagnostics.sectionFillets = request.geometry.fins.flatMap((fin) => fin.sections.map((section) => ({
+    name: fin.name,
+    le: section.le,
+    radiusM: section.leadingFilletRadiusM,
+    minXM: section.le,
+  })));
+  result.diagnostics.sectionAngles = [
+    { name: "front", angleRad: request.geometry.fins[0].bodyIntersectionAngleRad },
+    { name: "rear", angleRad: 0 },
+  ];
+  const graded = grade(request, result);
+  const leading = graded.checks.filter((check) => check.name.includes("前缘圆角"));
+  assert.ok(leading.length >= 4);
+  assert.equal(leading.every((check) => check.ok), true, JSON.stringify(leading));
+  assert.ok(leading.some((check) => check.name.includes("0.0018")));
+  assert.equal(graded.checks.find((check) => check.name.startsWith("前舵与弹体夹角")).ok, true);
+  assert.equal(graded.checks.find((check) => check.name === "后舵保持径向").ok, true);
+
+  const shifted = structuredClone(result);
+  shifted.diagnostics.sectionFillets[0].minXM += 0.01;
+  assert.equal(grade(request, shifted).checks.find((check) => check.name.includes("前缘圆角")).ok, false);
+  const wrongRadius = structuredClone(result);
+  wrongRadius.diagnostics.sectionFillets[0].radiusM = 0.001;
+  assert.equal(grade(request, wrongRadius).checks.find((check) => check.name.includes("0.0018")).ok, false);
+
+  const flush = structuredClone(result);
+  flush.diagnostics.sectionAngles[0].angleRad = 0;
+  assert.equal(grade(request, flush).checks.find((check) => check.name.startsWith("前舵与弹体夹角")).ok, false);
 });
 
 test("the default run root stays outside the repository", () => {

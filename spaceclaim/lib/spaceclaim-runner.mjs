@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,8 @@ import { buildRequestDocument, renderModelScript } from "./missile-template.mjs"
 // 输入/输出与可调参数：explicit > preset > missile-schema.mjs 中的参数默认值。
 // 安装位置按 SCDM_EXECUTABLE > 手动 setup 配置 > AWP_ROOT<版本> > AWP_ROOT 动态发现。
 // buildMissile 输出根按 options.outputDir > SCDM_MISSILE_OUTPUT > workspace.json 的 dataRoot/runs/high；
-// 由 workspace-runtime 创建唯一运行目录并保留失败记录，以下仅集中既有文件名和运行默认值。
+// 由 workspace-runtime 创建唯一运行目录。验收在内存中完成。成功目录只留 params.json、model.py 和模型文件。
+// 失败时目录仍整份移到 feedback，避免成功位置留下未通过的产物。以下仅集中既有文件名和运行默认值。
 // defaultRunRoot 保留原有临时目录回退，仅供其调用方/内部未托管路径使用。
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_EXECUTE = true;
@@ -172,7 +173,7 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
 
   // Where the fins actually sit. The model frame origin is the nose tip, so the station is literally
   // the distance from the nose; extents, areas and volume cannot see an axial slide. The seed fin is
-  // a ruled NACA loft, so its measured centre of mass is the solid centroid, and the analytic
+  // a ruled section loft, so its measured centre of mass is the solid centroid, and the analytic
   // centroid offset converts that back into the visible leading-edge station. This has to be a tight
   // *absolute* tolerance: burying the root along the swept leading edge instead of radially moves
   // the centroid by only 1.2 mm, which a loose relative check would sleep through.
@@ -261,7 +262,74 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
     // The split of the body family is structural: the tip cap, the cone, and cylinder + shoulder + base.
     const bodyKinds = geometry?.expectedAreas?.faces?.filter((face) => ["shoulder", "cylinder", "base"].includes(face.kind)).length ?? 0;
     add("弹体面划分与解析轮廓一致", (selectionReport.missile_nose_tip?.faces ?? 0) === (hasTip ? 1 : 0) && (selectionReport.missile_nose?.faces ?? 0) === 1 && (selectionReport.missile_body?.faces ?? 0) === bodyKinds, `tip=${selectionReport.missile_nose_tip?.faces ?? 0} nose=${selectionReport.missile_nose?.faces} body=${selectionReport.missile_body?.faces} expectedBody=${bodyKinds}`);
-    add("舵面面数与翼型放样拓扑一致", selectionReport.missile_fin?.faces === geometry?.expectedFinFaceCount, `fin=${selectionReport.missile_fin?.faces} expected=${geometry?.expectedFinFaceCount}`);
+    const roundFaces = Number(result?.diagnostics?.roundCreatedFaces ?? 0);
+    const expectedFinFaces = (geometry?.expectedFinFaceCount ?? 0) + (Number.isFinite(roundFaces) ? roundFaces : 0);
+    add("舵面面数与翼型放样拓扑一致", selectionReport.missile_fin?.faces === expectedFinFaces, `fin=${selectionReport.missile_fin?.faces} expected=${expectedFinFaces} rounds=${roundFaces}`);
+    if (geometry?.rootJunctionFillet) {
+      const rounds = result?.diagnostics?.edgeFillets ?? [];
+      const band = geometry.rootJunctionFillet.tolerance ?? 0.1;
+      const requestedTip = geometry.airfoil?.hex_tip_corner_radius_m ?? geometry.rootJunctionFillet.radius;
+      const requestedRoot = geometry.rootJunctionFillet.radius;
+      const holdsRadius = (round, requested) => round?.success === true
+        && round.clamped !== true
+        && round.radiusM > 0
+        && Math.abs(round.radiusM - requested) / requested <= band;
+      const planform = rounds.filter((round) => round.label === "tip-planform" && round.kind === "planform-arc");
+      add("舵尖前后缘圆角为 3 mm", planform.length >= (geometry.fins?.length ?? 0) && planform.every((round) => holdsRadius(round, requestedTip)), `rounds=${JSON.stringify(planform.map((round) => ({ radiusM: round.radiusM, clamped: round.clamped, kind: round.kind })))}`);
+      const stationCount = geometry.cruciform_count ?? 1;
+      const forwardFloor = geometry.rootJunctionFillet.forwardMinRadius ?? requestedRoot;
+      for (const station of geometry.rootJunctionFillet.stations ?? []) {
+        const round = rounds.find((item) => item.label === "root-junction" && item.station === station.name && item.success);
+        const chord = station.te - station.le;
+        const mid = (station.le + station.te) / 2;
+        const spansChord = Number.isFinite(round?.xMin) && Number.isFinite(round?.xMax)
+          && round.xMin < mid && round.xMax > mid && (round.xMax - round.xMin) >= chord * 0.5;
+        const enough = (round?.edges ?? 0) >= stationCount * 2;
+        // The requested radius is what ConstantRound was asked for. One straight blend segment per
+        // fin reads back as a cylinder of that radius, so the created surfaces are measured too: a
+        // kernel success alone is not evidence that the blend came out at the requested size.
+        const measuredRadii = Array.isArray(round?.measuredRadiiM) ? round.measuredRadiiM.map(Number).filter(Number.isFinite) : [];
+        const usedRadius = Number(round?.radiusM);
+        const measuredHits = Number.isFinite(usedRadius) && usedRadius > 0
+          ? measuredRadii.filter((radius) => Math.abs(radius - usedRadius) <= usedRadius * band).length
+          : 0;
+        const measuredEnough = measuredHits >= stationCount;
+        const detail = `radiusM=${round?.radiusM} requestedM=${round?.requestedM} clamped=${round?.clamped} edges=${round?.edges} x=${round?.xMin}..${round?.xMax} measuredCylinders=${measuredHits}/${measuredRadii.length}`;
+        if (station.allowReducedRadius) {
+          const present = round?.success === true && round.radiusM > 0;
+          const aboveFloor = present && round.radiusM + 1e-12 >= forwardFloor;
+          const withinRequest = present && round.radiusM <= requestedRoot * (1 + band) + 1e-12;
+          const floorMm = (forwardFloor * 1000).toFixed(1);
+          const requestMm = (requestedRoot * 1000).toFixed(0);
+          add(`舵面 ${station.name} 与弹体交接圆角在 ${floorMm}–${requestMm} mm 之间`, aboveFloor && withinRequest && spansChord && enough && measuredEnough, detail);
+        } else {
+          add(`舵面 ${station.name} 与弹体交接圆角为 3 mm`, holdsRadius(round, requestedRoot) && spansChord && enough && measuredEnough, detail);
+        }
+      }
+      const sectionBand = geometry.airfoil?.hex_fillet_tolerance ?? band;
+      const measuredFillets = result?.diagnostics?.sectionFillets ?? [];
+      for (const fin of geometry.fins ?? []) {
+        for (const section of fin.sections ?? []) {
+          if (!Number.isFinite(section.leadingFilletRadiusM)) continue;
+          const measured = measuredFillets.find((item) => item.name === fin.name && Math.abs(Number(item.le) - section.le) <= 1e-6);
+          const radiusOk = measured?.radiusM > 0 && Math.abs(measured.radiusM - section.leadingFilletRadiusM) / section.leadingFilletRadiusM <= sectionBand;
+          // The read-back samples the arc ends and one mid point, so it can sit aft of the crown by
+          // less than the radius. A shift larger than that radius fails here; the centre-of-mass
+          // station check above is the 0.1 mm leading-edge gate.
+          const stationOk = Number.isFinite(measured?.minXM) && Math.abs(measured.minXM - section.le) <= section.leadingFilletRadiusM;
+          add(`舵面 ${fin.name} 前缘圆角 ${section.leadingFilletRadiusM} m 且前缘站位不变`, radiusOk && stationOk, `radiusM=${measured?.radiusM} minXM=${measured?.minXM} le=${section.le} clamped=${section.leadingFilletClamped}`);
+        }
+      }
+      const measuredAngles = result?.diagnostics?.sectionAngles ?? [];
+      const front = (geometry.fins ?? []).find((fin) => fin.name === "front");
+      if (Number.isFinite(front?.bodyIntersectionAngleRad)) {
+        const measured = measuredAngles.find((item) => item.name === "front");
+        const degrees = front.bodyIntersectionAngleRad * 180 / Math.PI;
+        add(`前舵与弹体夹角 ≈ ${degrees.toFixed(3)}°`, Number.isFinite(measured?.angleRad) && Math.abs(measured.angleRad - front.bodyIntersectionAngleRad) <= 0.002, `measuredRad=${measured?.angleRad} expectedRad=${front.bodyIntersectionAngleRad}`);
+      }
+      const rear = measuredAngles.find((item) => item.name === "rear");
+      if (rear) add("后舵保持径向", Number.isFinite(rear.angleRad) && rear.angleRad <= 0.002, `measuredRad=${rear.angleRad}`);
+    }
     // Both caps of the enclosure, one face each and the right size; the wall is the side surface.
     const capArea = Math.PI * request.regions.enclosure.radius ** 2;
     add("inlet / outlet 是外壳两端盖各一个面", selectionReport.inlet?.faces === 1 && selectionReport.outlet?.faces === 1 && relativeDifference(selectionReport.inlet?.areaM2, capArea) <= 1e-3 && relativeDifference(selectionReport.outlet?.areaM2, capArea) <= 1e-3, `inlet=${selectionReport.inlet?.areaM2} outlet=${selectionReport.outlet?.areaM2} expected=${capArea}`);
@@ -329,6 +397,16 @@ async function readJson(file) {
 }
 
 /**
+ * A successful model directory keeps the parameter JSON, the script and the model file.
+ * Acceptance has already read the other artifacts. Failure leaves them for the feedback move.
+ */
+export async function retainModelOutputs(dir, modelFileName) {
+  const keep = new Set([RUN_ARTIFACT_NAMES.params, RUN_ARTIFACT_NAMES.script, modelFileName]);
+  const entries = await readdir(dir, { withFileTypes: true });
+  await Promise.all(entries.filter((entry) => entry.isFile() && !keep.has(entry.name)).map((entry) => unlink(path.join(dir, entry.name))));
+}
+
+/**
  * Full build: validate, write the request, optionally execute SpaceClaim, then grade the artifacts.
  */
 async function buildMissileCore(options = {}) {
@@ -393,6 +471,20 @@ async function buildMissileCore(options = {}) {
   const assemblyImageStat = await stat(assemblyImagePath).catch(() => null);
   const acceptance = evaluateAcceptance({ request, result, modelPath, modelStat, resultStat, startedAt, regionLabels: REGION_LABELS });
   const diagnostic = await readFile(diagnosticPath, "utf8").catch(() => "");
+  if (acceptance.ok && document.geometry?.rootJunctionFillet) {
+    const applied = (result?.diagnostics?.edgeFillets ?? []).filter((item) => item.label === "root-junction" && item.success);
+    if (applied.length) {
+      document.geometry.rootJunctionFillet.applied = applied.map((item) => ({
+        station: item.station,
+        radiusM: item.radiusM,
+        radiusMaxM: item.radiusMaxM ?? item.radiusM,
+        requestedM: item.requestedM,
+        clamped: item.clamped === true,
+        edges: item.edges,
+      }));
+      await writeFile(paramsPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    }
+  }
 
   return {
     ok: acceptance.ok && !outcome.timedOut && !outcome.error && outcome.code === 0,
@@ -431,7 +523,8 @@ export async function buildMissile(options = {}) {
     const status = result.ok ? result.status === "script-generated" ? "GENERATED" : "PASSED" : "FAILED";
     const from = run.dir;
     await finishRun(run, { status, verification: { runtimeVerified: status === "PASSED", checks: result.acceptance?.checks || [] }, error: status === "FAILED" ? { type: result.status, message: result.errors?.join("; ") || "Fresh artifact acceptance failed" } : null });
-    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: path.join(run.dir, RUN_ARTIFACT_NAMES.manifest) };
+    if (status === "PASSED") await retainModelOutputs(run.dir, fileName);
+    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: status === "PASSED" ? "" : path.join(run.dir, RUN_ARTIFACT_NAMES.manifest) };
   } catch (error) {
     await writeFile(path.join(run.dir,RUN_ARTIFACT_NAMES.error), `${error.name}: ${error.message}\n`, "utf8");
     await finishRun(run, { status: "FAILED", error });

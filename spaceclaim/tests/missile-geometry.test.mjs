@@ -1,9 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AIRFOIL_SAMPLES_PER_SIDE,
+  HEX_FILLET_LE_RADIUS_M,
+  HEX_FILLET_RADIUS_M,
+  HEX_FILLET_RADIUS_TOLERANCE,
+  HEX_FILLET_SEGMENT_COUNT,
+  HEX_FILLET_SKETCH_MIN_ARC_M,
+  HEX_FILLET_SKETCH_MIN_SAGITTA_M,
+  HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M,
+  HEX_ROOT_JUNCTION_PROBE_RADII_M,
+  HEX_ROOT_JUNCTION_RADIUS_M,
+  HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M,
+  HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR,
+  HEX_TIP_CORNER_RADIUS_M,
   bodyProfile,
   buildFinAirfoil,
   buildHexagonAirfoil,
+  hexagonBevelAngle,
+  hexagonSketchScale,
+  planformTipCornerFillets,
   deriveGeometry,
   deriveRegions,
   finPhaseDegrees,
@@ -17,9 +33,11 @@ import {
   profileProperties,
   regionProfile,
   revolvedFaceAreas,
+  ruledLoftSolid,
   solveNoseFillet,
   solveNoseTipFillet,
   solidOfRevolutionCenterOfMass,
+  taperedLoftCentroid,
   tipLeadingEdgeOffset,
 } from "../lib/missile-geometry.mjs";
 import { buildModelRequest } from "../lib/missile-params.mjs";
@@ -469,44 +487,316 @@ test("the default NACA section matches the shared thickness equation", () => {
   assert.ok(Math.abs(nacaHalfThicknessRatio(0, sharp, ratio)) < 1e-15);
 });
 
-test("a hexagonal section is a sharp symmetric hexagon scaled by the local chord", () => {
-  const hex = buildHexagonAirfoil({ thickness_percent: 4.48, hex_flat_start: 0.2, hex_flat_end: 0.8 });
-  const half = 4.48 / 100 / 2;
-  assert.deepEqual(hex.loop, [
-    [0, 0],
-    [0.2, half],
-    [0.8, half],
-    [1, 0],
-    [0.8, -half],
-    [0.2, -half],
-  ]);
-  assert.ok(Math.abs(hex.properties.cx - 0.5) < 1e-12);
+function samePoint(a, b) {
+  return Math.abs(a[0] - b[0]) < 1e-12 && Math.abs(a[1] - b[1]) < 1e-12;
+}
+
+function loopHasEdge(loop, start, end) {
+  for (let index = 0; index < loop.length; index += 1) {
+    const next = loop[(index + 1) % loop.length];
+    if ((samePoint(loop[index], start) && samePoint(next, end)) || (samePoint(loop[index], end) && samePoint(next, start))) return true;
+  }
+  return false;
+}
+
+function assertContinuousArc(arc, radius) {
+  assert.equal(arc.type, "arc");
+  assert.equal(arc.sense, arc.sweep === "cw");
+  assert.ok(Math.abs(arc.radius - radius) < 1e-12);
+  assert.ok(Math.abs(arc.delta) > 1e-5 && Math.abs(arc.delta) < Math.PI);
+  for (const point of [arc.from, arc.to, arc.via]) {
+    assert.ok(Math.abs(Math.hypot(point[0] - arc.center[0], point[1] - arc.center[1]) - radius) < 1e-9);
+  }
+}
+
+test("a ruled loft of similar sections matches the closed-form centroid", () => {
+  const root = [[1, 0], [1.4, 0], [1.2, 0.2]];
+  const tip = [[1.1, 0], [1.3, 0], [1.2, 0.1]];
+  const solid = ruledLoftSolid(
+    { radius: 0.1, points: root },
+    { radius: 0.4, points: tip },
+  );
+  const closed = taperedLoftCentroid({ le0: 1, c0: 0.4, r0: 0.1, le1: 1.1, c1: 0.2, r1: 0.4, areaRatio: 0.25, xiBar: 0.5 });
+  assert.ok(Math.abs(solid.volume - closed.volume) < 1e-12);
+  assert.ok(Math.abs(solid.centroid[0] - closed.centroid[0]) < 1e-12);
+  assert.ok(Math.abs(solid.centroid[1] - closed.centroid[1]) < 1e-12);
+  assert.equal(solid.centroid[2], 0);
+  const plate = ruledLoftSolid(
+    { radius: 2, points: [[0, 0], [1, 0], [1, 1], [0, 1]] },
+    { radius: 5, points: [[0, 0], [1, 0], [1, 1], [0, 1]] },
+  );
+  assert.ok(Math.abs(plate.volume - 3) < 1e-12);
+  assert.ok(Math.abs(plate.centroid[0] - 0.5) < 1e-12);
+  assert.ok(Math.abs(plate.centroid[1] - 3.5) < 1e-12);
+});
+
+test("a hexagonal section keeps a 1 mm circular fillet without moving the chord extremes", () => {
+  const chord = 0.23;
+  const thicknessPercent = 4.48;
+  const hex = buildHexagonAirfoil({ thickness_percent: thicknessPercent, hex_flat_start: 0.2, hex_flat_end: 0.8, chord });
+  const half = thicknessPercent / 100 / 2 * chord;
+  const band = HEX_FILLET_RADIUS_M * HEX_FILLET_RADIUS_TOLERANCE;
+  assert.equal(hex.fillet.clamped, false);
+  assert.equal(hex.fillet.clampNote, "");
+  assert.ok(Math.abs(hex.fillet.radius - HEX_FILLET_RADIUS_M) < 1e-15);
+  assert.ok(Math.abs(hex.fillet.radius - HEX_FILLET_RADIUS_M) <= band);
+  assert.equal(hex.fillet.unit, "m");
+  assert.equal(hex.fillet.leadingClamped, false);
+  assert.ok(Math.abs(hex.fillet.leadingRadius - HEX_FILLET_LE_RADIUS_M) < 1e-15);
+  assert.equal(hex.segments.length, HEX_FILLET_SEGMENT_COUNT);
+  assert.equal(hex.segments.filter((segment) => segment.type === "arc").length, 6);
+  assertContinuousArc(hex.fillet.leading, HEX_FILLET_LE_RADIUS_M);
+  assertContinuousArc(hex.fillet.trailing, hex.fillet.radius);
+  for (const shoulder of hex.fillet.shoulders) assertContinuousArc(shoulder, hex.fillet.radius);
+  const xs = hex.loop.map((point) => point[0]);
+  const ys = hex.loop.map((point) => point[1]);
+  assert.ok(Math.abs(Math.min(...xs)) < 1e-12, "leading-edge station stays at the sharp point");
+  assert.ok(Math.abs(Math.max(...xs) - chord) < 1e-12, "trailing-edge station stays at the sharp point");
+  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - chord) < 1e-12);
+  assert.ok(Math.abs(Math.max(...ys) - half) < 1e-12, "maximum thickness is unchanged");
+  assert.ok(Math.abs(Math.min(...ys) + half) < 1e-12);
   assert.ok(Math.abs(hex.properties.cy) < 1e-12);
-  assert.ok(Math.abs(Math.abs(hex.properties.area) - half * (1 - 0.2 + 0.8)) < 1e-12);
+  assert.ok(samePoint(hex.fillet.leading.extreme, [0, 0]));
+  assert.ok(samePoint(hex.fillet.trailing.extreme, [chord, 0]));
+  for (const junction of hex.fillet.junctions) {
+    const radial = [junction.at[0] - junction.center[0], junction.at[1] - junction.center[1]];
+    const edge = [junction.toward[0] - junction.at[0], junction.toward[1] - junction.at[1]];
+    const scale = Math.hypot(radial[0], radial[1]) * Math.hypot(edge[0], edge[1]);
+    assert.ok(Math.abs(radial[0] * edge[0] + radial[1] * edge[1]) / scale < 1e-9);
+    assert.ok(loopHasEdge(hex.loop, junction.at, junction.toward));
+  }
+  const flat = hex.loop.filter((point) => Math.abs(point[1] - half) < 1e-12).map((point) => point[0]).sort((a, b) => a - b);
+  assert.ok(flat.length >= 2);
+  assert.ok(flat[0] > 0.2 * chord && flat[0] < 0.2 * chord + 0.002);
+  assert.ok(flat[flat.length - 1] < 0.8 * chord && flat[flat.length - 1] > 0.8 * chord - 0.002);
+
+  const thinChord = 0.03;
+  const thin = buildHexagonAirfoil({ thickness_percent: thicknessPercent, hex_flat_start: 0.2, hex_flat_end: 0.8, chord: thinChord });
+  const thinHalf = thicknessPercent / 100 / 2 * thinChord;
+  assert.equal(thin.fillet.clamped, true);
+  assert.ok(thin.fillet.clampNote.length > 0);
+  assert.ok(thin.fillet.radius < HEX_FILLET_RADIUS_M);
+  assert.ok(thin.fillet.radius > 0);
+  assert.ok(thin.fillet.radius < thinHalf);
+  assert.ok(thin.fillet.leadingRadius <= thin.fillet.radius + 1e-12);
+  assert.ok(hexagonSketchScale(thin.segments) <= 1000);
+  const thinX = thin.loop.map((point) => point[0]);
+  const thinY = thin.loop.map((point) => point[1]);
+  assert.ok(Math.abs(Math.min(...thinX)) < 1e-12);
+  assert.ok(Math.abs(Math.max(...thinX) - thinChord) < 1e-12);
+  assert.ok(Math.abs(Math.max(...thinY) - thinHalf) < 1e-12);
 
   const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
   assert.equal(request.ok, true, request.errors.join(" | "));
   assert.equal(request.geometry.airfoil.kind, "hexagon");
-  assert.equal(request.geometry.airfoil.edges, 6);
+  assert.equal(request.geometry.airfoil.edges, HEX_FILLET_SEGMENT_COUNT);
+  assert.equal(request.geometry.airfoil.hex_fillet_radius_m, HEX_FILLET_RADIUS_M);
+  assert.equal(request.geometry.airfoil.hex_fillet_le_radius_m, HEX_FILLET_LE_RADIUS_M);
   assert.equal(request.geometry.airfoil.samplesPerSide, null);
-  assert.equal(request.geometry.expectedFinFaceCount, 7 * request.params.cruciform_count * 2);
-  const section = request.geometry.fins[1].sections[0];
-  const [leading, forwardShoulder, aftShoulder, trailing] = section.points;
-  assert.ok(Math.abs(leading[1]) < 1e-12);
-  assert.ok(Math.abs(trailing[1]) < 1e-12);
-  assert.ok(Math.abs((forwardShoulder[0] - leading[0]) / section.chord - 0.2) < 1e-12);
-  assert.ok(Math.abs((aftShoulder[0] - leading[0]) / section.chord - 0.8) < 1e-12);
-  assert.ok(Math.abs((trailing[0] - leading[0]) / section.chord - 1) < 1e-12);
-  assert.ok(Math.abs(forwardShoulder[1] - half * section.chord) < 1e-12);
-  assert.ok(Math.abs(aftShoulder[1] - half * section.chord) < 1e-12);
+  assert.equal(request.geometry.expectedFinFaceCount, (HEX_FILLET_SEGMENT_COUNT + 1) * request.params.cruciform_count * 2);
+  for (const fin of request.geometry.fins) {
+    assert.notEqual(fin.sections[0], fin.sections[1]);
+    assert.equal(fin.sections[0].segments.length, fin.sections[1].segments.length);
+    assert.equal(fin.sections[0].segments.filter((segment) => segment.type === "arc").length, 6);
+    for (const section of fin.sections) {
+      const sectionX = section.points.map((point) => point[0]);
+      const tip = section === fin.sections[1];
+      assert.ok(Math.abs(section.filletRadiusM - HEX_FILLET_RADIUS_M) < 1e-15);
+      if (fin.name === "front" && tip) {
+        assert.equal(section.leadingFilletClamped, true);
+        assert.ok(section.leadingFilletRadiusM < HEX_FILLET_LE_RADIUS_M);
+        assert.ok(section.leadingFilletRadiusM > HEX_FILLET_RADIUS_M);
+      } else {
+        assert.equal(section.leadingFilletClamped, false);
+        assert.ok(Math.abs(section.leadingFilletRadiusM - HEX_FILLET_LE_RADIUS_M) < 1e-15);
+      }
+      assert.ok(Math.abs(Math.min(...sectionX) - section.le) < 1e-12);
+      assert.ok(Math.abs(Math.max(...sectionX) - (section.le + section.chord)) < 1e-12);
+    }
+    assert.ok(Math.abs(fin.leFromNoseTip - request.params[fin.name === "front" ? "L_W" : "L_F"]) < 1e-12);
+  }
 
   const moved = buildModelRequest({ explicit: { fin_section: "hexagon", hex_flat_start: 0.15, hex_flat_end: 0.7 } });
   const tip = moved.geometry.fins[0].sections[1];
-  assert.ok(Math.abs((tip.points[1][0] - tip.points[0][0]) / tip.chord - 0.15) < 1e-12);
-  assert.ok(Math.abs((tip.points[2][0] - tip.points[0][0]) / tip.chord - 0.7) < 1e-12);
+  const tipFlat = tip.points.filter((point) => point[1] > 0 && Math.abs(point[1] - tip.chord * 4.48 / 100 / 2) < 1e-12)
+    .map((point) => point[0]).sort((a, b) => a - b);
+  assert.ok(tipFlat[0] > tip.le + 0.15 * tip.chord);
+  assert.ok(tipFlat[tipFlat.length - 1] < tip.le + 0.7 * tip.chord);
   const sharpNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 0 } });
   const roundNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 9 } });
   assert.deepEqual(sharpNose.geometry.fins[0].sections[0].points, roundNose.geometry.fins[0].sections[0].points);
   assert.ok(request.geometry.fins[0].volume > buildModelRequest({}).geometry.fins[0].volume);
-  assert.equal(buildFinAirfoil({ thickness_percent: 4.48, le_radius_index: 6, max_thickness_tenths: 3 }).kind, "naca");
+  const naca = buildFinAirfoil({ thickness_percent: 4.48, le_radius_index: 6, max_thickness_tenths: 3 });
+  assert.equal(naca.kind, "naca");
+  assert.equal(naca.loop.length, 2 * AIRFOIL_SAMPLES_PER_SIDE + 1);
+  assert.equal(naca.filletRadiusRequested, undefined);
+  const bevel = hexagonBevelAngle(request.params.thickness_percent, request.params.hex_flat_start);
+  const front = request.geometry.fins.find((fin) => fin.name === "front");
+  const rear = request.geometry.fins.find((fin) => fin.name === "rear");
+  assert.ok(Math.abs(front.bodyIntersectionAngleRad - bevel) < 1e-12);
+  assert.ok(Math.abs(front.sectionFrame.normal[1] - Math.cos(bevel)) < 1e-12);
+  assert.ok(Math.abs(front.sectionFrame.normal[2] - Math.sin(bevel)) < 1e-12);
+  assert.equal(rear.sectionFrame, undefined);
+  assert.equal(rear.bodyIntersectionAngleRad, undefined);
+  assert.ok(Math.abs(front.leFromNoseTip - request.params.L_W) < 1e-12);
+  assert.ok(Math.abs(rear.leFromNoseTip - request.params.L_F) < 1e-12);
+  const nacaGeometry = buildModelRequest({});
+  assert.equal(nacaGeometry.geometry.fins[0].sectionFrame, undefined);
+  assert.ok(Math.abs(request.geometry.expectedExtents.lateral - request.geometry.expectedExtents.vertical) < 1e-12);
+  assert.ok(request.geometry.expectedExtents.lateral < 0.64);
+  assert.ok(request.geometry.expectedExtents.lateral > 0.63);
+  assert.ok(Math.abs(naca.loop[0][0]) < 1e-15);
+  assert.ok(Math.abs(naca.loop[0][1]) < 1e-15);
+});
+
+test("hexagon loft profiles are two distinct chains of tangent arcs", () => {
+  const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
+  assert.equal(request.ok, true, request.errors.join(" | "));
+  for (const fin of request.geometry.fins) {
+    const [root, tip] = fin.sections;
+    assert.notEqual(root, tip);
+    assert.equal(root.segments.length, HEX_FILLET_SEGMENT_COUNT);
+    assert.equal(tip.segments.length, HEX_FILLET_SEGMENT_COUNT);
+    assert.notDeepEqual(root.segments[0].from, tip.segments[0].from);
+    if (fin.name === "front") assert.ok(tip.sketchScale > 1);
+    for (const section of fin.sections) {
+      const arcs = section.segments.filter((segment) => segment.type === "arc");
+      assert.equal(arcs.length, 6);
+      assert.equal(section.sketchScale, hexagonSketchScale(section.segments));
+      assert.ok(section.sketchScale >= 1);
+      for (const arc of arcs) {
+        const enlarged = section.sketchScale;
+        const length = Math.abs(arc.delta) * arc.radius * enlarged;
+        const sagitta = arc.radius * (1 - Math.cos(Math.abs(arc.delta) / 2)) * enlarged;
+        assert.ok(length + 1e-12 >= HEX_FILLET_SKETCH_MIN_ARC_M);
+        assert.ok(sagitta + 1e-15 >= HEX_FILLET_SKETCH_MIN_SAGITTA_M);
+      }
+      for (let index = 0; index < section.segments.length; index += 1) {
+        const segment = section.segments[index];
+        const next = section.segments[(index + 1) % section.segments.length];
+        assert.ok(samePoint(segment.to, next.from), `${fin.name} profile does not close`);
+        if (segment.type !== "arc") continue;
+        assert.equal(segment.sense, segment.sweep === "cw");
+        assert.ok(Math.abs(segment.delta) < Math.PI);
+        const radial = [segment.to[0] - segment.center[0], segment.to[1] - segment.center[1]];
+        const edge = [next.from[0] - next.to[0], next.from[1] - next.to[1]];
+        const scale = Math.hypot(radial[0], radial[1]) * Math.hypot(edge[0], edge[1]);
+        if (next.type === "line" && scale > 0) {
+          assert.ok(Math.abs(radial[0] * edge[0] + radial[1] * edge[1]) / scale < 1e-8);
+        }
+      }
+    }
+  }
+  const thin = buildHexagonAirfoil({
+    thickness_percent: 4.48,
+    hex_flat_start: 0.2,
+    hex_flat_end: 0.8,
+    chord: 0.03,
+  });
+  assert.throws(() => hexagonSketchScale([{ type: "arc", radius: 1e-9, delta: 1e-6 }]));
+  assert.equal(thin.segments.filter((segment) => segment.type === "arc").length, 6);
+  for (const segment of thin.segments.filter((item) => item.type === "arc")) {
+    assert.ok(Math.abs(segment.radius - thin.fillet.radius) < 1e-9);
+    assert.ok(Math.abs(segment.delta) < Math.PI);
+  }
+});
+
+test("hexagon tip corners and the root junction are 3 mm tangent rounds", () => {
+  const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
+  assert.equal(request.ok, true, request.errors.join(" | "));
+  assert.equal(request.geometry.rootJunctionFillet.radius, HEX_ROOT_JUNCTION_RADIUS_M);
+  assert.equal(request.geometry.rootJunctionFillet.forwardMinRadius, HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M);
+  assert.deepEqual(request.geometry.rootJunctionFillet.probeRadii, HEX_ROOT_JUNCTION_PROBE_RADII_M);
+  assert.equal(request.geometry.rootJunctionFillet.seamToleranceM, HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M);
+  assert.equal(request.geometry.rootJunctionFillet.unit, "m");
+  // The requested forward range is 1.5–3 mm: the floor is what the kernel accepts on the smallest
+  // hexagon fin, and every probe radius sits inside the band and strictly descends.
+  assert.equal(HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M, 0.0015);
+  assert.equal(HEX_ROOT_JUNCTION_RADIUS_M, 0.003);
+  const probes = request.geometry.rootJunctionFillet.probeRadii;
+  assert.equal(probes[0], HEX_ROOT_JUNCTION_RADIUS_M);
+  assert.equal(probes[probes.length - 1], HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M);
+  assert.ok(probes.every((radius, index) => radius >= HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M && (index === 0 || radius < probes[index - 1])));
+  assert.ok(HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M > 0 && HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M < HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M);
+  const stations = request.geometry.rootJunctionFillet.stations;
+  assert.deepEqual(stations.map((station) => station.name), ["front", "rear"]);
+  assert.equal(stations[0].allowReducedRadius, true);
+  assert.equal(stations[1].allowReducedRadius, false);
+  assert.ok(stations[0].xMax < stations[1].xMin);
+  assert.ok(stations[0].te - stations[0].le > 0);
+  assert.equal(request.geometry.airfoil.hex_tip_corner_radius_m, HEX_TIP_CORNER_RADIUS_M);
+  const naca = buildModelRequest({});
+  assert.equal(naca.geometry.rootJunctionFillet, undefined);
+  assert.equal(naca.geometry.fins[0].tipCornerFillet, undefined);
+  for (const fin of request.geometry.fins) {
+    const fillet = fin.tipCornerFillet;
+    assert.equal(fillet.leAtSurface, fin.le_at_surface);
+    assert.equal(fillet.rootChord, fin.root_chord_at_surface);
+    assert.ok(Math.abs(fillet.tipChord - (fin.te - fin.tip_le)) < 1e-12);
+    assert.equal(fillet.tipRadius, fin.tip_radius);
+    assert.equal(fillet.cutClearanceM, HEX_TIP_CORNER_RADIUS_M * HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR);
+    const [buriedLe, rootTe, tipTe, tipLe] = fin.points;
+    const onSegment = (point, start, end) => {
+      const dx = end[0] - start[0];
+      const dy = end[1] - start[1];
+      const length = Math.hypot(dx, dy);
+      const cross = Math.abs((point[0] - start[0]) * dy - (point[1] - start[1]) * dx);
+      const along = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (length * length);
+      return cross / length < 1e-8 && along > 1e-6 && along < 1 - 1e-6;
+    };
+    const normalTo = (corner, foot, start, end) => {
+      const radial = [foot[0] - corner.center[0], foot[1] - corner.center[1]];
+      const edge = [end[0] - start[0], end[1] - start[1]];
+      const scale = Math.hypot(radial[0], radial[1]) * Math.hypot(edge[0], edge[1]);
+      return Math.abs(radial[0] * edge[0] + radial[1] * edge[1]) / scale < 1e-8;
+    };
+    const expectTangent = (corner, first, second) => {
+      const feet = [corner.from, corner.to];
+      const onFirst = feet.filter((foot) => onSegment(foot, first[0], first[1]));
+      const onSecond = feet.filter((foot) => onSegment(foot, second[0], second[1]));
+      assert.equal(onFirst.length, 1, `${fin.name} ${corner.name} is not tangent to both edges`);
+      assert.equal(onSecond.length, 1, `${fin.name} ${corner.name} is not tangent to both edges`);
+      assert.ok(normalTo(corner, onFirst[0], first[0], first[1]));
+      assert.ok(normalTo(corner, onSecond[0], second[0], second[1]));
+    };
+    expectTangent(fillet.leading, [buriedLe, tipLe], [tipLe, tipTe]);
+    expectTangent(fillet.trailing, [tipLe, tipTe], [tipTe, rootTe]);
+    for (const corner of [fillet.leading, fillet.trailing]) {
+      assert.equal(corner.clamped, false);
+      assert.ok(corner.radius > 0.0025, "a sub-millimetre tip radius is not the 3 mm planform arc");
+      assert.ok(Math.abs(corner.radius - HEX_TIP_CORNER_RADIUS_M) < 1e-12);
+      assert.equal(corner.type, "arc");
+      assert.ok(Math.abs(corner.delta) < Math.PI);
+      for (const point of [corner.from, corner.to, corner.via]) {
+        assert.ok(Math.abs(Math.hypot(point[0] - corner.center[0], point[1] - corner.center[1]) - corner.radius) < 1e-9);
+      }
+      const arcs = corner.removal.filter((segment) => segment?.type === "arc");
+      const lines = corner.removal.filter((segment) => segment?.type === "line");
+      assert.equal(arcs.length, 1);
+      assert.equal(lines.length, 2);
+      assert.ok(Math.abs(arcs[0].radius - HEX_TIP_CORNER_RADIUS_M) < 1e-12);
+      assert.equal(arcs[0].sense, corner.sense);
+    }
+    assert.ok(fillet.straightTipM > 0);
+    assert.ok(fillet.straightTipM < fillet.tipChord);
+    assert.ok(fillet.tipChord - fillet.straightTipM > 0.004, `straight tip ${fillet.straightTipM} would still be a sharp or sub-millimetre corner`);
+    const sharpLeading = [fin.tip_le, fin.tip_radius];
+    const sharpTrailing = [fin.te, fin.tip_radius];
+    assert.ok(Math.hypot(fillet.leading.center[0] - sharpLeading[0], fillet.leading.center[1] - sharpLeading[1]) > fillet.leading.radius);
+    assert.ok(Math.hypot(fillet.trailing.center[0] - sharpTrailing[0], fillet.trailing.center[1] - sharpTrailing[1]) > fillet.trailing.radius);
+  }
+  const direct = planformTipCornerFillets(request.geometry.fins[0]);
+  assert.equal(direct.leading.name, "tip-leading");
+  assert.equal(direct.trailing.name, "tip-trailing");
+  assert.throws(
+    () => planformTipCornerFillets({
+      points: [[0, 0.085], [0.01, 0.085], [0.01, 0.086], [0.0095, 0.086]],
+      le_at_surface: 0,
+      root_chord_at_surface: 0.01,
+      te: 0.01,
+      tip_le: 0.0095,
+      tip_radius: 0.086,
+    }),
+    /拐角夹角 .+°，相邻边长/,
+  );
 });

@@ -9,10 +9,10 @@
 | `setup.mjs` / `paths.mjs` | 文件前部集中官方 CHM 文件名、用户配置和缓存目录名；安装根仍通过 AWP 或首次配置发现。用户配置根和缓存根按 `LOCALAPPDATA` → `TEMP` → 当前目录解析。 |
 | `chm.mjs` | 调用方提供 CHM 和缓存根；文件前部集中缓存文件名、提取目录前缀、300000 ms 超时、4 次稳定轮询及既有等待间隔，`options.timeoutMs` 可覆盖超时。 |
 | `index.mjs` | 调用方提供解包根和可选 sitemap；文件前部集中默认 sitemap 名、索引缓存名与配套格式版本。缓存名与格式版本是兼容性约定，调整时需一并核对。 |
-| `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs/high` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。 |
+| `workspace-runtime.mjs` | 文件前部集中 `workspace.json` 名、默认数据根、`runs/high` 子目录和 `request.json` / `run.json`；配置内容覆盖默认根目录，显式 `outputDir` 覆盖默认产物根。运行编号与最终绝对路径在调用时生成。导弹建模成功后，`spaceclaim-runner.mjs` 再删掉成功目录里这三件以外的文件。 |
 | `spaceclaim-runner.mjs` | 文件前部集中模型/请求/脚本/结果/诊断/图片/清单/错误文件名、300000 ms 超时与原有执行默认值；模型名可由 `fileName` 覆盖。输出根按 `options.outputDir` → `SCDM_MISSILE_OUTPUT` → 工作区 `dataRoot` 选择。清单名是与 `workspace-runtime.mjs` 的 `RUN_MANIFEST_FILENAME` 共享的协议名，必须保持一致。 |
 | `extract.mjs` / `python-map.mjs` | 不读写文件；文件前部集中原有搜索条数默认值 25 / 5，由函数参数或 `options.limit` 覆盖。候选模板的参数仍在前部 `INTENTS` 中。 |
-| `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。翼型截面由几何模块按 `fin_section` 计算：`naca` 用 NACA 三参数，`hexagon` 用厚度和等厚段起止。模板只按请求放样。 |
+| `missile-schema.mjs` 及参数/几何/模板模块 | 参数默认值及输出目录/文件名仍以 schema 前部数组为准，按显式值 → 预设 → 默认值合并。翼型截面由几何模块按 `fin_section` 计算：`naca` 用 NACA 三参数，`hexagon` 用厚度和等厚段起止。六边形肩部和后缘半径 `HEX_FILLET_RADIUS_M`（0.001 m）、前缘半径 `HEX_FILLET_LE_RADIUS_M`（0.0018 m）和 ±10% 验收带在 `missile-geometry.mjs` 前部，不是 schema 字段。前舵另按斜边半角 `atan((thickness_percent/100)/(2*hex_flat_start))` 转过，默认 6.390°。每个尖角是一条相切圆弧，模板用与弹身相同的 `SketchArc.CreateSweepArc` 绘制。过短的圆弧按 `sketchScale` 放大后再绕原点缩回，并要求每个剖面草图都新建实体。六边形舵尖拐角是几何模块里的 3 mm 平面圆弧（`HEX_TIP_CORNER_RADIUS_M`），模板按该圆弧切除尖角；前舵和后舵的根部交接各自用模板里的 `ConstantRound`。后舵为 `HEX_ROOT_JUNCTION_RADIUS_M`（0.003 m）。前舵先试该半径，拒绝时在 `HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M`（0.0015 m，即 1.5 mm）以上取内核接受的最大半径，默认结果是 1.5 mm，并在成功后写入 `params.json`。接缝按“边中点落在弹体柱面上”（`HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M`，0.001 m）选边，不依赖相邻面的质心半径，每个站位整圈一次倒圆、不做逐边降半径；把短边筛掉会在切向接点留下自由端，内核连 0.2 mm 以上都拒绝。两者都在几何模块前部，放不下 3 mm 的梢部拐角会停止而不是收成零点几毫米。 |
 | `fixture-acceptance.mjs` | 不读写文件；头部说明 fixture 的既有验收约定，不将契约常量重新声明为运行参数。 |
 
 这些整理保留已有默认值、文件格式、调用接口与验收逻辑。可用 `node --check lib/<module>.mjs` 做语法检查，正常代码检查仍按仓库 `AGENTS.md` 执行；语法检查或离线测试不能证明 ANSYS 运行产物已经验收。
@@ -27,7 +27,7 @@
 | [`python-map.mjs`](python-map.mjs) | 将圆周阵列、圆柱、拉伸等意图映射为 API 搜索结果及 `inferred` Python 候选；组合几何步骤配方。 |
 | [`missile-schema.mjs`](missile-schema.mjs) | 参数字段、单位、默认值、可用约定与优化区间的统一声明，供 MCP、CLI 和请求文件派生使用。 |
 | [`missile-params.mjs`](missile-params.mjs) | 按显式参数 → 预设 → 默认值合并，转换类型、检查几何与区域约束，生成错误、警告、修正和模型请求。 |
-| [`missile-geometry.mjs`](missile-geometry.mjs) | 计算鼻锥与倒圆剖面、梯形舵面平面形状、NACA 或六边形横截面、站位、体积/面积/质心、包围盒、BOI 与外壳的预期几何。 |
+| [`missile-geometry.mjs`](missile-geometry.mjs) | 计算鼻锥与倒圆剖面、梯形舵面平面形状、NACA 或带绝对圆角的六边形横截面、站位、体积/面积/质心、包围盒、BOI 与外壳的预期几何。 |
 | [`missile-template.mjs`](missile-template.mjs) | 组装请求 JSON 并渲染目标 API 版本的 SpaceClaim Python；模板读取参数、建模、合并、创建区域和命名选择、保存模型并报告结果。预览导出失败不单独判定几何失败。 |
 | [`spaceclaim-runner.mjs`](spaceclaim-runner.mjs) | 解析 SpaceClaim 与 API 版本，生成脚本/参数，可选启动 SpaceClaim，并依据新模型与结构化结果检查几何、区域、选择集及结构树处理。 |
 | [`fixture-acceptance.mjs`](fixture-acceptance.mjs) | 解析圆周阵列 fixture 的 `key=value` 结果，检查六个角度、360° 覆盖、单一合并实体及非零面数。 |

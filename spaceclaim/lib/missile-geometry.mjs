@@ -10,11 +10,72 @@
  * `fin_section=naca` 时，翼型方程与 DATCOM/scripts/naca_section.py 的对称 NACA 四位数一致；
  * 下面的参考厚度、前缘系数和后缘斜率是该方程的常数，不是可调设计参数。
  * AIRFOIL_SAMPLES_PER_SIDE 只决定 NACA 放样折线的弦向分辨率。
- * `fin_section=hexagon` 时，剖面是尖前缘、尖后缘的对称六边形，厚度和等厚段起止都来自参数集。
+ * `fin_section=hexagon` 时，剖面是对称六边形，厚度和等厚段起止来自参数集。
+ * 肩部和后缘是 1 mm 相切圆弧，前缘是 1.8 mm 相切圆弧，都不随弦长缩放；NACA 剖面不用这些半径。
+ * 前舵再绕弦向轴转过六边形斜边夹角，使根截面不再平行于弹体切面；后舵保持径向。
  */
 
 /** Chordwise samples on each side of the airfoil polyline. Leading-edge spacing is cosine-clustered. */
 export const AIRFOIL_SAMPLES_PER_SIDE = 32;
+
+/**
+ * Absolute circular fillet on each corner of a hexagonal fin section.
+ * `HEX_FILLET_RADIUS_M` is metres (1 mm) for the four shoulder arcs and the trailing-edge arc.
+ * `HEX_FILLET_LE_RADIUS_M` is metres (1.8 mm) for the leading-edge arc only. Both are absolute
+ * lengths, not chord fractions. The leading-edge extreme stays on the sharp leading-edge station.
+ * `HEX_FILLET_RADIUS_TOLERANCE` is the relative acceptance band (±10%) when a radius is not clamped.
+ * A shorter local chord, a smaller half-thickness, or a shorter flat can force a smaller tangent
+ * radius; that clamp is reported on the section.
+ * Each of the six corners is one circular arc, tangent to the neighbouring straight edges.
+ * The sketch draws that arc with `SketchArc.CreateSweepArc`; it is not a chord or a polyline.
+ * `HEX_FILLET_SEGMENT_COUNT` is the fixed closed profile: six arcs and six straight edges.
+ * `HEX_FILLET_ANALYSIS_SAMPLES` is only the interior sample count used for centroid, volume and
+ * bounding-box checks. Those samples are not sent to the sketch.
+ * SpaceClaim drops a sweep arc that is too short or too flat: a 0.031 mm shoulder with 0.12 µm
+ * sagitta created no curve, while a 0.088 mm arc with 0.96 µm sagitta was kept. The sketch is
+ * enlarged until every arc meets the two floors below, then the sheet is scaled back to the true
+ * radius and station. The floors are construction limits, not design parameters.
+ */
+export const HEX_FILLET_RADIUS_M = 0.001;
+export const HEX_FILLET_LE_RADIUS_M = 0.0018;
+export const HEX_FILLET_RADIUS_TOLERANCE = 0.1;
+export const HEX_FILLET_SEGMENT_COUNT = 12;
+export const HEX_FILLET_ANALYSIS_SAMPLES = 8;
+export const HEX_FILLET_SKETCH_MIN_ARC_M = 0.0002;
+export const HEX_FILLET_SKETCH_MIN_SAGITTA_M = 5e-6;
+export const HEX_FILLET_SKETCH_SCALE_LIMIT = 1000;
+/**
+ * Rounds at the hexagonal fin only. They are metres, not chord fractions and not schema fields.
+ * `HEX_TIP_CORNER_RADIUS_M` is one circular arc in the planform at each tip corner, where the tip
+ * chord meets the leading edge and where it meets the trailing edge. It stays 0.003 m. A corner
+ * that cannot hold that arc stops the build and reports the corner angle and the edge lengths;
+ * the radius is not reduced to a fraction of a millimetre, and it is not an edge fillet through
+ * the thickness.
+ * `HEX_ROOT_JUNCTION_RADIUS_M` is the ConstantRound requested where each fin meets the fuselage.
+ * The aft junction must keep that radius. The canted forward junction tries it first, then the
+ * values in `HEX_ROOT_JUNCTION_PROBE_RADII_M`, and stops at the largest radius SpaceClaim accepts.
+ * `HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M` is the floor of that probe: 0.0015 m. Measured on the
+ * default model in V241, the complete forward seam refuses 2 mm and accepts 1.5 mm, while the aft
+ * seam accepts 3 mm; the smallest hexagon fin's 1 mm shoulder arcs set that limit. A smaller
+ * forward round is not substituted, and 3 mm on the aft junction is never reduced. The ±10% band in
+ * `HEX_FILLET_RADIUS_TOLERANCE` still gates an unreduced radius.
+ * `HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M` is how far from the exact cylinder radius an edge midpoint
+ * may sit and still count as part of that seam. It is a selection tolerance, not a design
+ * parameter.
+ * The rounded set is the whole seam loop, every edge of the fin-to-body intersection including the
+ * 0.08 mm shoulder-arc segments. A subset that drops those segments leaves free ends at tangent
+ * transitions and the kernel refuses every radius tried above 0.2 mm, so the loop is never cut
+ * down to its long edges.
+ * `HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR` only offsets the planform cut sketch outside the fin.
+ * It is a construction clearance, not a design parameter. The 1 mm section fillets along the span
+ * stay at `HEX_FILLET_RADIUS_M`. NACA fins do not use these radii.
+ */
+export const HEX_TIP_CORNER_RADIUS_M = 0.003;
+export const HEX_ROOT_JUNCTION_RADIUS_M = 0.003;
+export const HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M = 0.0015;
+export const HEX_ROOT_JUNCTION_PROBE_RADII_M = [0.003, 0.0025, 0.002, 0.0015];
+export const HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M = 0.001;
+export const HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR = 20;
 
 const NACA_REFERENCE_THICKNESS = 0.20;
 const NACA_REFERENCE_HALF_THICKNESS = 0.10;
@@ -117,34 +178,531 @@ export function buildNacaAirfoil({ thickness_percent, le_radius_index, max_thick
   return { coefficients, thicknessRatio, loop, properties: polygonAreaCentroid(loop) };
 }
 
-/**
- * Symmetric hexagonal section: sharp leading edge, constant thickness between the two
- * chord fractions, and a sharp trailing edge. Coordinates are (x/c, y/c).
- * The loop is not closed by repeating the first point.
- */
-export function buildHexagonAirfoil({ thickness_percent, hex_flat_start, hex_flat_end }) {
-  const thicknessRatio = thickness_percent / 100;
-  const half = thicknessRatio / 2;
-  const flatStart = hex_flat_start;
-  const flatEnd = hex_flat_end;
-  if (!(thicknessRatio > 0) || !(flatStart > 0 && flatEnd > flatStart && flatEnd < 1)) {
-    throw new Error("六边形翼面需要正厚度，以及 0 < hex_flat_start < hex_flat_end < 1。");
-  }
-  const loop = [
-    [0, 0],
-    [flatStart, half],
-    [flatEnd, half],
-    [1, 0],
-    [flatEnd, -half],
-    [flatStart, -half],
-  ];
-  return { thicknessRatio, loop, properties: polygonAreaCentroid(loop), flatStart, flatEnd };
+function normalize2(vector) {
+  const length = Math.hypot(vector[0], vector[1]);
+  if (!(length > 0)) return null;
+  return [vector[0] / length, vector[1] / length];
 }
 
-/** NACA polyline or hexagonal loop, selected by `fin_section`. Missing section keeps the NACA path. */
+/** Interior is to the right of a clockwise hexagonal boundary. */
+function inwardNormal(direction) {
+  return [direction[1], -direction[0]];
+}
+
+function lineIntersection(origin, direction, otherOrigin, otherDirection) {
+  const det = direction[0] * otherDirection[1] - direction[1] * otherDirection[0];
+  if (Math.abs(det) < 1e-14) return null;
+  const dx = otherOrigin[0] - origin[0];
+  const dy = otherOrigin[1] - origin[1];
+  const scale = (dx * otherDirection[1] - dy * otherDirection[0]) / det;
+  return [origin[0] + scale * direction[0], origin[1] + scale * direction[1]];
+}
+
+/** Signed distance, positive on the inward (right) side of a unit direction. */
+function inwardDistance(point, origin, direction) {
+  const dx = point[0] - origin[0];
+  const dy = point[1] - origin[1];
+  return direction[1] * dx - direction[0] * dy;
+}
+
+function segmentParameter(point, start, end) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const length2 = dx * dx + dy * dy;
+  if (!(length2 > 0)) return null;
+  return ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length2;
+}
+
+/**
+ * Centre of the tangent fillet on a clockwise corner. The centre is inset by `radius` from both edges.
+ * Returns null when the edges are parallel or the tangent feet fall outside the finite edges.
+ */
+function clockwiseFillet(prev, vertex, next, radius) {
+  const incoming = normalize2([vertex[0] - prev[0], vertex[1] - prev[1]]);
+  const outgoing = normalize2([next[0] - vertex[0], next[1] - vertex[1]]);
+  if (!incoming || !outgoing) return null;
+  const normalIn = inwardNormal(incoming);
+  const normalOut = inwardNormal(outgoing);
+  const center = lineIntersection(
+    [prev[0] + radius * normalIn[0], prev[1] + radius * normalIn[1]],
+    incoming,
+    [vertex[0] + radius * normalOut[0], vertex[1] + radius * normalOut[1]],
+    outgoing,
+  );
+  if (!center) return null;
+  const footIn = [center[0] - radius * normalIn[0], center[1] - radius * normalIn[1]];
+  const footOut = [center[0] - radius * normalOut[0], center[1] - radius * normalOut[1]];
+  const onIncoming = segmentParameter(footIn, prev, vertex);
+  const onOutgoing = segmentParameter(footOut, vertex, next);
+  if (onIncoming === null || onOutgoing === null) return null;
+  if (onIncoming <= 1e-8 || onIncoming >= 1 - 1e-8 || onOutgoing <= 1e-8 || onOutgoing >= 1 - 1e-8) return null;
+  if (Math.abs(inwardDistance(center, prev, incoming) - radius) > 1e-8) return null;
+  if (Math.abs(inwardDistance(center, vertex, outgoing) - radius) > 1e-8) return null;
+  return { center, footIn, footOut };
+}
+
+/**
+ * External tangent on the upper side of two circles. Equal radii keep the previous normal
+ * (perpendicular to the line of centres). Unequal radii rotate that normal by asin((r1-r2)/d).
+ */
+function upperExternalTangent(first, second, firstRadius, secondRadius = firstRadius) {
+  const dx = second[0] - first[0];
+  const dy = second[1] - first[1];
+  const length = Math.hypot(dx, dy);
+  if (!(length > Math.abs(firstRadius - secondRadius))) return null;
+  const phi = Math.atan2(dy, dx);
+  const alpha = Math.asin((firstRadius - secondRadius) / length);
+  const candidates = [phi + Math.PI / 2 - alpha, phi - Math.PI / 2 + alpha];
+  let best = null;
+  for (const angle of candidates) {
+    const normal = [Math.cos(angle), Math.sin(angle)];
+    if (!(normal[1] > 0)) continue;
+    const start = [first[0] + firstRadius * normal[0], first[1] + firstRadius * normal[1]];
+    const end = [second[0] + secondRadius * normal[0], second[1] + secondRadius * normal[1]];
+    if (!best || start[1] + end[1] > best.first[1] + best.second[1]) {
+      best = { first: start, second: end, normal };
+    }
+  }
+  return best;
+}
+
+/** Sharp bevel angle of the hexagon, from the chord plane. Depends only on thickness and flat start. */
+export function hexagonBevelAngle(thicknessPercent, flatStart) {
+  const slope = (thicknessPercent / 100) / (2 * flatStart);
+  if (!(slope > 0)) throw new Error("六边形斜边夹角需要正的厚度和等厚段起点。");
+  return Math.atan(slope);
+}
+
+function distance2D(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+/** Signed minor sweep from `from` to `to`, positive counterclockwise, in (-π, π]. */
+function signedMinorAngle(center, from, to) {
+  const v1 = [from[0] - center[0], from[1] - center[1]];
+  const v2 = [to[0] - center[0], to[1] - center[1]];
+  return Math.atan2(v1[0] * v2[1] - v1[1] * v2[0], v1[0] * v2[0] + v1[1] * v2[1]);
+}
+
+function onMinorArc(center, from, to, via, radius) {
+  if (Math.abs(distance2D(via, center) - radius) > 1e-8) return false;
+  const total = signedMinorAngle(center, from, to);
+  const part = signedMinorAngle(center, from, via);
+  if (!(Math.abs(total) > 1e-8 && Math.abs(total) < Math.PI - 1e-8)) return false;
+  if (total > 0) return part > -1e-8 && part < total + 1e-8;
+  return part < 1e-8 && part > total - 1e-8;
+}
+
+/**
+ * One circular arc, the minor sweep from `from` to `to`.
+ * `sense` matches the body profile: true asks SketchArc.CreateSweepArc for the clockwise arc.
+ * On the fin plane that flag is inferred from the body sketch until a hexagonal run confirms it.
+ */
+function arcSegment(center, from, to, radius, via) {
+  const delta = signedMinorAngle(center, from, to);
+  if (!(Math.abs(delta) > 1e-5 && Math.abs(delta) < Math.PI - 1e-8)) return null;
+  const start = Math.atan2(from[1] - center[1], from[0] - center[0]);
+  const midAngle = start + delta / 2;
+  const midpoint = [center[0] + radius * Math.cos(midAngle), center[1] + radius * Math.sin(midAngle)];
+  const crown = via ?? midpoint;
+  if (!onMinorArc(center, from, to, crown, radius)) return null;
+  const sweep = delta < 0 ? "cw" : "ccw";
+  return {
+    type: "arc",
+    center,
+    from,
+    to,
+    via: crown,
+    radius,
+    sweep,
+    sense: sweep === "cw",
+    delta,
+  };
+}
+
+function lineSegment(from, to) {
+  if (!(distance2D(from, to) > 1e-9)) return null;
+  return { type: "line", from, to };
+}
+
+function arcSagitta(arc) {
+  return arc.radius * (1 - Math.cos(Math.abs(arc.delta) / 2));
+}
+
+/**
+ * Uniform sketch enlargement that keeps every fillet arc above the length and sagitta
+ * SpaceClaim will actually create. The sheet is scaled back afterwards, so the radius stays true.
+ */
+export function hexagonSketchScale(segments) {
+  let scale = 1;
+  for (const segment of segments) {
+    if (segment?.type !== "arc") continue;
+    const length = Math.abs(segment.delta) * segment.radius;
+    const sagitta = arcSagitta(segment);
+    if (length > 0) scale = Math.max(scale, HEX_FILLET_SKETCH_MIN_ARC_M / length);
+    if (sagitta > 0) scale = Math.max(scale, HEX_FILLET_SKETCH_MIN_SAGITTA_M / sagitta);
+  }
+  if (!(scale >= 1) || scale > HEX_FILLET_SKETCH_SCALE_LIMIT) {
+    throw new Error(`六边形圆角草图比例 ${scale} 超出 1 到 ${HEX_FILLET_SKETCH_SCALE_LIMIT}，圆弧无法按真实半径保留。`);
+  }
+  return scale;
+}
+
+function cornerDirections(prev, vertex, next) {
+  const incoming = [vertex[0] - prev[0], vertex[1] - prev[1]];
+  const outgoing = [next[0] - vertex[0], next[1] - vertex[1]];
+  const lengthIn = Math.hypot(incoming[0], incoming[1]);
+  const lengthOut = Math.hypot(outgoing[0], outgoing[1]);
+  const cos = (incoming[0] * outgoing[0] + incoming[1] * outgoing[1]) / (lengthIn * lengthOut);
+  const degrees = (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
+  return { degrees, lengthIn, lengthOut };
+}
+
+function sliverArea(vertex, arc) {
+  const start = Math.atan2(arc.from[1] - arc.center[1], arc.from[0] - arc.center[0]);
+  const points = [vertex];
+  const steps = 16;
+  for (let step = 0; step <= steps; step += 1) {
+    const angle = start + arc.delta * (step / steps);
+    points.push([
+      arc.center[0] + arc.radius * Math.cos(angle),
+      arc.center[1] + arc.radius * Math.sin(angle),
+    ]);
+  }
+  let sum = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const following = points[(index + 1) % points.length];
+    sum += current[0] * following[1] - following[0] * current[1];
+  }
+  return Math.abs(sum) / 2;
+}
+
+/**
+ * Tangent arcs at the tip leading-edge and tip trailing-edge corners of one fin planform.
+ * The design leading-edge station and the design chord stay put; only the sharp tip corners
+ * are replaced by one circular arc of `radius`. If that arc cannot sit on both edges, this
+ * throws the corner angle and the two edge lengths. It does not substitute a smaller radius.
+ */
+export function planformTipCornerFillets(planform, radius = HEX_TIP_CORNER_RADIUS_M) {
+  const [buriedLe, rootTe, tipTe, tipLe] = planform.points;
+  const fit = (prev, vertex, next, name) => {
+    const corner = clockwiseFillet(prev, vertex, next, radius);
+    let arc = corner ? arcSegment(corner.center, corner.footIn, corner.footOut, radius) : null;
+    if (corner && !arc) arc = arcSegment(corner.center, corner.footOut, corner.footIn, radius);
+    if (!corner || !arc) {
+      const measured = cornerDirections(prev, vertex, next);
+      throw new Error(
+        `${name} 处 ${radius} m 平面圆弧放不下。拐角夹角 ${measured.degrees.toFixed(2)}°，相邻边长 ${measured.lengthIn.toFixed(6)} m 与 ${measured.lengthOut.toFixed(6)} m。`,
+      );
+    }
+    const intoTip = Math.abs(arc.from[1] - planform.tip_radius) <= Math.abs(arc.to[1] - planform.tip_radius);
+    const removalArc = {
+      type: "arc",
+      center: arc.center,
+      from: arc.from,
+      to: arc.to,
+      sense: arc.sense,
+      radius,
+    };
+    return {
+      name,
+      requested: radius,
+      radius,
+      clamped: false,
+      center: corner.center,
+      vertex,
+      tipFoot: intoTip ? arc.from : arc.to,
+      edgeFoot: intoTip ? arc.to : arc.from,
+      from: arc.from,
+      to: arc.to,
+      ...arc,
+      radius,
+      sliverAreaM2: sliverArea(vertex, arc),
+      removal: [lineSegment(vertex, arc.from), removalArc, lineSegment(arc.to, vertex)],
+    };
+  };
+  // Stored planform order is counter-clockwise. Walk the tip corners clockwise so the
+  // inset centre falls inside the fin.
+  const leading = fit(buriedLe, tipLe, tipTe, "tip-leading");
+  const trailing = fit(tipLe, tipTe, rootTe, "tip-trailing");
+  const straightTipM = distance2D(leading.tipFoot, trailing.tipFoot);
+  if (!(straightTipM > 0)) {
+    throw new Error("舵尖两条平面圆弧之间没有留下平直梢弦。");
+  }
+  return {
+    radius,
+    tolerance: HEX_FILLET_RADIUS_TOLERANCE,
+    cutClearanceM: radius * HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR,
+    unit: "m",
+    leading,
+    trailing,
+    straightTipM,
+    leAtSurface: planform.le_at_surface,
+    rootChord: planform.root_chord_at_surface,
+    tipChord: planform.te - planform.tip_le,
+    tipRadius: planform.tip_radius,
+  };
+}
+
+function chainCloses(segments) {
+  if (segments.length < 3) return false;
+  for (let index = 0; index < segments.length; index += 1) {
+    const next = segments[(index + 1) % segments.length];
+    if (distance2D(segments[index].to, next.from) > 1e-8) return false;
+  }
+  return true;
+}
+
+/** Analysis polygon. Each arc crown is inserted in sweep order so the extremes stay on the boundary. */
+function analysisLoop(segments) {
+  const points = [];
+  for (const segment of segments) {
+    points.push(segment.from);
+    if (segment.type !== "arc") continue;
+    const start = Math.atan2(segment.from[1] - segment.center[1], segment.from[0] - segment.center[0]);
+    const crownTurn = signedMinorAngle(segment.center, segment.from, segment.via);
+    const crownFraction = crownTurn / segment.delta;
+    let crownUsed = false;
+    for (let step = 1; step <= HEX_FILLET_ANALYSIS_SAMPLES; step += 1) {
+      const fraction = step / (HEX_FILLET_ANALYSIS_SAMPLES + 1);
+      if (!crownUsed && fraction >= crownFraction) {
+        points.push(segment.via);
+        crownUsed = true;
+      }
+      const angle = start + segment.delta * fraction;
+      points.push([
+        segment.center[0] + segment.radius * Math.cos(angle),
+        segment.center[1] + segment.radius * Math.sin(angle),
+      ]);
+    }
+    if (!crownUsed) points.push(segment.via);
+  }
+  return points;
+}
+
+/**
+ * One filleted hexagonal section in local metres, leading edge at x = 0.
+ * Returns null when `radius` cannot sit as a tangent arc on this chord.
+ *
+ * Leading and trailing circles keep their extreme point on the sharp station (x = 0 and x = chord)
+ * and meet the straight flanks in a tangent. Shoulder circles are the ordinary tangent fillets of
+ * the sharp corner, so they stay tangent to the constant-thickness flat and the thickness does not grow.
+ * The flank between a nose circle and a shoulder circle is their common external tangent.
+ */
+function tryFilletedHexagon({ chord, half, flatStart, flatEnd, radius, leadingRadius = radius }) {
+  if (!(radius > 0) || !(leadingRadius > 0)) return null;
+  if (!(radius < half * (1 - 1e-9)) || !(leadingRadius < half * (1 - 1e-9))) return null;
+  if (!(2 * radius < chord * (1 - 1e-9)) || !(2 * leadingRadius < chord * (1 - 1e-9))) return null;
+  const x1 = flatStart * chord;
+  const x2 = flatEnd * chord;
+  const sharp = [[0, 0], [x1, half], [x2, half], [chord, 0]];
+  const forward = clockwiseFillet(sharp[0], sharp[1], sharp[2], radius);
+  const aft = clockwiseFillet(sharp[1], sharp[2], sharp[3], radius);
+  if (!forward || !aft) return null;
+  if (Math.abs(forward.center[1] - (half - radius)) > 1e-8 || Math.abs(aft.center[1] - (half - radius)) > 1e-8) return null;
+  const forwardCenter = [forward.center[0], half - radius];
+  const aftCenter = [aft.center[0], half - radius];
+  const forwardFlat = [forwardCenter[0], half];
+  const aftFlat = [aftCenter[0], half];
+  if (!(forwardFlat[0] < aftFlat[0] - 1e-8)) return null;
+  const leadingCenter = [leadingRadius, 0];
+  const trailingCenter = [chord - radius, 0];
+  const forwardTangent = upperExternalTangent(leadingCenter, forwardCenter, leadingRadius, radius);
+  const aftTangent = upperExternalTangent(aftCenter, trailingCenter, radius, radius);
+  if (!forwardTangent || !aftTangent) return null;
+  const leadingAngle = Math.atan2(forwardTangent.first[1] - leadingCenter[1], forwardTangent.first[0] - leadingCenter[0]);
+  const forwardWedgeAngle = Math.atan2(forwardTangent.second[1] - forwardCenter[1], forwardTangent.second[0] - forwardCenter[0]);
+  const aftWedgeAngle = Math.atan2(aftTangent.first[1] - aftCenter[1], aftTangent.first[0] - aftCenter[0]);
+  const trailingAngle = Math.atan2(aftTangent.second[1] - trailingCenter[1], aftTangent.second[0] - trailingCenter[0]);
+  const rightAngle = Math.PI / 2;
+  if (!(leadingAngle > 1e-6 && leadingAngle < Math.PI - 1e-6)) return null;
+  if (!(forwardWedgeAngle > rightAngle + 1e-6 && forwardWedgeAngle < Math.PI - 1e-6)) return null;
+  if (!(aftWedgeAngle > 1e-6 && aftWedgeAngle < rightAngle - 1e-6)) return null;
+  if (!(trailingAngle > 1e-6 && trailingAngle < Math.PI - 1e-6)) return null;
+  if (!(Math.PI - leadingAngle > 1e-5 && forwardWedgeAngle - rightAngle > 1e-5)) return null;
+  if (!(rightAngle - aftWedgeAngle > 1e-5 && trailingAngle > 1e-5)) return null;
+  const mirror = ([x, y]) => [x, -y];
+  const leadingExtreme = [0, 0];
+  const trailingExtreme = [chord, 0];
+  const pushJunction = (list, center, at, toward) => list.push({ center, at, toward });
+  const junctions = [];
+  pushJunction(junctions, leadingCenter, forwardTangent.first, forwardTangent.second);
+  pushJunction(junctions, forwardCenter, forwardTangent.second, forwardTangent.first);
+  pushJunction(junctions, forwardCenter, forwardFlat, aftFlat);
+  pushJunction(junctions, aftCenter, aftFlat, forwardFlat);
+  pushJunction(junctions, aftCenter, aftTangent.first, aftTangent.second);
+  pushJunction(junctions, trailingCenter, aftTangent.second, aftTangent.first);
+  const upperJunctions = junctions.map((junction) => ({ ...junction }));
+  for (const junction of upperJunctions) {
+    pushJunction(junctions, mirror(junction.center), mirror(junction.at), mirror(junction.toward));
+  }
+  const tangent = (junction) => {
+    const radial = [junction.at[0] - junction.center[0], junction.at[1] - junction.center[1]];
+    const edge = [junction.toward[0] - junction.at[0], junction.toward[1] - junction.at[1]];
+    const scale = Math.hypot(radial[0], radial[1]) * Math.hypot(edge[0], edge[1]);
+    return scale > 0 && Math.abs(radial[0] * edge[0] + radial[1] * edge[1]) / scale < 1e-8;
+  };
+  if (!junctions.every(tangent)) return null;
+  const upperForward = arcSegment(forwardCenter, forwardTangent.second, forwardFlat, radius);
+  const upperAft = arcSegment(aftCenter, aftFlat, aftTangent.first, radius);
+  const trailing = arcSegment(trailingCenter, aftTangent.second, mirror(aftTangent.second), radius, trailingExtreme);
+  const lowerAft = arcSegment(mirror(aftCenter), mirror(aftTangent.first), mirror(aftFlat), radius);
+  const lowerForward = arcSegment(mirror(forwardCenter), mirror(forwardFlat), mirror(forwardTangent.second), radius);
+  const leading = arcSegment(leadingCenter, mirror(forwardTangent.first), forwardTangent.first, leadingRadius, leadingExtreme);
+  const segments = [
+    lineSegment(forwardTangent.first, forwardTangent.second),
+    upperForward && { ...upperForward, name: "upper-forward" },
+    lineSegment(forwardFlat, aftFlat),
+    upperAft && { ...upperAft, name: "upper-aft" },
+    lineSegment(aftTangent.first, aftTangent.second),
+    trailing && { ...trailing, name: "trailing" },
+    lineSegment(mirror(aftTangent.second), mirror(aftTangent.first)),
+    lowerAft && { ...lowerAft, name: "lower-aft" },
+    lineSegment(mirror(aftFlat), mirror(forwardFlat)),
+    lowerForward && { ...lowerForward, name: "lower-forward" },
+    lineSegment(mirror(forwardTangent.second), mirror(forwardTangent.first)),
+    leading && { ...leading, name: "leading" },
+  ];
+  if (segments.some((segment) => !segment) || segments.length !== HEX_FILLET_SEGMENT_COUNT || !chainCloses(segments)) return null;
+  const loop = analysisLoop(segments);
+  if (loop.some((point) => point[1] < -half - 1e-9 || point[1] > half + 1e-9)) return null;
+  return {
+    segments,
+    loop,
+    leading: { ...leading, extreme: leadingExtreme },
+    trailing: { ...trailing, extreme: trailingExtreme },
+    shoulders: [upperForward, upperAft, lowerAft, lowerForward].map((arc, index) => ({
+      ...arc,
+      name: ["upper-forward", "upper-aft", "lower-aft", "lower-forward"][index],
+    })),
+    junctions,
+  };
+}
+
+/**
+ * Symmetric hexagonal section with circular corner fillets. Local coordinates are metres:
+ * x = 0 at the design leading edge, x = chord at the design trailing edge, y = thickness.
+ * The profile is six circular arcs and six straight edges. `loop` is an analysis sample of that
+ * profile, including each arc crown; the sketch consumes `segments` instead.
+ *
+ * `fillet_radius` is the shoulder and trailing-edge radius and defaults to `HEX_FILLET_RADIUS_M`.
+ * `leading_radius` is the leading-edge radius and defaults to `HEX_FILLET_LE_RADIUS_M`.
+ * When a circle cannot meet the flat and the wedges in a tangent, that radius is reduced to the
+ * largest value that still can. The leading-edge extreme stays at x = 0.
+ */
+function sketchableFillet(built) {
+  if (!built) return false;
+  try {
+    hexagonSketchScale(built.segments);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function largestFit(requested, buildAt) {
+  const direct = buildAt(requested);
+  if (sketchableFillet(direct)) return { built: direct, used: requested, clamped: false };
+  let low = 0;
+  let high = requested;
+  let best = null;
+  let used = 0;
+  for (let step = 0; step < 60; step += 1) {
+    const mid = (low + high) / 2;
+    const candidate = buildAt(mid);
+    if (sketchableFillet(candidate)) {
+      best = candidate;
+      used = mid;
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+  return { built: best, used, clamped: true };
+}
+
+export function buildHexagonAirfoil({
+  thickness_percent,
+  hex_flat_start,
+  hex_flat_end,
+  chord,
+  fillet_radius = HEX_FILLET_RADIUS_M,
+  leading_radius = HEX_FILLET_LE_RADIUS_M,
+}) {
+  const thicknessRatio = thickness_percent / 100;
+  const half = thicknessRatio * chord / 2;
+  const flatStart = hex_flat_start;
+  const flatEnd = hex_flat_end;
+  if (!(thicknessRatio > 0) || !(flatStart > 0 && flatEnd > flatStart && flatEnd < 1) || !(chord > 0)) {
+    throw new Error("六边形翼面需要正厚度、正弦长，以及 0 < hex_flat_start < hex_flat_end < 1。");
+  }
+  if (!(fillet_radius > 0) || !Number.isFinite(fillet_radius) || !(leading_radius > 0) || !Number.isFinite(leading_radius)) {
+    throw new Error("六边形圆角半径必须是正的有限长度（米）。");
+  }
+  const shoulderFit = largestFit(fillet_radius, (radius) => tryFilletedHexagon({
+    chord, half, flatStart, flatEnd, radius, leadingRadius: radius,
+  }));
+  if (!shoulderFit.built) {
+    throw new Error(`六边形圆角无法在弦长 ${chord} m、半厚度 ${half} m 上形成有效相切圆弧。`);
+  }
+  const leadingFit = largestFit(leading_radius, (leadingRadius) => tryFilletedHexagon({
+    chord, half, flatStart, flatEnd, radius: shoulderFit.used, leadingRadius,
+  }));
+  const built = leadingFit.built ?? shoulderFit.built;
+  const leadingUsed = leadingFit.built ? leadingFit.used : shoulderFit.used;
+  const leadingClamped = !leadingFit.built || leadingFit.clamped;
+  const clamped = shoulderFit.clamped || leadingClamped;
+  return {
+    thicknessRatio,
+    chord,
+    halfThickness: half,
+    flatStart,
+    flatEnd,
+    segments: built.segments,
+    loop: built.loop,
+    properties: polygonAreaCentroid(built.loop),
+    fillet: {
+      requestedRadius: fillet_radius,
+      radius: shoulderFit.used,
+      leadingRequestedRadius: leading_radius,
+      leadingRadius: leadingUsed,
+      leadingClamped,
+      clamped,
+      clampNote: clamped ? "当地弦长、厚度或等厚段放不下请求的相切圆角，半径已收到仍能相切的最大值。" : "",
+      tolerance: HEX_FILLET_RADIUS_TOLERANCE,
+      unit: "m",
+      leading: { ...built.leading, radius: leadingUsed },
+      trailing: { ...built.trailing, radius: shoulderFit.used },
+      shoulders: built.shoulders.map((shoulder) => ({ ...shoulder, radius: shoulderFit.used })),
+      junctions: built.junctions,
+    },
+  };
+}
+
+/**
+ * NACA polyline, or the shared hexagonal fillet description. The hexagonal loop itself depends on
+ * the local chord, so it is built per station in `finAirfoilSections`. Missing section keeps NACA.
+ */
 export function buildFinAirfoil(params, samples = AIRFOIL_SAMPLES_PER_SIDE) {
   const kind = params.fin_section ?? "naca";
-  if (kind === "hexagon") return { kind, ...buildHexagonAirfoil(params) };
+  if (kind === "hexagon") {
+    const thicknessRatio = params.thickness_percent / 100;
+    const flatStart = params.hex_flat_start;
+    const flatEnd = params.hex_flat_end;
+    if (!(thicknessRatio > 0) || !(flatStart > 0 && flatEnd > flatStart && flatEnd < 1)) {
+      throw new Error("六边形翼面需要正厚度，以及 0 < hex_flat_start < hex_flat_end < 1。");
+    }
+    return {
+      kind,
+      thickness_percent: params.thickness_percent,
+      thicknessRatio,
+      flatStart,
+      flatEnd,
+      filletRadiusRequested: HEX_FILLET_RADIUS_M,
+      loopPoints: HEX_FILLET_SEGMENT_COUNT,
+    };
+  }
   if (kind === "naca") return { kind, ...buildNacaAirfoil(params, samples) };
   throw new Error(`Unsupported fin_section '${kind}'.`);
 }
@@ -492,10 +1050,19 @@ export function finPlanform({ le_x, root_chord, tip_chord, span, root_radius, bo
  * Airfoil polyline of one fin instance. `angle` is measured from +Y towards +Z.
  * Section offset is the signed thickness along the in-plane normal; the planform itself stays in the radial plane.
  */
+function rotateAboutAxis(y, z, angle) {
+  return [y * Math.cos(angle) - z * Math.sin(angle), y * Math.sin(angle) + z * Math.cos(angle)];
+}
+
 function finInstancePoints(fin, angleDeg) {
   const angle = (angleDeg * Math.PI) / 180;
-  const radial = [Math.cos(angle), Math.sin(angle)];
-  const normal = [-Math.sin(angle), Math.cos(angle)];
+  const frame = fin.sectionFrame;
+  const radial = frame
+    ? rotateAboutAxis(frame.normal[1], frame.normal[2], angle)
+    : [Math.cos(angle), Math.sin(angle)];
+  const normal = frame
+    ? rotateAboutAxis(frame.thickness[1], frame.thickness[2], angle)
+    : [-Math.sin(angle), Math.cos(angle)];
   const points = [];
   for (const section of fin.sections) {
     for (const [x, offset] of section.points) {
@@ -510,10 +1077,81 @@ function finInstancePoints(fin, angleDeg) {
 }
 
 /**
- * Root and tip sections of one planform. The same nondimensional section is scaled by the local chord,
- * so the leading and trailing edges stay on the trapezoid while the thickness follows that section.
+ * Volume and centroid of a ruled loft between two parallel section polygons.
+ * Vertices correspond by index and move linearly from `section0` to `section1`.
+ * The centroid is [axial, radius, 0]; a nonzero thickness centroid means the section is not symmetric.
+ */
+export function ruledLoftSolid(section0, section1) {
+  const start = section0.points;
+  const end = section1.points;
+  if (start.length !== end.length || start.length < 3) {
+    throw new Error("放样剖面顶点数量不一致。");
+  }
+  let cross0 = 0;
+  let cross1 = 0;
+  let cross2 = 0;
+  let axial0 = 0;
+  let axial1 = 0;
+  let axial2 = 0;
+  let axial3 = 0;
+  let thick0 = 0;
+  let thick1 = 0;
+  let thick2 = 0;
+  let thick3 = 0;
+  for (let index = 0; index < start.length; index += 1) {
+    const next = (index + 1) % start.length;
+    const x0 = start[index][0];
+    const y0 = start[index][1];
+    const u0 = start[next][0];
+    const v0 = start[next][1];
+    const x1 = end[index][0] - x0;
+    const y1 = end[index][1] - y0;
+    const u1 = end[next][0] - u0;
+    const v1 = end[next][1] - v0;
+    const k0 = x0 * v0 - u0 * y0;
+    const k1 = x0 * v1 + x1 * v0 - u0 * y1 - u1 * y0;
+    const k2 = x1 * v1 - u1 * y1;
+    cross0 += k0;
+    cross1 += k1;
+    cross2 += k2;
+    const px0 = x0 + u0;
+    const px1 = x1 + u1;
+    const py0 = y0 + v0;
+    const py1 = y1 + v1;
+    axial0 += px0 * k0;
+    axial1 += px0 * k1 + px1 * k0;
+    axial2 += px0 * k2 + px1 * k1;
+    axial3 += px1 * k2;
+    thick0 += py0 * k0;
+    thick1 += py0 * k1 + py1 * k0;
+    thick2 += py0 * k2 + py1 * k1;
+    thick3 += py1 * k2;
+  }
+  const integratedCross = cross0 + cross1 / 2 + cross2 / 3;
+  if (!(Math.abs(integratedCross) > 0)) throw new Error("放样剖面面积为 0。");
+  const integratedAxial = axial0 + axial1 / 2 + axial2 / 3 + axial3 / 4;
+  const integratedThick = thick0 + thick1 / 2 + thick2 / 3 + thick3 / 4;
+  const span = section1.radius - section0.radius;
+  const radial0 = section0.radius * cross0;
+  const radial1 = section0.radius * cross1 + span * cross0;
+  const radial2 = section0.radius * cross2 + span * cross1;
+  const radial3 = span * cross2;
+  const integratedRadial = radial0 + radial1 / 2 + radial2 / 3 + radial3 / 4;
+  return {
+    volume: Math.abs(integratedCross / 2) * Math.abs(span),
+    centroid: [integratedAxial / (3 * integratedCross), integratedRadial / integratedCross, 0],
+    thicknessCentroid: integratedThick / (3 * integratedCross),
+  };
+}
+
+/**
+ * Root and tip sections of one planform.
+ * NACA uses one nondimensional section scaled by the local chord.
+ * The hexagon fillet is an absolute length, so each station builds its own tangent arcs;
+ * the leading and trailing extremes still sit on that station's trapezoid edge.
  */
 export function finAirfoilSections(fin, airfoil) {
+  if (airfoil.kind === "hexagon") return hexagonAirfoilSections(fin, airfoil);
   const sectionAt = (radius) => {
     const span = fin.tip_radius - fin.root_radius;
     const fraction = (radius - fin.root_radius) / span;
@@ -537,6 +1175,55 @@ export function finAirfoilSections(fin, airfoil) {
     areaRatio: Math.abs(airfoil.properties.area),
     xiBar: airfoil.properties.cx,
   });
+  return { sections, centroid: solid.centroid, volume: solid.volume };
+}
+
+function hexagonAirfoilSections(fin, airfoil) {
+  const sectionAt = (radius) => {
+    const span = fin.tip_radius - fin.root_radius;
+    const fraction = (radius - fin.root_radius) / span;
+    const le = fin.buried_le + (fin.tip_le - fin.buried_le) * fraction;
+    const chord = fin.te - le;
+    const profile = buildHexagonAirfoil({
+      thickness_percent: airfoil.thickness_percent,
+      hex_flat_start: airfoil.flatStart,
+      hex_flat_end: airfoil.flatEnd,
+      chord,
+      fillet_radius: airfoil.filletRadiusRequested,
+    });
+    const shift = (point) => [point[0] + le, point[1]];
+    return {
+      radius,
+      le,
+      chord,
+      points: profile.loop.map(shift),
+      segments: profile.segments.map((segment) => ({
+        ...segment,
+        from: shift(segment.from),
+        to: shift(segment.to),
+        ...(segment.center ? { center: shift(segment.center) } : {}),
+        ...(segment.via ? { via: shift(segment.via) } : {}),
+      })),
+      filletRadiusM: profile.fillet.radius,
+      filletRequestedM: profile.fillet.requestedRadius,
+      leadingFilletRadiusM: profile.fillet.leadingRadius,
+      leadingFilletRequestedM: profile.fillet.leadingRequestedRadius,
+      leadingFilletClamped: profile.fillet.leadingClamped,
+      filletClamped: profile.fillet.clamped,
+      filletClampNote: profile.fillet.clampNote,
+      sketchScale: hexagonSketchScale(profile.segments),
+      ...(fin.sectionFrame ? { frame: fin.sectionFrame } : {}),
+    };
+  };
+  const sections = [sectionAt(fin.root_radius), sectionAt(fin.tip_radius)];
+  if (sections.some((section) => section.segments.length !== HEX_FILLET_SEGMENT_COUNT)
+    || sections[0].segments.length !== sections[1].segments.length) {
+    throw new Error("六边形根梢剖面曲线数不一致，不能放样。");
+  }
+  const solid = ruledLoftSolid(sections[0], sections[1]);
+  if (Math.abs(solid.thicknessCentroid) > 1e-8) {
+    throw new Error("六边形放样厚度方向质心不为 0，剖面上下不对称。");
+  }
   return { sections, centroid: solid.centroid, volume: solid.volume };
 }
 
@@ -773,9 +1460,27 @@ export function deriveGeometry(params) {
     expectedVolume: expectedSolidVolume(body.segments),
     bodyCenterOfMass: solidOfRevolutionCenterOfMass(body.segments),
     fins: [
-      { name: "front", ...front },
-      { name: "rear", ...rear },
+      { name: "front", ...front, ...(airfoil.kind === "hexagon" ? { tipCornerFillet: planformTipCornerFillets(front) } : {}) },
+      { name: "rear", ...rear, ...(airfoil.kind === "hexagon" ? { tipCornerFillet: planformTipCornerFillets(rear) } : {}) },
     ],
+    ...(airfoil.kind === "hexagon" ? {
+      rootJunctionFillet: {
+        radius: HEX_ROOT_JUNCTION_RADIUS_M,
+        forwardMinRadius: HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M,
+        probeRadii: HEX_ROOT_JUNCTION_PROBE_RADII_M,
+        minEdges: params.cruciform_count * 2,
+        bodyRadius: R,
+        seamToleranceM: HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M,
+        tolerance: HEX_FILLET_RADIUS_TOLERANCE,
+        unit: "m",
+        // Each station is rounded on its own. The windows sit on the visible root chord and do not overlap.
+        // Only the canted forward station may step down through probeRadii. The aft station stays at radius.
+        stations: [
+          { name: "front", allowReducedRadius: true, xMin: front.le_at_surface - 0.02, xMax: front.te + 0.02, le: front.le_at_surface, te: front.te },
+          { name: "rear", allowReducedRadius: false, xMin: rear.le_at_surface - 0.02, xMax: rear.te + 0.02, le: rear.le_at_surface, te: rear.te },
+        ],
+      },
+    } : {}),
     airfoil: {
       kind: airfoil.kind,
       thickness_percent: params.thickness_percent,
@@ -785,23 +1490,47 @@ export function deriveGeometry(params) {
       hex_flat_end: params.hex_flat_end,
       thicknessRatio: airfoil.thicknessRatio,
       samplesPerSide: airfoil.kind === "naca" ? AIRFOIL_SAMPLES_PER_SIDE : null,
-      edges: airfoil.loop.length,
+      edges: airfoil.kind === "hexagon" ? airfoil.loopPoints : airfoil.loop.length,
+      ...(airfoil.kind === "hexagon" ? {
+        hex_fillet_radius_m: HEX_FILLET_RADIUS_M,
+        hex_fillet_le_radius_m: HEX_FILLET_LE_RADIUS_M,
+        hex_fillet_tolerance: HEX_FILLET_RADIUS_TOLERANCE,
+        hex_tip_corner_radius_m: HEX_TIP_CORNER_RADIUS_M,
+        hex_root_junction_radius_m: HEX_ROOT_JUNCTION_RADIUS_M,
+      } : {}),
     },
     cruciform_count: params.cruciform_count,
     fin_phase_deg: finPhaseDegrees(fin_phase),
     tip_to_tip: D + 2 * Math.max(params.B_W, params.B_F),
-    // Ruled loft of the closed polyline: one side face per edge, plus the tip cap. The root cap
-    // lies inside the body and is absorbed by Combine.Merge. Both stages and every pattern copy
-    // contribute the same count.
-    expectedFinFaceCount: (airfoil.loop.length + 1) * params.cruciform_count * 2,
+    // One side face per profile curve, plus the tip cap. The root cap lies inside the body and is
+    // absorbed by Combine.Merge. A hexagonal profile has one face per arc or straight edge.
+    expectedFinFaceCount: ((airfoil.kind === "hexagon" ? airfoil.loopPoints : airfoil.loop.length) + 1) * params.cruciform_count * 2,
     model_offset: offset,
     nose_tip_x: offset,
     tip_offset: body.tip.offset,
     nose_junction_x: cylinder ? cylinder.from[0] : params.L_N + offset,
   };
+  if (airfoil.kind === "hexagon") {
+    const bevel = hexagonBevelAngle(params.thickness_percent, params.hex_flat_start);
+    const frontFin = result.fins.find((fin) => fin.name === "front");
+    // The root section lies in a plane of constant radius, parallel to the fuselage tangent, so the
+    // included angle between that root face and the body is 0. Tilt the forward fin by the hexagon
+    // bevel angle. The aft fin already meets the body on faces at about 82–87 degrees and stays radial.
+    frontFin.sectionFrame = {
+      angleRad: bevel,
+      normal: [0, Math.cos(bevel), Math.sin(bevel)],
+      thickness: [0, -Math.sin(bevel), Math.cos(bevel)],
+    };
+    frontFin.bodyIntersectionAngleRad = bevel;
+    if (frontFin.tipCornerFillet) {
+      frontFin.tipCornerFillet.spanAxis = frontFin.sectionFrame.normal;
+      frontFin.tipCornerFillet.thicknessAxis = frontFin.sectionFrame.thickness;
+    }
+  }
   for (const fin of result.fins) {
-    // The seed fin is a ruled loft of similar sections, so its centre of mass is the solid
-    // centroid. The axial component is what the acceptance gate reads back.
+    // The seed fin is a ruled loft, so its centre of mass is the solid centroid. NACA sections
+    // are similar; a hexagonal fillet keeps a fixed absolute radius, so its stations are integrated
+    // directly. The axial component is what the acceptance gate reads back.
     const solid = finAirfoilSections(fin, airfoil);
     fin.sections = solid.sections;
     fin.centroid = solid.centroid;
@@ -814,6 +1543,15 @@ export function deriveGeometry(params) {
     fin.leFromNoseTip = fin.leAtSurface - result.nose_tip_x;
     fin.leFromNoseJunction = fin.leAtSurface - result.nose_junction_x;
   }
+  let expectedFinFaceCount = 0;
+  for (const fin of result.fins) {
+    const edges = fin.sections[0].segments?.length ?? fin.sections[0].points.length;
+    const sameTopology = fin.sections.every((section) => (section.segments?.length ?? section.points.length) === edges);
+    if (!sameTopology) throw new Error("根梢剖面曲线数不一致，不能放样。");
+    expectedFinFaceCount += (edges + 1) * result.cruciform_count;
+  }
+  result.airfoil.edges = result.fins[0].sections[0].segments?.length ?? result.fins[0].sections[0].points.length;
+  result.expectedFinFaceCount = expectedFinFaceCount;
   result.expectedExtents = expectedExtents(result);
   return result;
 }
