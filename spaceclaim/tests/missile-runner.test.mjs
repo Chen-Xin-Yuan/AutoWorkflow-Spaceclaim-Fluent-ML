@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -474,36 +474,36 @@ test("invalid parameters short-circuit before any file is written", async () => 
   await assert.rejects(() => readFile(path.join(out.runDir, "params.json"), "utf8"));
 });
 
-test("a sub-millimetre tip clamp is not a 3 mm planform arc", () => {
+test("the fin tip carries no planform arc and the junction bands still gate", () => {
   const request = buildModelRequest({ explicit: { fin_section: "hexagon" } });
-  const collapsed = passingResult(request);
-  collapsed.diagnostics.edgeFillets = [
-    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.000206, requestedM: 0.003, clamped: true },
-    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.000503, requestedM: 0.003, clamped: true },
-    ...junctionReports(request),
-  ];
-  const failed = grade(request, collapsed);
-  assert.equal(failed.checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, false);
-  assert.equal(failed.checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
-
-  const sharp = passingResult(request);
-  sharp.diagnostics.edgeFillets = [
-    { label: "tip-planform", success: true, radiusM: 0.003, clamped: false },
-    { label: "tip-planform", success: true, radiusM: 0.003, clamped: false },
-    ...junctionReports(request),
-  ];
-  assert.equal(grade(request, sharp).checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, false);
-
-  const arcs = passingResult(request);
-  arcs.diagnostics.edgeFillets = [
-    { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.003, requestedM: 0.003, clamped: false },
+  // A tip-planform record is no longer produced, so the gate no longer grades one at all.
+  const stale = passingResult(request);
+  stale.diagnostics.edgeFillets = [
     { label: "tip-planform", kind: "planform-arc", success: true, radiusM: 0.003, requestedM: 0.003, clamped: false },
     ...junctionReports(request),
   ];
-  const passed = grade(request, arcs);
-  assert.equal(passed.checks.find((check) => check.name === "舵尖前后缘圆角为 3 mm").ok, true);
-  assert.equal(passed.checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, true);
-  assert.equal(passed.checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
+  const graded = grade(request, stale);
+  assert.equal(graded.checks.some((check) => check.name.includes("舵尖前后缘圆角")), false);
+  assert.equal(graded.checks.some((check) => check.name.includes("planform")), false);
+
+  const passed = passingResult(request);
+  passed.diagnostics.edgeFillets = junctionReports(request);
+  passed.diagnostics.sectionFillets = request.geometry.fins.flatMap((fin) => fin.sections.map((section) => ({
+    name: fin.name,
+    le: section.le,
+    radiusM: section.leadingFilletRadiusM,
+    minXM: section.le,
+  })));
+  passed.diagnostics.sectionAngles = [
+    { name: "front", angleRad: request.geometry.fins[0].bodyIntersectionAngleRad },
+    { name: "rear", angleRad: 0 },
+  ];
+  passed.diagnostics.repair = passingRepair(request);
+  passed.diagnostics.finalGeometry = passingAudit(request);
+  const gradedPass = grade(request, passed);
+  assert.equal(gradedPass.ok, true, JSON.stringify(gradedPass.checks.filter((check) => !check.ok)));
+  assert.equal(gradedPass.checks.find((check) => check.name === "舵面 front 与弹体交接圆角在 1.5–3 mm 之间").ok, true);
+  assert.equal(gradedPass.checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, true);
 
   const aftOnly = passingResult(request);
   aftOnly.diagnostics.edgeFillets = junctionReports(request).filter((round) => round.station === "rear");
@@ -543,6 +543,45 @@ test("a sub-millimetre tip clamp is not a 3 mm planform arc", () => {
   assert.equal(grade(request, aftClamped).checks.find((check) => check.name === "舵面 rear 与弹体交接圆角为 3 mm").ok, false);
 });
 
+/** One repair report matching what `repair_body` writes for a successful hexagon run. */
+function passingRepair(request) {
+  const limits = request.geometry.repair;
+  const guards = limits.preserveRadiiM;
+  const rounds = guards.map(() => 8);
+  // With `hex_flat_end` at its new default the forward seam holds the full 3 mm round and no sliver
+  // forms, so a passing run reports zero sub-floor non-round faces.
+  return {
+    before: { faces: 205, edges: 484, volumeM3: 0.09, surfaceM2: 2.7446, smallFaces: 0, roundFaces: rounds },
+    after: { faces: 205, edges: 484, volumeM3: 0.09, surfaceM2: 2.7446, smallFaces: 0, roundFaces: rounds },
+    inexact: { problemAreasBefore: 20, problemAreasAfter: 0, success: true },
+    smallFaces: { facesBefore: 0, facesAfter: 0, fixed: 0 },
+    guardRadiiM: guards,
+    roundsPreserved: true,
+    smallFacesAttempted: true,
+    delta: { faces: 0, edges: 0, volumeRel: 1.8e-8, surfaceRel: -1.5e-6 },
+    limits: { volume: limits.maxVolumeChange, surface: limits.maxSurfaceChange },
+    volumeWithinLimit: true,
+    surfaceWithinLimit: true,
+  };
+}
+
+/** The audit record taken on the body that is saved. */
+function passingAudit(request) {
+  const guards = request.geometry.repair.preserveRadiiM;
+  const rounds = guards.map(() => 8);
+  return {
+    roundFacesBefore: rounds,
+    roundFacesAfter: rounds,
+    roundsPreserved: true,
+    smallFacesBefore: 0,
+    smallFacesAfter: 0,
+    smallFacesRetried: 0,
+    problemAreasBefore: 0,
+    problemAreasAfter: 0,
+    problemAreasFinal: 0,
+  };
+}
+
 function junctionReports(request) {
   return request.geometry.rootJunctionFillet.stations.map((station) => ({
     label: "root-junction",
@@ -562,13 +601,13 @@ function junctionAt(report, radiusM, clamped, count) {
   return { ...report, radiusM, clamped, measuredRadiiM: Array.from({ length: count }, () => radiusM) };
 }
 
-test("a passed run keeps only the parameter file, the script and the model", async () => {
+test("a passed run keeps the parameter file, the script, the model and its text records", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "scdm-runner-keep-"));
   for (const name of ["params.json", "model.py", "missile.scdoc", "result.json", "diagnostic.txt", "run.json", "request.json", "preview.png", "error.txt"]) {
     await writeFile(path.join(root, name), "x");
   }
   await retainModelOutputs(root, "missile.scdoc");
-  assert.deepEqual((await readdir(root)).sort(), ["missile.scdoc", "model.py", "params.json"]);
+  assert.deepEqual((await readdir(root)).sort(), ["diagnostic.txt", "missile.scdoc", "model.py", "params.json", "result.json", "run.json"]);
 });
 
 test("hexagon leading-edge radius and the forward-fin angle are graded from the model", () => {
@@ -589,7 +628,7 @@ test("hexagon leading-edge radius and the forward-fin angle are graded from the 
   assert.ok(leading.length >= 4);
   assert.equal(leading.every((check) => check.ok), true, JSON.stringify(leading));
   assert.ok(leading.some((check) => check.name.includes("0.0018")));
-  assert.equal(graded.checks.find((check) => check.name.startsWith("前舵与弹体夹角")).ok, true);
+  assert.equal(graded.checks.find((check) => check.name.startsWith("前舵保持径向")).ok, true);
   assert.equal(graded.checks.find((check) => check.name === "后舵保持径向").ok, true);
 
   const shifted = structuredClone(result);
@@ -600,8 +639,8 @@ test("hexagon leading-edge radius and the forward-fin angle are graded from the 
   assert.equal(grade(request, wrongRadius).checks.find((check) => check.name.includes("0.0018")).ok, false);
 
   const flush = structuredClone(result);
-  flush.diagnostics.sectionAngles[0].angleRad = 0;
-  assert.equal(grade(request, flush).checks.find((check) => check.name.startsWith("前舵与弹体夹角")).ok, false);
+  flush.diagnostics.sectionAngles[0].angleRad = 0.3;
+  assert.equal(grade(request, flush).checks.find((check) => check.name.startsWith("前舵保持径向")).ok, false);
 });
 
 test("the default run root stays outside the repository", () => {

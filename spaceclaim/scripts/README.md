@@ -1,4 +1,4 @@
-# 脚本与本机检查
+﻿# 脚本与本机检查
 
 本目录没有直接子目录。以下命令从仓库根目录运行；需要 Node.js 18+，真实 CHM 与 SpaceClaim 检查面向 Windows。默认运行根目录相对项目和工作区配置解析；显式传入的相对 `--out` 和 `--preset` 路径则相对调用者当前目录解析。
 
@@ -51,7 +51,7 @@ npm run missile -- --k_nose 0.006 --thickness_percent 5 --le_radius_index 6 --ma
 npm run missile -- --fin_section hexagon --hex_flat_start 0.2 --hex_flat_end 0.8 --timeout 300000 --json
 ```
 
-`fin_section=hexagon` 的肩部和后缘各画一条 0.001 m 相切圆弧，前缘是 0.0018 m，都不是弦或折线。过短的肩圆先放大绘制，再缩回真实半径。前舵绕弦向轴转过斜边半角 `atan((thickness_percent/100)/(2*hex_flat_start))`，默认 6.390°；后舵不转。舵尖前缘和后缘再在平面轮廓上各加一条 3 mm 圆弧；后舵与弹体的交接是 3 mm 等半径圆角。前舵先试 3 mm；若转过的接缝拒绝该半径，则在不小于 1.5 mm（`HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M`）的范围内取最大可执行半径，默认结果是 1.5 mm，并写入 `params.json`。每个站位把整圈接缝一次倒圆，包含肩部圆弧那几段短边，不做逐边回退；只留长边会在切向接点留下自由端，内核连 0.2 mm 以上都拒绝。它不增加命令行参数；弦长和弹尖到前缘的距离仍由原来的尺寸参数决定。放不下 3 mm 平面圆弧时运行会失败并报出夹角，而不是改成零点几毫米的边倒圆。
+`fin_section=hexagon` 的肩部和后缘各画一条 0.001 m 相切圆弧，前缘是 0.0018 m，都不是弦或折线。过短的肩圆先放大绘制，再缩回真实半径。前舵与后舵都保持径向、两者共面，不斜置。舵梢部保持设计梯形的尖角，不做平面圆弧也不切角。后舵与弹体的交接是 3 mm 等半径圆角。前舵先试 3 mm；默认 `hex_flat_end = 0.823` 与 `thickness_percent = 4.48` 时接缝直接接受完整 3 mm（48 条边、8 个实测圆柱面），若拒绝则在不小于 1.5 mm（`HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M`）的范围内取最大可执行半径，并写入 `params.json`。`hex_flat_end` 不要单独改回 0.8：那样前舵圆角会被压到 1.5 mm，舵根随后出现 24 个无法删除的碎面。每个站位把整圈接缝一次倒圆，包含肩部圆弧那几段短边，不做逐边回退；只留长边会在切向接点留下自由端，内核连 0.2 mm 以上都拒绝。它不增加命令行参数；弦长和弹尖到前缘的距离仍由原来的尺寸参数决定。合并后模板会自动修复舵根：非精确边用 `FixInexactEdges` 全部清除（该默认下剩 20 处），小面用 `FixSmallFaces.FixSpecific` 逐个试修（已无候选），体积与表面积变化超过 0.5% 即判失败，且低于 1 mm² 的非圆角面必须为零。
 
 | 选项 | 含义 |
 | --- | --- |
@@ -67,4 +67,4 @@ npm run missile -- --fin_section hexagon --hex_flat_start 0.2 --hex_flat_end 0.8
 
 几何尺寸以米为单位，参数的完整默认值与允许值由 schema 和 `--list` 给出。目标脚本 API 版本从所选安装解析。CLI 没有批量扫参命令。
 
-默认每次运行写入工作区 `data_lib/runs/high/<run-id>/spaceclaim/`。执行期间会有 `request.json`、`run.json`、`result.json`、诊断和可选预览，验收在内存中完成并打印到控制台。成功目录只留 `params.json`、`model.py` 和模型文件。失败时尝试将整份运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动。仅生成脚本的结果为 `script-generated`，目录仍留 `run.json` 且状态为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。
+默认每次运行写入工作区 `data_lib/runs/high/<run-id>/spaceclaim/`。执行期间会有 `request.json`、`run.json`、`result.json`、诊断和可选预览，验收在内存中完成并打印到控制台。成功目录留下 `params.json`、`model.py`、模型文件，以及 `run.json`、`result.json`（脚本报错时还有 `diagnostic.txt`），用于事后追溯本次建模。失败时尝试将整份运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动。仅生成脚本的结果为 `script-generated`，目录仍留 `run.json` 且状态为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。

@@ -15,8 +15,8 @@ import { readFile } from "node:fs/promises";
 // 输入：--preset JSON（相对路径基于调用者当前目录）；显式 CLI 参数覆盖预设。
 // 输出：--out/--name 覆盖下列默认值；空 outputDir 保留 SCDM_MISSILE_OUTPUT /
 // workspace.json 的默认目录解析，在运行时创建唯一 run 目录；失败保留到 feedback。
-// 成功执行后的目录只留 params.json、model.py 和模型文件。验收结果打印在控制台。
-// 失败时运行目录移到 feedback。仅生成脚本时仍写运行清单。
+// 成功执行后的目录留 params.json、model.py、模型文件和 run.json/result.json/diagnostic.txt。
+// 验收结果打印在控制台。失败时运行目录移到 feedback。仅生成脚本时仍写运行清单。
 // 几何参数默认值及允许范围只在 ../lib/missile-schema.mjs 定义，--list 可查看。
 const DEFAULT_OPTIONS = {
   preset: "",

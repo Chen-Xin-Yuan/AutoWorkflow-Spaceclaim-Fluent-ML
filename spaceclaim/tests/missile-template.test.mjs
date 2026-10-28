@@ -92,8 +92,10 @@ test("the script reads its parameters and reports both success and failure", () 
   assert.match(script, /Profile curve was not created/);
   assert.match(script, /Scale\.Execute\(Selection\.Create\(profile\), Point\.Create\(0, 0, 0\), 1\.0 \/ scale\)/);
   assert.match(script, /ConstantRound\.Execute/);
-  assert.match(script, /ExtrudeType\.Cut/);
-  assert.match(script, /planform-arc/);
+  // The fin tip keeps its sharp planform corners: no planform arc and no corner cut remain.
+  assert.equal(script.includes("planform-arc"), false);
+  assert.equal(script.includes("cut_planform_tip_corners"), false);
+  assert.equal(script.includes("SketchPlanformSliver"), false);
   assert.equal(script.includes("round_tip_corners"), false);
   assert.equal(script.includes("tip-cap"), false);
   assert.match(script, /No fin-to-body junction edges were found to fillet/);
@@ -111,7 +113,6 @@ test("the script reads its parameters and reports both success and failure", () 
   assert.match(script, /Fin section sketch did not produce a new profile body/);
   assert.match(script, /options\.IsRuled = True/);
   assert.match(script, /section\.get\("frame"\)/);
-  assert.match(script, /spanAxis/);
   assert.match(script, /sectionFillets/);
   assert.match(script, /sectionAngles/);
   assert.match(script, /Pattern\.CreateCircular/);

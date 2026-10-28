@@ -16,7 +16,9 @@ import { buildRequestDocument, renderModelScript } from "./missile-template.mjs"
 // 输入/输出与可调参数：explicit > preset > missile-schema.mjs 中的参数默认值。
 // 安装位置按 SCDM_EXECUTABLE > 手动 setup 配置 > AWP_ROOT<版本> > AWP_ROOT 动态发现。
 // buildMissile 输出根按 options.outputDir > SCDM_MISSILE_OUTPUT > workspace.json 的 dataRoot/runs/high；
-// 由 workspace-runtime 创建唯一运行目录。验收在内存中完成。成功目录只留 params.json、model.py 和模型文件。
+// 由 workspace-runtime 创建唯一运行目录。验收在内存中完成。成功目录留 params.json、model.py、
+// result.json、run.json 和模型文件（脚本报错时还有 diagnostic.txt）；request.json、error.txt
+// 和预览图不保留。清单在清理后写定，只列出实际留下的文件。
 // 失败时目录仍整份移到 feedback，避免成功位置留下未通过的产物。以下仅集中既有文件名和运行默认值。
 // defaultRunRoot 保留原有临时目录回退，仅供其调用方/内部未托管路径使用。
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -32,6 +34,7 @@ const RUN_ARTIFACT_NAMES = {
   diagnostic: "diagnostic.txt",
   image: "preview.png",
   assemblyImage: "preview-assembly.png",
+  axialImage: "preview-axial.png",
   // 共享协议名：必须与 workspace-runtime.mjs 的 RUN_MANIFEST_FILENAME 保持一致。
   manifest: "run.json",
   error: "error.txt",
@@ -264,18 +267,67 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
     add("弹体面划分与解析轮廓一致", (selectionReport.missile_nose_tip?.faces ?? 0) === (hasTip ? 1 : 0) && (selectionReport.missile_nose?.faces ?? 0) === 1 && (selectionReport.missile_body?.faces ?? 0) === bodyKinds, `tip=${selectionReport.missile_nose_tip?.faces ?? 0} nose=${selectionReport.missile_nose?.faces} body=${selectionReport.missile_body?.faces} expectedBody=${bodyKinds}`);
     const roundFaces = Number(result?.diagnostics?.roundCreatedFaces ?? 0);
     const expectedFinFaces = (geometry?.expectedFinFaceCount ?? 0) + (Number.isFinite(roundFaces) ? roundFaces : 0);
-    add("舵面面数与翼型放样拓扑一致", selectionReport.missile_fin?.faces === expectedFinFaces, `fin=${selectionReport.missile_fin?.faces} expected=${expectedFinFaces} rounds=${roundFaces}`);
+    // Healing merges the sliver faces into their neighbours, so the exact profile-curve count only
+    // holds when the repair left the topology alone. When it did change, the fin family must still
+    // carry at least one face per profile curve per instance: the sections survive, the slivers do not.
+    const repairChangedFaces = Number(result?.diagnostics?.repair?.delta?.faces ?? 0) !== 0;
+    const finFaceCount = selectionReport.missile_fin?.faces ?? 0;
+    if (repairChangedFaces) {
+      const profileCurves = Math.max(1, Math.round((geometry?.expectedFinFaceCount ?? 0) / ((geometry?.cruciform_count ?? 1) * 2)) - 1);
+      const floor = profileCurves * (geometry?.cruciform_count ?? 1) * 2;
+      add("舵面面数不少于每侧剖面曲线数（修复合并了小面）", finFaceCount >= floor, `fin=${finFaceCount} floor=${floor} expectedBeforeRepair=${expectedFinFaces} repairDelta=${result.diagnostics.repair.delta.faces}`);
+    } else {
+      add("舵面面数与翼型放样拓扑一致", finFaceCount === expectedFinFaces, `fin=${finFaceCount} expected=${expectedFinFaces} rounds=${roundFaces}`);
+    }
+    // Repair evidence: the inexact edges are cleared, no sliver face survives, and the healing did
+    // not eat real geometry. A missing report is a failure, not a pass, because the model then
+    // ships with the defects it was supposed to have repaired.
+    const repair = result?.diagnostics?.repair ?? null;
+    const limits = geometry?.repair ?? null;
+    if (limits) {
+      const inexact = repair?.inexact ?? {};
+      const inexactOk = limits.inexactEdges
+        ? inexact.success === true && inexact.problemAreasAfter === 0
+        : true;
+      add("非精确边已修复", inexactOk, `before=${inexact.problemAreasBefore} after=${inexact.problemAreasAfter} success=${inexact.success}${inexact.error ? ` error=${inexact.error}` : ""}`);
+      const small = repair?.smallFaces ?? {};
+      // The pass heals genuine slivers and must leave every designed round alone. What has to hold
+      // is that nothing was damaged: no round lost, no deformation. A drop in the sliver count is
+      // evidence of work done, not a requirement, because most sub-floor faces are the narrow but
+      // legitimate fillet strips the guard now protects.
+      const repaired = repair?.smallFacesAttempted === true;
+      add("小面修复已尝试", repaired, `before=${small.facesBefore} after=${small.facesAfter} attempted=${small.fixed}${small.error ? ` error=${small.error}` : ""}`);
+      // Every designed round must still be there. The forward junction is 1.5 mm, so each of its 48
+      // strips is far under the small-face floor; a repair that eats them removes the fillet.
+      const guards = Array.isArray(repair?.guardRadiiM) ? repair.guardRadiiM : [];
+      const roundsBefore = Array.isArray(repair?.before?.roundFaces) ? repair.before.roundFaces : [];
+      const roundsAfter = Array.isArray(repair?.after?.roundFaces) ? repair.after.roundFaces : [];
+      const roundDetail = guards.map((radius, index) => `${(radius * 1000).toFixed(1)}mm:${roundsBefore[index] ?? "?"}→${roundsAfter[index] ?? "?"}`).join(" ");
+      add("修复保留了全部设计圆角（根部与剖面）", repair?.roundsPreserved === true, roundDetail || "no guard radii");
+      // The audit runs on the body that is saved, so it is the honest reading: everything between
+      // the first repair and the save (named selections, component cleanup, suppression) can leave
+      // new defects, and this is what catches them.
+      const audit = result?.diagnostics?.finalGeometry ?? null;
+      add("保存前非精确边已清零（最终几何）", audit !== null && Number(audit.problemAreasFinal ?? -1) === 0, `final=${audit?.problemAreasFinal} beforeAudit=${audit?.problemAreasBefore}`);
+      add("保存前设计圆角仍完整（最终几何）", audit?.roundsPreserved === true, JSON.stringify({ before: audit?.roundFacesBefore, after: audit?.roundFacesAfter }));
+      const delta = repair?.delta ?? {};
+      // With `hex_flat_end` at its new default the forward seam holds the full 3 mm junction round
+      // and no sliver forms at all, so the honest requirement is zero non-round faces below the
+      // floor. Rounds are allowed to be that small: the 1.5 mm forward strips are 0.094 mm².
+      const belowFloor = Number(small.facesAfter ?? -1);
+      const roundsKept = guards.reduce((total, _radius, index) => total + (roundsAfter[index] ?? 0), 0);
+      add("无舵根碎面（面积低于 1 mm² 且非圆角）", belowFloor === 0, `belowFloor=${belowFloor} roundFaces=${roundsKept} threshold=${limits.smallFaceAreaM2}`);
+      add(`修复变形在允许范围内（体积 ≤ ${(limits.maxVolumeChange * 100).toFixed(2)}%）`, repair?.volumeWithinLimit === true, `volumeRel=${delta.volumeRel} limit=${limits.maxVolumeChange}`);
+      add(`修复变形在允许范围内（表面积 ≤ ${(limits.maxSurfaceChange * 100).toFixed(2)}%）`, repair?.surfaceWithinLimit === true, `surfaceRel=${delta.surfaceRel} limit=${limits.maxSurfaceChange}`);
+    }
     if (geometry?.rootJunctionFillet) {
       const rounds = result?.diagnostics?.edgeFillets ?? [];
       const band = geometry.rootJunctionFillet.tolerance ?? 0.1;
-      const requestedTip = geometry.airfoil?.hex_tip_corner_radius_m ?? geometry.rootJunctionFillet.radius;
       const requestedRoot = geometry.rootJunctionFillet.radius;
       const holdsRadius = (round, requested) => round?.success === true
         && round.clamped !== true
         && round.radiusM > 0
         && Math.abs(round.radiusM - requested) / requested <= band;
-      const planform = rounds.filter((round) => round.label === "tip-planform" && round.kind === "planform-arc");
-      add("舵尖前后缘圆角为 3 mm", planform.length >= (geometry.fins?.length ?? 0) && planform.every((round) => holdsRadius(round, requestedTip)), `rounds=${JSON.stringify(planform.map((round) => ({ radiusM: round.radiusM, clamped: round.clamped, kind: round.kind })))}`);
       const stationCount = geometry.cruciform_count ?? 1;
       const forwardFloor = geometry.rootJunctionFillet.forwardMinRadius ?? requestedRoot;
       for (const station of geometry.rootJunctionFillet.stations ?? []) {
@@ -322,13 +374,17 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
       }
       const measuredAngles = result?.diagnostics?.sectionAngles ?? [];
       const front = (geometry.fins ?? []).find((fin) => fin.name === "front");
-      if (Number.isFinite(front?.bodyIntersectionAngleRad)) {
-        const measured = measuredAngles.find((item) => item.name === "front");
-        const degrees = front.bodyIntersectionAngleRad * 180 / Math.PI;
-        add(`前舵与弹体夹角 ≈ ${degrees.toFixed(3)}°`, Number.isFinite(measured?.angleRad) && Math.abs(measured.angleRad - front.bodyIntersectionAngleRad) <= 0.002, `measuredRad=${measured?.angleRad} expectedRad=${front.bodyIntersectionAngleRad}`);
-      }
       const rear = measuredAngles.find((item) => item.name === "rear");
-      if (rear) add("后舵保持径向", Number.isFinite(rear.angleRad) && rear.angleRad <= 0.002, `measuredRad=${rear.angleRad}`);
+      const frontAngle = measuredAngles.find((item) => item.name === "front");
+      // Both fins must be radial and therefore coplanar at each station. A canted forward fin reads
+      // as a scissor against the radial aft fin in any axial view, so the cant is gone and this gate
+      // holds both stations to zero instead of to a bevel angle.
+      const radialTolerance = 0.002;
+      add("前舵保持径向（与后舵共面）", Number.isFinite(frontAngle?.angleRad) && Math.abs(frontAngle.angleRad) <= radialTolerance, `measuredRad=${frontAngle?.angleRad} expectedRad=0`);
+      if (rear) add("后舵保持径向", Number.isFinite(rear.angleRad) && Math.abs(rear.angleRad) <= radialTolerance, `measuredRad=${rear.angleRad}`);
+      if (Number.isFinite(front?.bodyIntersectionAngleRad)) {
+        add("前舵倾斜角为 0（已取消斜置）", front.bodyIntersectionAngleRad === 0, `expectedRad=${front.bodyIntersectionAngleRad}`);
+      }
     }
     // Both caps of the enclosure, one face each and the right size; the wall is the side surface.
     const capArea = Math.PI * request.regions.enclosure.radius ** 2;
@@ -397,11 +453,14 @@ async function readJson(file) {
 }
 
 /**
- * A successful model directory keeps the parameter JSON, the script and the model file.
- * Acceptance has already read the other artifacts. Failure leaves them for the feedback move.
+ * A successful model directory keeps the parameter JSON, the script, the model file and the text
+ * records that explain how the model was produced: the manifest and the script's result JSON.
+ * A script exception also leaves `diagnostic.txt`, so that name stays. Previews, the request
+ * snapshot and the runner's own `error.txt` are execution intermediates and are removed.
+ * The manifest is written after this pruning, so it only lists files that really remain.
  */
 export async function retainModelOutputs(dir, modelFileName) {
-  const keep = new Set([RUN_ARTIFACT_NAMES.params, RUN_ARTIFACT_NAMES.script, modelFileName]);
+  const keep = new Set([RUN_ARTIFACT_NAMES.params, RUN_ARTIFACT_NAMES.script, RUN_ARTIFACT_NAMES.result, RUN_ARTIFACT_NAMES.diagnostic, RUN_ARTIFACT_NAMES.manifest, modelFileName]);
   const entries = await readdir(dir, { withFileTypes: true });
   await Promise.all(entries.filter((entry) => entry.isFile() && !keep.has(entry.name)).map((entry) => unlink(path.join(dir, entry.name))));
 }
@@ -428,6 +487,7 @@ async function buildMissileCore(options = {}) {
   const diagnosticPath = path.join(runDir, RUN_ARTIFACT_NAMES.diagnostic);
   const imagePath = path.join(runDir, RUN_ARTIFACT_NAMES.image);
   const assemblyImagePath = path.join(runDir, RUN_ARTIFACT_NAMES.assemblyImage);
+  const axialImagePath = path.join(runDir, RUN_ARTIFACT_NAMES.axialImage);
   const REGION_LABELS = { enclosure: "外壳", boi: "加密区 BOI" };
 
   const request = buildModelRequest({ explicit, preset, outputDir: runDir, modelFile: modelPath });
@@ -453,7 +513,7 @@ async function buildMissileCore(options = {}) {
   // `boi_name`), so the request document, the script and the gate all agree on one source.
   const regionRequests = ["enclosure", "boi"].map((name) => request.regions[name]);
   const keepNames = [MISSILE_BODY_NAME, request.regions.boi?.bodyName ?? "BOI", request.regions.enclosure?.bodyName ?? "Enclosure"];
-  const document = buildRequestDocument(request, { model: modelPath, result: resultPath, diagnostic: diagnosticPath, image: imagePath, assemblyImage: assemblyImagePath }, regionRequests, { groups: NAMED_SELECTION_GROUPS, enclosure: ENCLOSURE_SELECTIONS, keep: keepNames, wall: ENCLOSURE_SELECTIONS.wall });
+  const document = buildRequestDocument(request, { model: modelPath, result: resultPath, diagnostic: diagnosticPath, image: imagePath, assemblyImage: assemblyImagePath, axialImage: axialImagePath }, regionRequests, { groups: NAMED_SELECTION_GROUPS, enclosure: ENCLOSURE_SELECTIONS, keep: keepNames, wall: ENCLOSURE_SELECTIONS.wall });
   document.apiVersion = apiVersion;
   await writeFile(paramsPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
   await writeFile(scriptPath, renderModelScript(apiVersion), "utf8");
@@ -522,9 +582,10 @@ export async function buildMissile(options = {}) {
     const result = await buildMissileCore({ ...options, managedRunDir: run.dir });
     const status = result.ok ? result.status === "script-generated" ? "GENERATED" : "PASSED" : "FAILED";
     const from = run.dir;
-    await finishRun(run, { status, verification: { runtimeVerified: status === "PASSED", checks: result.acceptance?.checks || [] }, error: status === "FAILED" ? { type: result.status, message: result.errors?.join("; ") || "Fresh artifact acceptance failed" } : null });
+    // Prune before the manifest is finalised so run.json lists only the files that really remain.
     if (status === "PASSED") await retainModelOutputs(run.dir, fileName);
-    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: status === "PASSED" ? "" : path.join(run.dir, RUN_ARTIFACT_NAMES.manifest) };
+    await finishRun(run, { status, verification: { runtimeVerified: status === "PASSED", checks: result.acceptance?.checks || [] }, error: status === "FAILED" ? { type: result.status, message: result.errors?.join("; ") || "Fresh artifact acceptance failed" } : null });
+    return { ...relocateResult(result, from, run.dir), runId: run.record.runId, runManifest: path.join(run.dir, RUN_ARTIFACT_NAMES.manifest) };
   } catch (error) {
     await writeFile(path.join(run.dir,RUN_ARTIFACT_NAMES.error), `${error.name}: ${error.message}\n`, "utf8");
     await finishRun(run, { status: "FAILED", error });

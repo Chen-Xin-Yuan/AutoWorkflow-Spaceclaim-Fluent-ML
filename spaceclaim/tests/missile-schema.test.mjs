@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import {
@@ -72,7 +72,15 @@ test("convention parameters expose their implemented value set", () => {
   assert.deepEqual(schemaEntry("fin_section").implemented, ["naca", "hexagon"]);
   assert.equal(schemaEntry("fin_section").default, "naca");
   assert.equal(schemaEntry("hex_flat_start").default, 0.2);
-  assert.equal(schemaEntry("hex_flat_end").default, 0.8);
+  // The flat end decides whether the forward fin-root seam can hold the full 3 mm junction round.
+  // At 0.8 the round is clamped to 1.5 mm and the un-rounded band leaves 24 sub-square-millimetre
+  // slivers on the merged body. With the thickness left at its original 4.48 the knee sits between
+  // 0.8220 (8 slivers) and 0.8221 (0 slivers), so 0.823 keeps about one step of margin and is
+  // +2.875% of the chord. Sweeps at 4.50 / 4.52 / 4.54 / 4.55 with the flat end held at 0.816 all
+  // still left 8 slivers, so raising the thickness buys nothing and is not used.
+  assert.equal(schemaEntry("hex_flat_end").default, 0.823);
+  // Unchanged: the fin cross-section is aerodynamic input, not a lever for the sliver defect.
+  assert.equal(schemaEntry("thickness_percent").default, 4.48);
   assert.deepEqual(schemaEntry("le_mode").implemented, ["trailing_aligned"]);
   assert.deepEqual(schemaEntry("fillet_location").options, ["cone_cylinder", "nose_tip", "both"]);
   assert.deepEqual(schemaEntry("fillet_location").implemented, ["cone_cylinder", "nose_tip", "both"]);

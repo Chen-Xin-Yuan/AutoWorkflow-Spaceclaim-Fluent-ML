@@ -38,6 +38,22 @@ import os
 import traceback
 from System.IO import File
 
+# Repair commands used after the merge. They live in a versioned namespace, so a missing API
+# version must not make the whole script unparsable; repair is then reported as unavailable.
+try:
+    from SpaceClaim.Api.__API_VERSION__.Scripting.Commands import FixInexactEdges, FixSmallFaces
+    from SpaceClaim.Api.__API_VERSION__.Scripting.Commands.CommandOptions import FixSmallFacesOptions
+    from SpaceClaim.Api.__API_VERSION__.Modeler import RepairAction
+    from SpaceClaim.Api.__API_VERSION__.Modeler import Face as ModelerFace
+    from System.Collections.Generic import List as DotNetList
+except Exception:
+    FixInexactEdges = None
+    FixSmallFaces = None
+    FixSmallFacesOptions = None
+    RepairAction = None
+    ModelerFace = None
+    DotNetList = None
+
 # The scene-export enumeration lives in the versioned API namespace. When the generator did not
 # learn the target version (script-only mode on a machine without SpaceClaim) this degrades to None
 # instead of emitting an unparsable import.
@@ -466,17 +482,54 @@ def name_body(body, name):
         pass
 
 
-def snapshot(path, key, selection=None):
+def snapshot(path, key, selection=None, axial=False):
     # Scene snapshots are advisory: a missing export must never fail a build whose geometry is fine.
     if not path:
         return
     # ActivateNamedView returns False when the name is not in the host's view list, which leaves the
     # camera wherever it was - an export that succeeds but frames nothing. The explicit zoom is what
     # actually fits the model (or the whole scene when no selection is given).
-    try:
-        DIAGNOSTICS[key + "NamedView"] = bool(ViewHelper.ActivateNamedView("Isometric", True, False))
-    except Exception as error:
-        DIAGNOSTICS[key + "NamedView"] = "error: " + str(error)
+    if axial:
+        # A true axial view: look along -X (the missile axis) from beyond the tail, so both fin
+        # stations project onto the same frame. This is the only view in which a canted fin shows up
+        # as a scissor against a radial one, so it is the view the alignment claim is checked in.
+        try:
+            window = Window.ActiveWindow
+            camera = window.Camera
+            position = camera.Position
+            look = camera.LookDirection
+            up = camera.UpDirection
+            # Stand behind the tail along -X, at the far end of whatever the selection spans. A fixed
+            # station here would sit inside a longer model and frame nothing.
+            standoff = 0.0
+            extent = 0.0
+            try:
+                target = merged[0] if selection is None else selection[0]
+                extrema = MeasureHelper.BodyExtrema(Selection.Create(target))
+                standoff = to_metres(extrema.X[1]) if hasattr(extrema.X, "__getitem__") else to_metres(extrema.X)
+            except Exception:
+                standoff = 0.0
+            position.X = metres(standoff)
+            position.Y = metres(0.0)
+            position.Z = metres(0.0)
+            look.X = metres(-1.0)
+            look.Y = metres(0.0)
+            look.Z = metres(0.0)
+            up.X = metres(0.0)
+            up.Y = metres(0.0)
+            up.Z = metres(1.0)
+            camera.Position = position
+            camera.LookDirection = look
+            camera.UpDirection = up
+            window.Camera = camera
+            DIAGNOSTICS[key + "AxialCamera"] = "ok"
+        except Exception as error:
+            DIAGNOSTICS[key + "AxialCamera"] = "error: " + str(error)
+    else:
+        try:
+            DIAGNOSTICS[key + "NamedView"] = bool(ViewHelper.ActivateNamedView("Isometric", True, False))
+        except Exception as error:
+            DIAGNOSTICS[key + "NamedView"] = "error: " + str(error)
     try:
         if selection is None:
             ViewHelper.ZoomToEntity()
@@ -737,16 +790,6 @@ def created_face_count(result):
         return 0
 
 
-def sheet_area_m2(body):
-    try:
-        value = MeasureHelper.MeasureArea(Selection.Create(list(body.Faces)[0]))
-        if value is None:
-            return None
-        return abs(float(value))
-    except Exception:
-        return None
-
-
 def cylinder_radius_m(face):
     try:
         value = MeasureHelper.CylinderDiameter(Selection.Create(face))
@@ -755,125 +798,6 @@ def cylinder_radius_m(face):
         return abs(float(value)) / 2.0
     except Exception:
         return None
-
-
-def sketch_planform_sliver(segments, clearance, span_axis, thickness_axis):
-    """Closed corner sliver in the span-chord plane, offset outside the fin, ready to cut through it."""
-    before = bodies()
-    origin = Point.Create(
-        metres(-float(thickness_axis[0]) * float(clearance)),
-        metres(-float(thickness_axis[1]) * float(clearance)),
-        metres(-float(thickness_axis[2]) * float(clearance)),
-    )
-    plane = Plane.Create(Frame.Create(origin, Direction.DirX, vector_direction(span_axis)))
-    ViewHelper.SetSketchPlane(plane)
-    sketch_profile(segments, 1.0)
-    profile = solidify(before)
-    if not any(profile is item for item in fresh_bodies(before)):
-        raise Exception("Fin section sketch did not produce a new profile body.")
-    if len(list(profile.Faces)) != 1:
-        raise Exception("Fin section sketch did not produce a single profile face.")
-    return profile
-
-
-def sliver_segments(corner, flip):
-    segments = []
-    for segment in corner["removal"]:
-        copy = dict(segment)
-        if flip and copy.get("type") == "arc":
-            copy["sense"] = not bool(segment["sense"])
-        segments.append(copy)
-    return segments
-
-
-def sketch_matching_sliver(corner, clearance, span_axis, thickness_axis):
-    """The sliver is the sharp tip corner outside the planform arc. The other arc sense is the complement."""
-    expected = float(corner["sliverAreaM2"])
-    chosen = None
-    for flip in (False, True):
-        sheet = sketch_planform_sliver(sliver_segments(corner, flip), clearance, span_axis, thickness_axis)
-        area = sheet_area_m2(sheet)
-        if area is not None and abs(area - expected) <= expected * 3.0:
-            if chosen is not None and any(chosen[0] is item for item in bodies()):
-                Delete.Execute(Selection.Create(chosen[0]))
-            chosen = (sheet, area)
-            break
-        if any(sheet is item for item in bodies()):
-            Delete.Execute(Selection.Create(sheet))
-    if chosen is None:
-        raise Exception(
-            corner["name"] + " planform arc did not close the corner sliver at radius "
-            + str(corner["radius"]) + " m. Not substituting a smaller edge fillet."
-        )
-    return chosen[0]
-
-
-def cut_planform_corner(fin_body, corner, clearance, span_axis, thickness_axis):
-    sheet = sketch_matching_sliver(corner, clearance, span_axis, thickness_axis)
-    options = ExtrudeFaceOptions()
-    options.ExtrudeType = ExtrudeType.Cut
-    result = ExtrudeFaces.Execute(
-        FaceSelection.Create(list(sheet.Faces)[0]),
-        vector_direction(thickness_axis),
-        metres(float(clearance) * 2.0),
-        options,
-    )
-    if not getattr(result, "Success", False):
-        raise Exception(corner["name"] + " planform arc cut failed at radius " + str(corner["radius"]) + " m.")
-    if any(sheet is item for item in bodies()):
-        Delete.Execute(Selection.Create(sheet))
-    if not any(fin_body is item for item in bodies()):
-        raise Exception(corner["name"] + " planform arc cut removed the fin body.")
-
-
-def cut_planform_tip_corners(body, fin):
-    """Replace each sharp tip planform corner with the 3 mm arc already computed for that fin.
-
-    The arc lies in the span-chord plane and is tangent to the tip chord and to the leading or
-    trailing edge. Cutting with that arc leaves one cylindrical face of the requested radius.
-    ConstantRound is not used here: the tip section is too thin to hold a 3 mm edge fillet.
-    """
-    spec = fin.get("tipCornerFillet")
-    if not spec:
-        return None
-    requested = float(spec["radius"])
-    span_axis = spec.get("spanAxis") or [0, 1, 0]
-    thickness_axis = spec.get("thicknessAxis") or [0, 0, 1]
-    before_faces = len(list(body.Faces))
-    for corner in (spec["leading"], spec["trailing"]):
-        cut_planform_corner(body, corner, spec["cutClearanceM"], span_axis, thickness_axis)
-    band = float(spec.get("tolerance", 0.1))
-    radii = []
-    for face in body.Faces:
-        radius = cylinder_radius_m(face)
-        if radius is not None and abs(radius - requested) / requested <= band:
-            radii.append(radius)
-    if len(radii) < 2:
-        for edge in body.Edges:
-            try:
-                value = MeasureHelper.ArcRadius(Selection.Create(edge))
-            except Exception:
-                continue
-            if value is None:
-                continue
-            radius = abs(float(value))
-            if abs(radius - requested) / requested <= band:
-                radii.append(radius)
-    if len(radii) < 2:
-        raise Exception(
-            fin["name"] + " planform arc measured " + str(radii) + ", not " + str(requested) + " m. Not substituting a smaller edge fillet."
-        )
-    return {
-        "label": "tip-planform",
-        "kind": "planform-arc",
-        "edges": 2,
-        "requestedM": requested,
-        "radiusM": min(radii),
-        "radiiM": radii,
-        "clamped": False,
-        "faces": len(list(body.Faces)) - before_faces,
-        "success": True,
-    }
 
 
 def edge_endpoints_m(edge):
@@ -1167,6 +1091,278 @@ def build_fin(fin):
     return created, section_fillets, section_angle
 
 
+def body_face_alive(face):
+    """A repaired face is consumed by the merge, so the next lookup raises or returns nothing."""
+    try:
+        _ = face.Shape
+        return True
+    except Exception:
+        return False
+
+
+def measure_solid_volume(body):
+    try:
+        return volume_to_cubic_metres(MeasureHelper.MeasureVolume(Selection.Create(body)))
+    except Exception:
+        return None
+
+
+def relative_change(before, after):
+    if not before:
+        return None
+    return (after - before) / before
+
+
+def measure_solid_surface(body):
+    try:
+        value = MeasureHelper.MeasureArea(Selection.Create(body))
+        if value is None:
+            return None
+        return abs(float(value)) / ((MM(1.0) * MM_PER_M) ** 2)
+    except Exception:
+        return None
+
+
+def face_area_m2(face):
+    """A face's area in m^2.
+
+    The documented conversion divides the raw area by (MM(1.0) * MM_PER_M) ** 2. It must not be
+    built by squaring the length helper: that applies a length factor to an area and shrinks the
+    result by twelve orders of magnitude, which invents degenerate faces that do not exist.
+    """
+    value = MeasureHelper.MeasureArea(Selection.Create(face))
+    if value is None:
+        return None
+    return abs(float(value)) / ((MM(1.0) * MM_PER_M) ** 2)
+
+
+def new_face_list():
+    """A .NET ICollection<Face>, kept for callers that need the modeler overload."""
+    if DotNetList is None or ModelerFace is None:
+        return None
+    return DotNetList[ModelerFace]()
+
+
+def body_small_faces(body, threshold_m2, on_axis=0.01, max_radius=None):
+    """Faces below the repair floor that are safe to heal, excluding every round surface.
+
+    The merged missile is graded by comparing each body-of-revolution face against its analytic
+    Pappus area, so those faces must keep their identity: repairing them merges the nose-tip fillet
+    or the shoulder fillet into its neighbour and the classification can no longer find it.
+
+    A round face is never a repair candidate, however small its area. The fin-root junctions are
+    built from 48 narrow strips each: the 1.5 mm forward round is only 0.094 mm^2 per face, well
+    under any area floor, and merging those strips away deletes the fillet the model is required to
+    have (measured: the forward junction round disappeared completely at 205 -> 197 faces). Any
+    face the kernel reports as cylindrical is therefore skipped, which keeps every ConstantRound
+    blend and every section fillet intact.
+
+    The fin tip is excluded for the same reason: healing a sliver out there moves the tip outward
+    (measured: lateral extent 0.6363 m -> 0.6402 m). The radius ceiling keeps the pass at the root.
+    """
+    found = []
+    for face in body.Faces:
+        try:
+            # A round surface is a fillet: keep it, whatever its area.
+            try:
+                diameter = MeasureHelper.CylinderDiameter(Selection.Create(face))
+                if diameter is not None and abs(float(diameter)) > 0:
+                    continue
+            except Exception:
+                pass
+            centroid = MeasureHelper.GetCentroid(Selection.Create(face))
+            lateral = to_metres(centroid.Y)
+            vertical = to_metres(centroid.Z)
+            radius = (lateral * lateral + vertical * vertical) ** 0.5
+            if radius <= on_axis:
+                continue
+            if max_radius is not None and radius > float(max_radius):
+                continue
+            value = MeasureHelper.MeasureArea(Selection.Create(face))
+            if value is None:
+                continue
+            area = face_area_m2(face)
+            if area is not None and area < threshold_m2:
+                found.append({"areaM2": area, "face": face})
+        except Exception:
+            continue
+    found.sort(key=lambda item: item["areaM2"])
+    return found
+
+
+def count_round_faces(body, radii, tolerance=0.05):
+    """How many faces are cylinders of the given radii, one count per radius.
+
+    Used as a guard: the fin-root ConstantRound and the section fillets are part of the design, so
+    the repair must leave their counts alone. A repair that merges them away is a failed repair,
+    not a cleaner model.
+    """
+    counts = [0] * len(radii)
+    for face in body.Faces:
+        try:
+            diameter = MeasureHelper.CylinderDiameter(Selection.Create(face))
+            if diameter is None:
+                continue
+            radius = abs(float(diameter)) / 2.0 / (MM(1.0) * MM_PER_M)
+            for index, wanted in enumerate(radii):
+                if wanted > 0 and abs(radius - wanted) <= wanted * tolerance:
+                    counts[index] += 1
+                    break
+        except Exception:
+            continue
+    return counts
+
+
+def repair_body(body, spec):
+    """Heal inexact edges, then fix the small faces the merge left at the fin root.
+
+    Both steps are documented SpaceClaim repair commands. FixInexactEdges is safe on any solid:
+    on the default model it clears 28 problem areas without changing the face or edge count.
+    FixSmallFaces is asked for both an Area and a Width floor; with only Area it fixes 8 of
+    the 24 sliver faces, while both together clear all of them in one call.
+    The volume and the wetted area are measured before and after, so a repair that consumed real
+    geometry fails the run instead of shipping a deformed model.
+    """
+    report = {"inexact": {}, "smallFaces": {}}
+    if not spec:
+        return report
+    band = spec
+    floor = float(band["smallFaceAreaM2"])
+    ceiling = float(band.get("smallFaceMaxRadiusM") or 0) or None
+    # Radii whose faces must survive the repair: the fin-root junctions and the section fillets.
+    guards = [float(value) for value in (band.get("preserveRadiiM") or [])]
+    rounds_before = count_round_faces(body, guards) if guards else []
+    before = {
+        "faces": len(list(body.Faces)),
+        "edges": len(list(body.Edges)),
+        "volumeM3": measure_solid_volume(body),
+        "surfaceM2": measure_solid_surface(body),
+        "smallFaces": len(body_small_faces(body, floor, max_radius=ceiling)),
+        "roundFaces": rounds_before,
+    }
+    report["before"] = before
+
+    if band.get("inexactEdges"):
+        step = report["inexact"]
+        try:
+            command = FixInexactEdges(Selection.Create(body))
+            found = command.FindProblemAreas()
+            step["problemAreasBefore"] = len(found) if found is not None else None
+            result = FixInexactEdges.FindAndFix(Selection.Create(body), None)
+            step["success"] = bool(getattr(result, "Success", False))
+            remaining = FixInexactEdges(Selection.Create(body)).FindProblemAreas()
+            step["problemAreasAfter"] = len(remaining) if remaining is not None else None
+        except Exception as error:
+            step["error"] = str(error)
+
+    small = body_small_faces(body, floor, max_radius=ceiling)
+    faces_before = len(small)
+    if faces_before:
+        step = report["smallFaces"]
+        step["facesBefore"] = faces_before
+        step["areasBeforeM2"] = [round(item["areaM2"], 12) for item in small]
+        step["maxRadiusM"] = ceiling
+        # Each sliver is repaired on its own and the geometry is re-measured after every attempt.
+        # One face at a time is what keeps the command from cascading: asking it to fix the whole
+        # list at once merges neighbour after neighbour and moved the wetted area by 1.4% on the
+        # default model, which is a deformation, not a repair. The whole-body FindAndFix is not used
+        # either, because it also reworks the narrow but legitimate nose-tip fillet face and the
+        # analytic face classification downstream depends on that face keeping its identity.
+        step["fixed"] = 0
+        step["attempts"] = []
+        for item in small:
+            if not body_face_alive(item["face"]):
+                continue
+            try:
+                specific = FixSmallFaces.FixSpecific(Selection.Create([item["face"]]), None)
+                step["fixed"] += 1 if bool(getattr(specific, "Success", False)) else 0
+            except Exception as error:
+                step["attempts"].append({"areaM2": item["areaM2"], "error": str(error)})
+        step["facesAfter"] = len(body_small_faces(body, floor, max_radius=ceiling))
+    else:
+        report["smallFaces"]["facesBefore"] = 0
+        report["smallFaces"]["facesAfter"] = 0
+
+    after = {
+        "faces": len(list(body.Faces)),
+        "edges": len(list(body.Edges)),
+        "volumeM3": measure_solid_volume(body),
+        "surfaceM2": measure_solid_surface(body),
+        "smallFaces": len(body_small_faces(body, floor, max_radius=ceiling)),
+        "roundFaces": count_round_faces(body, guards) if guards else [],
+    }
+    report["after"] = after
+    report["guardRadiiM"] = guards
+    # Every designed round has to survive: the forward junction is only 1.5 mm, so its 48 strips are
+    # individually far under any area floor. Losing them is the failure mode this guard exists for.
+    report["roundsPreserved"] = (not guards) or all(keep == have for keep, have in zip(rounds_before, after["roundFaces"]))
+    # The pass was attempted whenever candidates existed; whether the count drops depends on how
+    # many of them are designed rounds, which the guard deliberately protects.
+    report["smallFacesAttempted"] = before["smallFaces"] == 0 or isinstance(report["smallFaces"].get("facesAfter"), int)
+    report["delta"] = {
+        "faces": after["faces"] - before["faces"],
+        "edges": after["edges"] - before["edges"],
+        "volumeRel": relative_change(before["volumeM3"], after["volumeM3"]),
+        "surfaceRel": relative_change(before["surfaceM2"], after["surfaceM2"]),
+    }
+    limits = {
+        "volume": float(band["maxVolumeChange"]),
+        "surface": float(band["maxSurfaceChange"]),
+    }
+    report["limits"] = limits
+    report["volumeWithinLimit"] = abs(report["delta"]["volumeRel"] or 0) <= limits["volume"]
+    report["surfaceWithinLimit"] = abs(report["delta"]["surfaceRel"] or 0) <= limits["surface"]
+    return report
+
+
+def audit_geometry(body, spec):
+    """Heal and report the body that is about to be saved.
+
+    The early repair pass runs right after the merge, but the named selections, the empty-component
+    cleanup and the physics suppression all edit the document afterwards and can introduce fresh
+    inexact edges. This second pass heals whatever appeared, then reports the real counts so the
+    record cannot claim a clean model that still carries defects.
+    """
+    report = {}
+    floor = float(spec["smallFaceAreaM2"])
+    ceiling = float(spec.get("smallFaceMaxRadiusM") or 0) or None
+    guards = [float(value) for value in (spec.get("preserveRadiiM") or [])]
+    report["roundFacesBefore"] = count_round_faces(body, guards) if guards else []
+    report["smallFacesBefore"] = len(body_small_faces(body, floor, max_radius=ceiling))
+    if spec.get("inexactEdges"):
+        try:
+            before = FixInexactEdges(Selection.Create(body)).FindProblemAreas()
+            report["problemAreasBefore"] = len(before) if before is not None else None
+            # Only heal when something is actually there: a no-op call still adds an undo step.
+            if report["problemAreasBefore"]:
+                FixInexactEdges.FindAndFix(Selection.Create(body), None)
+            after = FixInexactEdges(Selection.Create(body)).FindProblemAreas()
+            report["problemAreasAfter"] = len(after) if after is not None else None
+        except Exception as error:
+            report["error"] = str(error)
+    # Any sliver the earlier pass could not reach is retried here, one face at a time.
+    retried = 0
+    for item in body_small_faces(body, floor, max_radius=ceiling):
+        if not body_face_alive(item["face"]):
+            continue
+        try:
+            result = FixSmallFaces.FixSpecific(Selection.Create([item["face"]]), None)
+            if bool(getattr(result, "Success", False)):
+                retried += 1
+        except Exception:
+            continue
+    report["smallFacesRetried"] = retried
+    report["smallFacesAfter"] = len(body_small_faces(body, floor, max_radius=ceiling))
+    report["roundFacesAfter"] = count_round_faces(body, guards) if guards else []
+    report["roundsPreserved"] = (not guards) or report["roundFacesBefore"] == report["roundFacesAfter"]
+    try:
+        remaining = FixInexactEdges(Selection.Create(body)).FindProblemAreas()
+        report["problemAreasFinal"] = len(remaining) if remaining is not None else None
+    except Exception as error:
+        report["finalError"] = str(error)
+    return report
+
+
 def run():
     request = load_request()
     diagnostics = DIAGNOSTICS
@@ -1186,7 +1382,6 @@ def run():
         edge_fillets = []
         section_fillets = []
         section_angles = []
-        tip_round_faces = 0
         for fin in geometry["fins"]:
             before_fin = bodies()
             created, fillets, angle = build_fin(fin)
@@ -1200,13 +1395,6 @@ def run():
                     "index": index,
                     "centerOfMassM": measure_center_of_mass(item),
                 })
-            # Centre of mass is recorded on the ruled loft, which is what the station check compares.
-            # The planform arcs only consume the tip corners and do not move the leading edge at the body.
-            if fin.get("tipCornerFillet"):
-                for item in created:
-                    report = cut_planform_tip_corners(item, fin)
-                    edge_fillets.append(report)
-                    tip_round_faces += report.get("faces", 0)
         if not fin_bodies:
             raise Exception("No fin bodies were created.")
 
@@ -1246,8 +1434,14 @@ def run():
         diagnostics["sectionFillets"] = section_fillets
         diagnostics["sectionAngles"] = section_angles
         diagnostics["edgeFillets"] = edge_fillets
-        # Tip rounds are copied by the circular pattern. Junction rounds are applied once on the merged body.
-        diagnostics["roundCreatedFaces"] = tip_round_faces * geometry["cruciform_count"] + junction_faces
+        # Junction rounds are applied once on the merged body; the tip keeps its sharp planform corners.
+        diagnostics["roundCreatedFaces"] = junction_faces
+
+        # The merge and the junction rounds leave inexact edges and thin sliver faces at the fin
+        # root. Repair them before anything is measured or saved: every later number describes the
+        # model that actually ships, and the repair records its own before/after evidence.
+        if geometry.get("repair"):
+            diagnostics["repair"] = repair_body(merged[0], geometry["repair"])
 
         phase = geometry.get("fin_phase_deg", 0)
         if phase:
@@ -1294,6 +1488,12 @@ def run():
         image_path = request["output"].get("image", "")
         if image_path:
             snapshot(image_path, "image", [merged[0]])
+        # Axial view along the missile axis: both fin stations project onto the same frame, so a
+        # canted forward fin would show as a scissor against the radial aft fin. Both fins are radial
+        # now, and this image is the evidence the user checks.
+        axial_path = request["output"].get("axialImage", "")
+        if axial_path:
+            snapshot(axial_path, "axialImage", [merged[0]], axial=True)
 
         # Simulation regions live in the same document, so a single .scdoc holds the model, the
         # enclosure and the BOI.
@@ -1357,6 +1557,13 @@ def run():
         keep = [merged[0], region_bodies.get("boi"), region_bodies.get("enclosure"), region_bodies.get("enclosureComponent")]
         physics = suppress_for_physics([item for item in keep if item is not None])
         diagnostics["physicsSuppression"] = physics
+
+        # Final geometry check, taken on the body that is about to be saved. Repairing earlier is not
+        # enough: the named selections, the empty-component cleanup and the suppression above all
+        # touch the document, and each of them can leave fresh inexact edges behind. This pass runs
+        # on the finished body so the record describes what the file actually contains.
+        if geometry.get("repair"):
+            diagnostics["finalGeometry"] = audit_geometry(merged[0], geometry["repair"])
 
         DocumentSave.Execute(model_path)
 

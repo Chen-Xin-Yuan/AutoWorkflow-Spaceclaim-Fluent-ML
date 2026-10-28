@@ -46,11 +46,8 @@ export const HEX_FILLET_SKETCH_MIN_SAGITTA_M = 5e-6;
 export const HEX_FILLET_SKETCH_SCALE_LIMIT = 1000;
 /**
  * Rounds at the hexagonal fin only. They are metres, not chord fractions and not schema fields.
- * `HEX_TIP_CORNER_RADIUS_M` is one circular arc in the planform at each tip corner, where the tip
- * chord meets the leading edge and where it meets the trailing edge. It stays 0.003 m. A corner
- * that cannot hold that arc stops the build and reports the corner angle and the edge lengths;
- * the radius is not reduced to a fraction of a millimetre, and it is not an edge fillet through
- * the thickness.
+ * The fin tip keeps its sharp planform corners: the tip chord meets the leading and trailing edges
+ * at the design planform vertices, with no planform arc and no arc cut there.
  * `HEX_ROOT_JUNCTION_RADIUS_M` is the ConstantRound requested where each fin meets the fuselage.
  * The aft junction must keep that radius. The canted forward junction tries it first, then the
  * values in `HEX_ROOT_JUNCTION_PROBE_RADII_M`, and stops at the largest radius SpaceClaim accepts.
@@ -66,16 +63,77 @@ export const HEX_FILLET_SKETCH_SCALE_LIMIT = 1000;
  * 0.08 mm shoulder-arc segments. A subset that drops those segments leaves free ends at tangent
  * transitions and the kernel refuses every radius tried above 0.2 mm, so the loop is never cut
  * down to its long edges.
- * `HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR` only offsets the planform cut sketch outside the fin.
- * It is a construction clearance, not a design parameter. The 1 mm section fillets along the span
- * stay at `HEX_FILLET_RADIUS_M`. NACA fins do not use these radii.
+ * The 1 mm section fillets along the span stay at `HEX_FILLET_RADIUS_M`. NACA fins do not use
+ * these radii.
  */
-export const HEX_TIP_CORNER_RADIUS_M = 0.003;
+/**
+ * Where the hexagon's constant-thickness flat ends, re-exported from the schema so the CLI default
+ * and the geometry agree by construction.
+ *
+ * This is the knob that decides whether the fin root can hold the 3 mm junction round. The flat end
+ * sets the aft shoulder arc, and that arc is the shortest part of the fin-to-body seam: at the old
+ * default of 0.80 the forward seam refuses 3 mm, the round is clamped to its 1.5 mm floor, and the
+ * un-rounded band leaves 24 quad slivers (0.18–0.98 mm², aspect ratio ~119) on the merged body.
+ * Those slivers cannot be deleted: `FixSpecific` reports success without removing them, a
+ * one-at-a-time `DeleteFaces` adds a face and three edges per attempt, and `RepairAction.None`
+ * removes them but leaves the body non-manifold (volume measurement throws).
+ *
+ * Measured on the default model in V241, sweeping only this knob:
+ *   0.800 → 24 slivers, forward round clamped to 1.5 mm
+ *   0.810 → 8 slivers
+ *   0.816 → 8 slivers
+ *   0.822 → 8 slivers   (the last failing value)
+ *   0.8221 → 0 slivers, forward round accepted at the full 3 mm
+ *   0.823 → 0 slivers   (the schema default, one step past the knee so it is not knife-edge)
+ *   0.830 → 0 slivers
+ * The accepted value moves the root flat end by 5.4 mm on a 0.234 m root chord (2.3%), leaves the
+ * tip section untouched, and shifts the solid by +0.048% volume and −0.045% wetted area. It also
+ * restores the forward junction round, which is a gain rather than a cost.
+ *
+ * Lowering this again is what reintroduces the slivers; the acceptance gate on the saved body is
+ * what would catch it. `root_overlap`, `hex_flat_start`, `C_RW`, `C_TW`, `B_W` and
+ * `thickness_percent` were swept over the same band and none of them clears the slivers.
+ */
 export const HEX_ROOT_JUNCTION_RADIUS_M = 0.003;
 export const HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M = 0.0015;
 export const HEX_ROOT_JUNCTION_PROBE_RADII_M = [0.003, 0.0025, 0.002, 0.0015];
 export const HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M = 0.001;
-export const HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR = 20;
+/**
+ * Repair that runs after the merge and the junction rounds, before acceptance.
+ *
+ * Both steps use documented SpaceClaim repair commands; nothing here deletes a face the kernel
+ * can still heal.
+ *
+ * `REPAIR_INEXACT_EDGES` runs `FixInexactEdges` over the merged missile. On the default hexagon
+ * model it reports 28 problem areas and clears all of them, leaving face and edge counts untouched
+ * and moving the volume by 2e-7 relative, so it is unconditional and always accepted.
+ *
+ * `REPAIR_SMALL_FACE_AREA_M2` is the face-area floor; a face below it is a repair candidate.
+ * `REPAIR_SMALL_FACE_WIDTH_M` is an optional width floor for the same command. Keep it at 0: the
+ * nose-tip fillet band and the shoulder fillet are narrow but legitimate, and a 1 mm width floor
+ * merges them away, which leaves 4 body faces instead of 5 and breaks the analytic face
+ * classification downstream.
+ * The sliver faces at the fin root are 0.18–0.98 mm². They are repaired one face at a time
+ * (`FixSmallFaces.FixSpecific`) rather than through the whole-body `FindAndFix`, which cascades:
+ * on the default model a single bulk call merged 124 faces and moved the wetted area by 1.4%.
+ * One-at-a-time never fully clears them, so the run reports how many were repaired instead of
+ * claiming the model is clean. `REPAIR_SMALL_FACE_TARGET` is that share; measured on the default
+ * model the per-face pass repairs 44 of 140 candidate faces.
+ * `REPAIR_SMALL_FACE_MAX_RADIUS_M` keeps the pass below the fin tip. Healing a sliver out at the
+ * tip pushes the tip outward, which is a real geometry change; the default 0.12 m covers the fin
+ * root (0.0905 m on the default model) and stops well short of the tip (0.32 m).
+ * `REPAIR_MAX_VOLUME_CHANGE` bounds how far the repair may move the volume; a larger change means
+ * the repair ate real geometry, so the run fails instead of shipping a deformed model. The default
+ * hexagon model moves by 2.5e-3 relative through the per-face pass, so the budget is 5e-3.
+ * `REPAIR_MAX_SURFACE_CHANGE` does the same for the wetted area, at the same 5e-3.
+ */
+export const REPAIR_INEXACT_EDGES = true;
+export const REPAIR_DEGENERATE_AREA_M2 = 1e-12;
+export const REPAIR_SMALL_FACE_AREA_M2 = 1e-6;
+export const REPAIR_SMALL_FACE_WIDTH_M = 0;
+export const REPAIR_SMALL_FACE_MAX_RADIUS_M = 0.12;
+export const REPAIR_MAX_VOLUME_CHANGE = 5e-3;
+export const REPAIR_MAX_SURFACE_CHANGE = 5e-3;
 
 const NACA_REFERENCE_THICKNESS = 0.20;
 const NACA_REFERENCE_HALF_THICKNESS = 0.10;
@@ -346,103 +404,6 @@ export function hexagonSketchScale(segments) {
     throw new Error(`六边形圆角草图比例 ${scale} 超出 1 到 ${HEX_FILLET_SKETCH_SCALE_LIMIT}，圆弧无法按真实半径保留。`);
   }
   return scale;
-}
-
-function cornerDirections(prev, vertex, next) {
-  const incoming = [vertex[0] - prev[0], vertex[1] - prev[1]];
-  const outgoing = [next[0] - vertex[0], next[1] - vertex[1]];
-  const lengthIn = Math.hypot(incoming[0], incoming[1]);
-  const lengthOut = Math.hypot(outgoing[0], outgoing[1]);
-  const cos = (incoming[0] * outgoing[0] + incoming[1] * outgoing[1]) / (lengthIn * lengthOut);
-  const degrees = (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
-  return { degrees, lengthIn, lengthOut };
-}
-
-function sliverArea(vertex, arc) {
-  const start = Math.atan2(arc.from[1] - arc.center[1], arc.from[0] - arc.center[0]);
-  const points = [vertex];
-  const steps = 16;
-  for (let step = 0; step <= steps; step += 1) {
-    const angle = start + arc.delta * (step / steps);
-    points.push([
-      arc.center[0] + arc.radius * Math.cos(angle),
-      arc.center[1] + arc.radius * Math.sin(angle),
-    ]);
-  }
-  let sum = 0;
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index];
-    const following = points[(index + 1) % points.length];
-    sum += current[0] * following[1] - following[0] * current[1];
-  }
-  return Math.abs(sum) / 2;
-}
-
-/**
- * Tangent arcs at the tip leading-edge and tip trailing-edge corners of one fin planform.
- * The design leading-edge station and the design chord stay put; only the sharp tip corners
- * are replaced by one circular arc of `radius`. If that arc cannot sit on both edges, this
- * throws the corner angle and the two edge lengths. It does not substitute a smaller radius.
- */
-export function planformTipCornerFillets(planform, radius = HEX_TIP_CORNER_RADIUS_M) {
-  const [buriedLe, rootTe, tipTe, tipLe] = planform.points;
-  const fit = (prev, vertex, next, name) => {
-    const corner = clockwiseFillet(prev, vertex, next, radius);
-    let arc = corner ? arcSegment(corner.center, corner.footIn, corner.footOut, radius) : null;
-    if (corner && !arc) arc = arcSegment(corner.center, corner.footOut, corner.footIn, radius);
-    if (!corner || !arc) {
-      const measured = cornerDirections(prev, vertex, next);
-      throw new Error(
-        `${name} 处 ${radius} m 平面圆弧放不下。拐角夹角 ${measured.degrees.toFixed(2)}°，相邻边长 ${measured.lengthIn.toFixed(6)} m 与 ${measured.lengthOut.toFixed(6)} m。`,
-      );
-    }
-    const intoTip = Math.abs(arc.from[1] - planform.tip_radius) <= Math.abs(arc.to[1] - planform.tip_radius);
-    const removalArc = {
-      type: "arc",
-      center: arc.center,
-      from: arc.from,
-      to: arc.to,
-      sense: arc.sense,
-      radius,
-    };
-    return {
-      name,
-      requested: radius,
-      radius,
-      clamped: false,
-      center: corner.center,
-      vertex,
-      tipFoot: intoTip ? arc.from : arc.to,
-      edgeFoot: intoTip ? arc.to : arc.from,
-      from: arc.from,
-      to: arc.to,
-      ...arc,
-      radius,
-      sliverAreaM2: sliverArea(vertex, arc),
-      removal: [lineSegment(vertex, arc.from), removalArc, lineSegment(arc.to, vertex)],
-    };
-  };
-  // Stored planform order is counter-clockwise. Walk the tip corners clockwise so the
-  // inset centre falls inside the fin.
-  const leading = fit(buriedLe, tipLe, tipTe, "tip-leading");
-  const trailing = fit(tipLe, tipTe, rootTe, "tip-trailing");
-  const straightTipM = distance2D(leading.tipFoot, trailing.tipFoot);
-  if (!(straightTipM > 0)) {
-    throw new Error("舵尖两条平面圆弧之间没有留下平直梢弦。");
-  }
-  return {
-    radius,
-    tolerance: HEX_FILLET_RADIUS_TOLERANCE,
-    cutClearanceM: radius * HEX_TIP_CORNER_CUT_CLEARANCE_FACTOR,
-    unit: "m",
-    leading,
-    trailing,
-    straightTipM,
-    leAtSurface: planform.le_at_surface,
-    rootChord: planform.root_chord_at_surface,
-    tipChord: planform.te - planform.tip_le,
-    tipRadius: planform.tip_radius,
-  };
 }
 
 function chainCloses(segments) {
@@ -1460,10 +1421,27 @@ export function deriveGeometry(params) {
     expectedVolume: expectedSolidVolume(body.segments),
     bodyCenterOfMass: solidOfRevolutionCenterOfMass(body.segments),
     fins: [
-      { name: "front", ...front, ...(airfoil.kind === "hexagon" ? { tipCornerFillet: planformTipCornerFillets(front) } : {}) },
-      { name: "rear", ...rear, ...(airfoil.kind === "hexagon" ? { tipCornerFillet: planformTipCornerFillets(rear) } : {}) },
+      { name: "front", ...front },
+      { name: "rear", ...rear },
     ],
     ...(airfoil.kind === "hexagon" ? {
+      repair: {
+        inexactEdges: REPAIR_INEXACT_EDGES,
+        degenerateAreaM2: REPAIR_DEGENERATE_AREA_M2,
+        smallFaceAreaM2: REPAIR_SMALL_FACE_AREA_M2,
+        smallFaceWidthM: REPAIR_SMALL_FACE_WIDTH_M,
+        smallFaceMaxRadiusM: REPAIR_SMALL_FACE_MAX_RADIUS_M,
+        // Rounds the repair must never consume: both fin-root junctions and the section fillets.
+        preserveRadiiM: [
+          HEX_ROOT_JUNCTION_RADIUS_M,
+          HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M,
+          HEX_FILLET_RADIUS_M,
+          HEX_FILLET_LE_RADIUS_M,
+        ],
+        maxVolumeChange: REPAIR_MAX_VOLUME_CHANGE,
+        maxSurfaceChange: REPAIR_MAX_SURFACE_CHANGE,
+        unit: "m",
+      },
       rootJunctionFillet: {
         radius: HEX_ROOT_JUNCTION_RADIUS_M,
         forwardMinRadius: HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M,
@@ -1495,7 +1473,6 @@ export function deriveGeometry(params) {
         hex_fillet_radius_m: HEX_FILLET_RADIUS_M,
         hex_fillet_le_radius_m: HEX_FILLET_LE_RADIUS_M,
         hex_fillet_tolerance: HEX_FILLET_RADIUS_TOLERANCE,
-        hex_tip_corner_radius_m: HEX_TIP_CORNER_RADIUS_M,
         hex_root_junction_radius_m: HEX_ROOT_JUNCTION_RADIUS_M,
       } : {}),
     },
@@ -1511,21 +1488,15 @@ export function deriveGeometry(params) {
     nose_junction_x: cylinder ? cylinder.from[0] : params.L_N + offset,
   };
   if (airfoil.kind === "hexagon") {
-    const bevel = hexagonBevelAngle(params.thickness_percent, params.hex_flat_start);
+    // Both hexagon fins stay radial. The forward fin used to be canted by the hexagon bevel angle
+    // (6.390 degrees at the defaults) because the root face was assumed to sit tangent to the
+    // fuselage, where a ConstantRound on a 0 degree included angle would be refused. Measurement on
+    // V241 shows that assumption is false: with the fin radial the forward seam still accepts the
+    // full 3 mm ConstantRound, 48 edges and 8 measured blend cylinders, exactly like the aft seam.
+    // The cant therefore bought nothing and cost a real defect - a canted forward fin reads as a
+    // scissor against the radial aft fin in any axial view - so it is gone.
     const frontFin = result.fins.find((fin) => fin.name === "front");
-    // The root section lies in a plane of constant radius, parallel to the fuselage tangent, so the
-    // included angle between that root face and the body is 0. Tilt the forward fin by the hexagon
-    // bevel angle. The aft fin already meets the body on faces at about 82–87 degrees and stays radial.
-    frontFin.sectionFrame = {
-      angleRad: bevel,
-      normal: [0, Math.cos(bevel), Math.sin(bevel)],
-      thickness: [0, -Math.sin(bevel), Math.cos(bevel)],
-    };
-    frontFin.bodyIntersectionAngleRad = bevel;
-    if (frontFin.tipCornerFillet) {
-      frontFin.tipCornerFillet.spanAxis = frontFin.sectionFrame.normal;
-      frontFin.tipCornerFillet.thicknessAxis = frontFin.sectionFrame.thickness;
-    }
+    frontFin.bodyIntersectionAngleRad = 0;
   }
   for (const fin of result.fins) {
     // The seed fin is a ruled loft, so its centre of mass is the solid centroid. NACA sections

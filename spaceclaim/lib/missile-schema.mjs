@@ -39,7 +39,7 @@ export const CONVENTION_PARAMS = [
   { field: "le_mode", label: "梯形舵第四约束", kind: "enum", default: "trailing_aligned", options: ["trailing_aligned", "leading_aligned", "symmetric"], implemented: ["trailing_aligned"] },
   { field: "fin_section", label: "舵面横截面（naca 为对称四位数，hexagon 为等厚段六边形，尖角按固定绝对半径倒圆）", kind: "enum", default: "naca", options: ["naca", "hexagon"], implemented: ["naca", "hexagon"] },
   { field: "hex_flat_start", label: "六边形等厚段起点（占当地弦长的比例，仅 hexagon 使用）", unit: "chord", kind: "number", default: 0.2, min: 0 },
-  { field: "hex_flat_end", label: "六边形等厚段终点（占当地弦长的比例，仅 hexagon 使用）", unit: "chord", kind: "number", default: 0.8, min: 0 },
+  { field: "hex_flat_end", label: "六边形等厚段终点（占当地弦长的比例，仅 hexagon 使用）", unit: "chord", kind: "number", default: 0.823, min: 0 },
   { field: "fillet_location", label: "倒圆位置", kind: "enum", default: "both", options: ["cone_cylinder", "nose_tip", "both"], implemented: ["cone_cylinder", "nose_tip", "both"] },
   { field: "cruciform_count", label: "每级舵面片数", kind: "integer", default: 4, min: 2 },
   { field: "scdm_api_version", label: "目标脚本 API 版本", kind: "string", default: "" },
