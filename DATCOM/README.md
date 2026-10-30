@@ -1,4 +1,4 @@
-﻿# DATCOM — 项目目录结构说明
+# DATCOM — 项目目录结构说明
 
 
 ## 一、核心工作目录（必要）
@@ -8,7 +8,7 @@
 DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.dat`。
 
 `for005.dat` 是旧版手工算例模板（六边形截面，默认翼型参数就照它取的）。`01_batch_datcom.py` 不再改写它，
-而是按几何、来流和 `scripts/naca_section.py` 里的截面参数整份生成 `for005.dat`。
+而是按几何、来流和 `scripts/fin_section.py` 里的截面参数整份生成 `for005.dat`。
 
 不要把算例结果放在这里。`01_batch_datcom.py` 把结果写到 `../data_lib/runs/low/<geometry_id>/`，运行中的协议文件放在 `../data_lib/runs/low/.work/`。
 
@@ -18,13 +18,13 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 | 文件 | 用途 |
 | --- | --- |
-| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入工作区 README 的 14 个几何参数与来流条件。11 个主尺寸来自总表，3 个翼型参数来自 `naca_section.py`。脚本自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数，并输出几何核对报告与三视图 |
+| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入工作区 README 的 14 个几何参数与来流条件。11 个主尺寸来自总表，3 个翼型参数来自 `fin_section.py`。脚本自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数，并输出几何核对报告与三视图 |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
-| `naca_section.py` | 对称舵面截面：可切六边形（`SECTYP = HEX`）或 NACA 四位数，三个参数与外形方程都在这。批量 DATCOM 与点云共用这一份。怎么定参数见文末「四、舵面翼型」 |
+| `fin_section.py` | 对称舵面截面：可切六边形（`SECTYP = HEX`）或 NACA 四位数，三个参数与外形方程都在这。批量 DATCOM 与点云共用这一份。怎么定参数见文末「四、舵面翼型」 |
 
 
 
-`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型取 `naca_section.py` 的三个参数，合计 14 个几何参数；带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型取 `fin_section.py` 的三个参数，合计 14 个几何参数；带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
 ### `../data_lib/runs/low/`（运行结果，项目外）
 
@@ -89,7 +89,7 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 1. 正式输入是工作区的 `data_lib/inputs/cases.csv`。每一行是一个工况，列依次为
    `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`。
    翼型截面类型（`SECTION_TYPE`：六边形或 NACA）和三个翼型参数
-   写在 `scripts/naca_section.py`，前舵和后舵共用。同一个 `geometry_id` 的 11 个主尺寸必须相同。
+   写在 `scripts/fin_section.py`，前舵和后舵共用。同一个 `geometry_id` 的 11 个主尺寸必须相同。
    同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
 2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
    `MISSILE_GEOMETRY`、`MACH_LIST`、`ALPHA_LIST` 和 `CASES` 只在 `--demo` 时使用。
@@ -134,7 +134,7 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 
 ## 四、舵面翼型
 
-14 个几何参数里的翼型三项，就是 `scripts/naca_section.py` 顶部的三个默认值。改翼型只改那里。点云和 DATCOM 都读这一份，根部和梢部是同一副截面，按当地弦长等比缩放（等 t/c），弯度固定为 0，中弧与弦线重合，上下对称。
+14 个几何参数里的翼型三项，就是 `scripts/fin_section.py` 顶部的三个默认值。改翼型只改那里。点云和 DATCOM 都读这一份，根部和梢部是同一副截面，按当地弦长等比缩放（等 t/c），弯度固定为 0，中弧与弦线重合，上下对称。
 
 默认是**对称六边形**（DATCOM `SECTYP = HEX`）。文件顶部的 `SECTION_TYPE` 写 `"HEX"` 用六边形、写 `"NACA"` 用对称四位数翼型；两种截面各有一组三个默认值，切换只改这个开关，其余代码不用动。
 
@@ -147,24 +147,26 @@ $FINSET1
  SECTYP = HEX,
  ...
  STA = 1.0,
- LER = 0.01500,0.01500,
- ZUPPER = 0.02240,0.02240,
- LMAXU = 0.23800,0.23800,
- LFLATU = 0.52400,0.52400,
+ LER = 0.50000,0.50000,
+ ZUPPER = 0.02230,0.02230,
+ LMAXU = 0.19500,0.19500,
+ LFLATU = 0.61000,0.61000,
 $END
 ```
 
-四个数组都是**弦长分数**，根、梢各一个值（默认按等 t/c，所以两站同值）。默认值照 `datcom_bin/for005.dat` 取——那是 DATCOM 自带的历史六边形算例。
+四个数组都是**弦长分数**，根、梢各一个值（默认按等 t/c，所以两站同值）。当前默认值见 `fin_section.py` 顶部；`datcom_bin/for005.dat` 是 DATCOM 自带的历史六边形算例（0.02238 / 0.238 / 0.524 / 0.015），可以当对照。
 
-![对称六边形舵面截面：尖前缘，最厚处在 0.238–0.762 倍弦长](hex_airfoil.png)
+![对称六边形舵面截面：尖前缘，最厚处在一段平顶上](hex_airfoil.png)
 
 上图按默认截面绘制，厚度方向放大 4 倍，虚线是弦线。
 
 | 参数 | 默认 | 对应 DATCOM 卡 | 改它会动哪里 | 允许值 |
 | --- | --- | --- | --- | --- |
-| `thickness_percent` | 4.48 | `ZUPPER = 该值 / 200` | 上下表面间距，总厚度 = 该值 × 弦长 / 100 | 大于 0、小于 40 |
-| `flat_percent` | 52.4 | `LFLATU = 该值 / 100` | 平顶段长度；对称时 `LMAXU = (1 − LFLATU)/2` 自动派生 | 大于等于 0、小于 100 |
-| `le_radius` | 0.015 | `LER` | 只进 DATCOM 的气动阻力项，点云仍按尖前缘画 | 大于等于 0 |
+| `thickness_percent` | 4.46 | `ZUPPER = 该值 / 200` | 上下表面间距，总厚度 = 该值 × 弦长 / 100 | 大于 0、小于 40 |
+| `flat_percent` | 61.0 | `LFLATU = 该值 / 100` | 平顶段长度；对称时 `LMAXU = (1 − LFLATU)/2` 自动派生 | 大于等于 0、小于 100 |
+| `le_radius` | 0.5 | `LER` | 只进 DATCOM 的气动阻力项，点云仍按尖前缘画 | 大于等于 0 |
+
+> `le_radius` 实测在 0.5 处已饱和：0.5 与 1.0 的输出完全相同（CD 0.457），0.15 是 0.451，相当于"前缘圆角开到最大"。要真正区分前缘钝度，取 0–0.15 之间。
 
 几何关系：
 
@@ -176,14 +178,14 @@ tan(前缘半楔角) = ZUPPER / LMAXU          截面积 / c² = ZUPPER × (1 + 
 三个参数按这个顺序定：
 
 1. **厚度**：`thickness_percent` 就是想要的 t/c。物理厚度 = t/c × 当地弦长：后舵根弦 0.38 m 时整片约 17 mm，前舵梢弦 0.06 m 时约 2.7 mm。若要"等绝对厚度"贯穿全展，得按当地弦长把两站折成不同的 `ZUPPER`（当前代码固定按等 t/c 写两站同值）。
-2. **平顶长度**：由想控制的**前缘半楔角**反推，`LFLATU = 1 − 2·ZUPPER / tanθ`。t/c = 4.48% 时：
+2. **平顶长度**：由想控制的**前缘半楔角**反推，`LFLATU = 1 − 2·ZUPPER / tanθ`。以 t/c = 4.48% 为例：
 
 | 前缘半楔角 θ (deg) | 4 | 5 | **5.38** | 6 | 8 | 10 | 12 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `LFLATU` | 0.359 | 0.488 | **0.524** | 0.574 | 0.681 | 0.746 | 0.789 |
 
-默认那组 4.48% / 0.524 对应的半楔角是 **5.38°**，这是超声速舵面的常见量级。
-3. **前缘**：`le_radius` 取 0.005–0.015（模板 0.015）。别填 0.0001 这种极小非零值——实测该档 CL 会异常跳动。
+表里 4.48% / 0.524 那一列是 DATCOM 历史模板的取法（半楔角 5.38°）。当前默认 4.46% / 0.61 对应半楔角 6.52°，平顶更长、前缘更尖。
+3. **前缘**：`le_radius` 取 0.005–0.15 之间才有分辨力（0.5 起饱和，见上表注）。别填 0.0001 这种极小非零值——实测该档 CL 会异常跳动。
 
 **换六边形必须知道的四条**（都在本机 rev 03/11 上实测）：
 
@@ -194,9 +196,9 @@ tan(前缘半楔角) = ZUPPER / LMAXU          截面积 / c² = ZUPPER × (1 + 
 
 ### 2. NACA 四位数（可切回）
 
-`SECTION_TYPE` 改成 `"NACA"` 就回到旧口径：`SECTYP = NACA`，截面写在文件末尾的两张控制卡上，默认是 `NACA-1-4-0004.48-63` 和 `NACA-2-4-0004.48-63`。三个参数是 `thickness_percent`、`le_radius_index`（整数 0–9）、`max_thickness_tenths`（只允许 2、3、4、5、6），卡片拼法见 `naca_section.py` 里的 `NacaSection`，示意图仍是 `naca_airfoil.png`。
+`SECTION_TYPE` 改成 `"NACA"` 就回到旧口径：`SECTYP = NACA`，截面写在文件末尾的两张控制卡上，默认是 `NACA-1-4-0004.48-63` 和 `NACA-2-4-0004.48-63`。三个参数是 `thickness_percent`、`le_radius_index`（整数 0–9）、`max_thickness_tenths`（只允许 2、3、4、5、6），卡片拼法见 `fin_section.py` 里的 `NacaSection`，示意图仍是 `naca_airfoil.png`。
 
-两种口径的实测对照（同一外形、α = 3°）：六边形 4.48%/52.4% 与 NACA 0004.48-63 的 CL 都是 1.589，CD 分别是 0.365 和 0.364。换成六边形不会推翻历史结果，但系数表里会多出另一组列名。
+两种口径的实测对照（同一外形、α = 3°）：六边形（4.48% 厚、52.4% 平顶、LER 0.015）与 NACA 0004.48-63 的 CL 都是 1.589，CD 分别是 0.365 和 0.364。换成六边形不会推翻历史结果，但系数表里会多出另一组列名。
 
 ### 3. 系数表里的翼型列
 

@@ -26,7 +26,7 @@
         根部弦长 c_root > 梢部弦长 c_tip；前缘后掠量 sweep_le ≡ c_root - c_tip，
         由前者自动派生（不单独填参数），保证后缘始终垂直于弹轴。
     建模方式: 在子午面 (x, r) 内画侧视梯形（根部贴在弹体圆柱表面上），
-    厚度按对称截面（六边形或 NACA）加在周向。翼型参数见 scripts/naca_section.py，
+    厚度按对称截面（六边形或 NACA）加在周向。翼型参数见 scripts/fin_section.py，
     与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
 
 采样: 默认按 CFD 关键部位加密，总点数不变。舵面、前缘/后缘、根梢、锥顶倒角、
@@ -66,7 +66,7 @@ from pathlib import Path
 
 import numpy as np
 
-from naca_section import FIN_SECTION as DEFAULT_FIN_SECTION, FinSection
+from fin_section import FIN_SECTION as DEFAULT_FIN_SECTION, FinSection
 
 # --------------------------------------------------------------------------- #
 # 输入 / 输出 / 参数配置（命令行参数覆盖这里的运行默认值）
@@ -84,7 +84,7 @@ MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
 
-# 舵面截面与批量 DATCOM 共用 scripts/naca_section.py 顶部的类型开关和三个参数。
+# 舵面截面与批量 DATCOM 共用 scripts/fin_section.py 顶部的类型开关和三个参数。
 # 改截面类型、厚度、平顶长度或 LER 时，只改那一处。截面保持上下对称。
 FIN_SECTION = DEFAULT_FIN_SECTION
 DEFAULT_N_POINTS = 16384
@@ -194,13 +194,13 @@ class MissileGeometry:
     # --- 弹身 ---
     total_length: float = 3.69          # 总弹长：头部顶点 x=0 → 尾部端面 x=total_length（含头锥）
     body_radius: float = 0.09          # 弹身圆柱半径（尾部半径同值，不区分尾锥）
-    nose_length: float = 0.49           # 圆锥头锥轴向长度（总弹长的一部分）
+    nose_length: float = 0.46           # 圆锥头锥轴向长度（总弹长的一部分）
     nose_tip_fillet_ratio: float = 0.004         # 锥顶倒角半径 = ratio × total_length
     nose_tip_fillet_radius: float | None = None  # 直接给倒角半径(m)，非 None 时覆盖上面的比例
     nose_segments: int = 120           # 头锥母线离散段数
 
     # --- 舵面共同参数 ---
-    # 截面默认取 naca_section 的当前翼型（HEX 六边形 / NACA 四位数）。
+    # 截面默认取 fin_section 的当前翼型（HEX 六边形 / NACA 四位数）。
     # 绝对厚度 = 厚度比 × 当地弦长。
     section: FinSection = field(default_factory=lambda: FIN_SECTION)
     fin_azimuth_deg: tuple = (0.0, 90.0, 180.0, 270.0)  # 一组内 4 片，90° 等距

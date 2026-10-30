@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """舵面翼型：对称截面，可切 NACA 四位数（``NACA-1-4-...``）或六边形（``SECTYP = HEX``）。
 
 批量 DATCOM 和点云脚本都从这里取同一副截面，避免两套舵面外形不一致。
@@ -27,8 +27,8 @@
          LFLATU = 0.52400,0.52400,
         $END
 
-``datcom_bin/for005.dat`` 是 DATCOM 自带的历史六边形算例，六边形的默认值
-（0.02238 / 0.238 / 0.524 / 0.015）就照它取的。
+``datcom_bin/for005.dat`` 是 DATCOM 自带的历史六边形算例（0.02238 / 0.238 /
+0.524 / 0.015），可作对照；下面的默认值按当前设计单独取。
 
 改翼型只改下面「参数配置区」：先选 ``SECTION_TYPE``，再改该类型对应的三个默认值。
 01/04 两个脚本都读这一份，不需要改别处。
@@ -61,14 +61,14 @@ SECTION_TYPE = "HEX"
 
 # ---- 六边形参数（SECTION_TYPE = "HEX" 时生效）---
 # 最大厚度，弦长百分数。DATCOM 卡里 ZUPPER = thickness_percent / 200。
-HEX_THICKNESS_PERCENT = 4.48
+HEX_THICKNESS_PERCENT = 4.462
 # 平顶段长度，弦长百分数。LFLATU = flat_percent / 100，
 # 对称六边形的前缘斜坡终点 LMAXU = (1 - LFLATU) / 2。
-HEX_FLAT_PERCENT = 52.4
+HEX_FLAT_PERCENT = 60.995
 # DATCOM 的 LER 卡片值（前缘圆角参数），原样写入，只影响 DATCOM 的气动结果。
 # 口径（绝对英寸还是弦长分数）没能从 DATCOM 手册确认；实测它只改变阻力：
 # 0 -> CD 0.330，0.015 -> 0.349，0.05 -> 0.371，0.15 -> 0.451，0.5 以上饱和。
-HEX_LE_RADIUS = 0.015
+HEX_LE_RADIUS = 0.5
 
 # ---- NACA 四位数参数（SECTION_TYPE = "NACA" 时生效）----
 # 最大厚度，弦长的百分数，写卡时保留两位小数。

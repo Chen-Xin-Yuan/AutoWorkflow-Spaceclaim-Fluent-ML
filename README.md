@@ -6,7 +6,7 @@
 
 ### 几何参数定义与范围
 
-外形用 14 个几何参数描述：下面 11 个主尺寸，以及随后 3 个舵面翼型参数。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，定义在 `DATCOM/scripts/naca_section.py`，点云脚本读取同一份。
+外形用 14 个几何参数描述：下面 11 个主尺寸，以及随后 3 个舵面翼型参数。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，定义在 `DATCOM/scripts/fin_section.py`，点云脚本读取同一份。
 
 | 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
 |---|---|---|---|---|
@@ -26,15 +26,18 @@
 
 表中保留原图的设计范围。当前建模程序会将小于 0.001 m 的非负梢弦长自动修正为 0.001 m，具体建模约定见 [SpaceClaim 参数化建模说明](spaceclaim/README.md#参数化建模)。
 
-舵面翼型是对称 NACA 四位数，弯度固定为 0，中弧与弦线重合。三个参数的允许值来自翼型编码。基准值就是 `naca_section.py` 的默认值。控制卡写法见 [DATCOM 说明](DATCOM/README.md) 的「四、舵面翼型」。
+舵面翼型参数一共 3 个，但具体是哪 3 个取决于截面类型。DATCOM 与点云的默认截面是**对称六边形**（弯度 0，中弧与弦线重合）；也可以切成对称 NACA 四位数。基准值就是 `fin_section.py` 顶部的默认值。控制卡写法见 [DATCOM 说明](DATCOM/README.md) 的「四、舵面翼型」。
 
-| 设计变量 | 定义 | 允许值 | 基准 |
-|---|---|---|---|
-| `thickness_percent` | 最大厚度，占弦长的百分数；只沿厚度方向缩放 | 大于 0、小于 40；写卡时四舍五入到 0.01 | 4.48 |
-| `le_radius_index` | 前缘半径指数。0 是尖前缘，6 是标准圆前缘，再大更钝 | 整数 0–9 | 6 |
-| `max_thickness_tenths` | 最大厚度距前缘的弦向位置，单位是 1/10 弦长 | 2、3、4、5、6 | 3 |
+| 截面 | 设计变量 | 定义 | 允许值 | 基准 |
+|---|---|---|---|---|
+| 六边形（默认） | `thickness_percent` | 最大厚度，占弦长的百分数 | 大于 0、小于 40 | 4.46 |
+| | `flat_percent` | 平顶段长度，占弦长的百分数；对称时最厚处从 `(1−flat)/2` 开始 | 大于等于 0、小于 100 | 61.0 |
+| | `le_radius` | DATCOM 的 LER 卡片值（前缘圆角参数），只进 DATCOM，点云按尖前缘画 | 大于等于 0；0.5 起饱和 | 0.5 |
+| NACA（可切回） | `thickness_percent` | 最大厚度，占弦长的百分数 | 大于 0、小于 40 | 4.48 |
+| | `le_radius_index` | 前缘半径指数，6 是标准圆前缘 | 整数 0–9 | 6 |
+| | `max_thickness_tenths` | 最大厚度距前缘的弦向位置，单位 1/10 弦长 | 2、3、4、5、6 | 3 |
 
-SpaceClaim 默认使用上表三个翼型参数给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/naca_section.py` 相同。`fin_section=hexagon` 时改为尖前缘、尖后缘的对称六边形，厚度仍用 `thickness_percent`，等厚段由 `hex_flat_start`、`hex_flat_end` 决定；这一选择只存在于 SpaceClaim 建模，不改变上表的 14 个几何参数。
+SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/fin_section.py` 相同。`fin_section=hexagon` 时改为尖前缘、尖后缘的对称六边形，厚度仍用 `thickness_percent`，等厚段由 `hex_flat_start`、`hex_flat_end` 决定；这一选择只存在于 SpaceClaim 建模，不改变上表的 14 个几何参数。**注意**：DATCOM/点云默认已是六边形，SpaceClaim 默认仍是 NACA，要让两边同源，需把 SpaceClaim 的 `fin_section` 设成 `hexagon` 并把三处数值对齐。
 
 ### 来流参数与工况组合
 
@@ -141,7 +144,7 @@ SpaceClaim 默认使用上表三个翼型参数给前后舵放样，平面形状
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `inputs/` | 目录 | 参数与原始输入：`cases.csv` 的几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`）。翼型三项在 `DATCOM/scripts/naca_section.py`，几何参数共 14 个。另有 `missile_params_example.json`、`params_mine.json` |
+| `inputs/` | 目录 | 参数与原始输入：`cases.csv` 的几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`）。翼型三项在 `DATCOM/scripts/fin_section.py`，几何参数共 14 个。另有 `missile_params_example.json`、`params_mine.json` |
 | `queues/` | 目录 | 阶段队列与训练轮次：`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`。记录仍为空 |
 | `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，外形由 14 个几何参数决定，点数和最终格式仍待定 |
 | `runs/` | 目录 | 高保真 `high/<run-id>/<阶段>/`，低保真 `low/<geometry_id>/`。运行产物不入库，说明文件入库 |
@@ -215,7 +218,7 @@ python DATCOM/scripts/01_batch_datcom.py
 | `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
 | `{geometry_id}_datcom.log` | 该次调用的标准输出和标准错误 |
 
-点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型取 `naca_section.py` 的三个参数。这 14 个几何参数一起决定外形。默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
+点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型取 `fin_section.py` 的三个参数。这 14 个几何参数一起决定外形。默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
 
 当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
 

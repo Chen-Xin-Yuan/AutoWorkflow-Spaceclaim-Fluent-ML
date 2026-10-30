@@ -3,7 +3,7 @@
 给所有 AI 编码代理（Claude Code / DSH / Codex等）修改本项目代码时的行为准则，动代码前先通读。
 
 ## 布局速览
-- `scripts/`：Python 代码。几何参数一共 14 个：`data_lib/inputs/cases.csv` 里的 11 个主尺寸，加上 `naca_section.py` 里前舵和后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。`01_batch_datcom.py` 读取总表，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM，翼型取 `naca_section.py` 的当前值。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，翼型与批量计算共用这一份，并写点云。翼型参数与外形方程在 `naca_section.py`。
+- `scripts/`：Python 代码。几何参数一共 14 个：`data_lib/inputs/cases.csv` 里的 11 个主尺寸，加上前舵和后舵共用的 3 个翼型参数，翼型可以选择naca或者六边形，通过一个对象（包括一个类别和三个参数）来进行切换。`01_batch_datcom.py` 读取总表，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，翼型与批量计算共用这一份，并写点云。
 - `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。项目目录里不再保留旧结果目录。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 

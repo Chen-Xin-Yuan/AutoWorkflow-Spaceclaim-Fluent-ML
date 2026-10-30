@@ -43,7 +43,7 @@ DATCOM 建模约定（改动前务必读）：
        力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/naca_section.py：
+    9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/fin_section.py：
        默认六边形（SECTYP = HEX，LER/ZUPPER/LMAXU/LFLATU 四个数组直接写进
        $FINSET，文件末尾不再有 NACA 卡）；也可以切成 NACA 四位数（SECTYP =
        NACA，截面写在末尾的 NACA-1-4-... 控制卡上）。两套舵面共用同一截面，
@@ -82,7 +82,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from naca_section import FIN_SECTION as DEFAULT_FIN_SECTION, resolve_fin_section
+from fin_section import FIN_SECTION as DEFAULT_FIN_SECTION, resolve_fin_section
 
 # =============================================================================
 # 1. 用户配置区
@@ -145,7 +145,7 @@ TIMEOUT_SECONDS = 300
 # -----------------------------------------------------------------------------
 # 演示用基准几何。正式计算不读这里，只在 --demo 时使用。
 MISSILE_GEOMETRY = {
-    "L_N": 0.49,    # 鼻锥长度
+    "L_N": 0.46,    # 鼻锥长度
     "L": 3.69,      # 轴向总长
     "D": 0.18,      # 机身直径
     "L_W": 1.72,    # 前十字舵轴向位置（弹尖 → 舵根可见前缘）
@@ -186,7 +186,7 @@ CRUCIFORM_COUNT = 4
 # 力矩参考点轴向位置（m）。None = 取 L/2（弹身中点）。
 XCG_M = None
 
-# 舵面翼型。类型与三个默认值在 scripts/naca_section.py 顶部（SECTION_TYPE 选
+# 舵面翼型。类型与三个默认值在 scripts/fin_section.py 顶部（SECTION_TYPE 选
 # "HEX" 或 "NACA"），点云脚本使用同一份。演示算例可在 CASES 里用 "fin_section"
 # 字典覆盖其中几项，键名与所选截面类型的字段相同。
 FIN_SECTION = DEFAULT_FIN_SECTION
@@ -256,7 +256,7 @@ GEOMETRY_CN_NAMES = {
     "B_F": "后舵展长B_F(m)",
 }
 
-# 舵面翼型也进系数表：翼型由 scripts/naca_section.py 的三个参数（截面类型可选）
+# 舵面翼型也进系数表：翼型由 scripts/fin_section.py 的三个参数（截面类型可选）
 # 决定，同一个 geometry_id 的所有工况共用一副截面。表里带上这几列，才能直接
 # 看出这批系数对应哪种截面，不必再去翻 case_params.json。
 # 列名随截面类型变化，由截面类的 CSV_COLUMNS 给出（见 build_for005 写进 meta 的
