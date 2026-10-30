@@ -14,9 +14,9 @@
     头锥头型由 scripts/missile_spec.py 顶部的 NOSE_SHAPE 决定，与批量 DATCOM
     共用同一份：ogive = 切线卵形（也是 DATCOM 不写 TNOSE 时的默认头型），
     cone = 直线圆锥。尾部半径与弹身半径相同，不做收缩（无 boat-tail）。
-    锥顶倒角半径 R_fillet = NOSE_TIP_FILLET_RATIO × total_length（默认 0.4%，
-    约 1.5 cm），也可用 nose_tip_fillet_radius 直接给绝对值（米）；置 0 即
-    退化成尖头。x_t / r_t 由"倒角球与头锥母线相切"解析求出，两种头型同一套解法。
+    锥顶倒角半径 R_fillet = NOSE_TIP_FILLET_RATIO × total_length，也可用
+    nose_tip_fillet_radius 直接给绝对值（米）；置 0 即退化成尖头。
+    x_t / r_t 由"倒角球与头锥母线相切"解析求出，两种头型同一套解法。
 
 舵面（两组，每组 4 片，绕弹轴每 90 度等距分布）:
     位置参数: 每组一个"轴向长度" = 舵面前沿（根部前缘，整片舵面最靠前的点）
@@ -242,7 +242,7 @@ class MissileGeometry:
     aft_span: float = _BASELINE["B_F"]
 
     # --- 端盖 ---
-    include_nose_tip: bool = True
+    # 头部顶点半径收成 0，没有头端盖；只有尾端面需要单独采样。
     include_tail_cap: bool = True
 
     # ------------------------------------------------------------------ #
@@ -444,9 +444,7 @@ def surface_group_areas(g: MissileGeometry) -> dict[str, float]:
         areas[f"fin_{name}_faces"] = 4.0 * 2.0 * p.area()
         areas[f"fin_{name}_edges"] = 4.0 * cap_ratio * (p.c_root ** 2 + p.c_tip ** 2)
 
-    # 头部顶点处半径收成 0（倒角球冠端点），因此头端盖面积为 0；保留键位兼容原有开关
-    if g.include_nose_tip:
-        areas["nose_tip_cap"] = float(math.pi * g.radius(0.0) ** 2)
+    # 头部顶点处半径收成 0（倒角球冠端点），没有头端盖面积；只有尾端面有面积
     if g.include_tail_cap:
         areas["tail_cap"] = float(math.pi * g.body_radius**2)
     return areas
@@ -1168,22 +1166,12 @@ def build_pointcloud(
     pts, nrm = _sample_cylinder_surface(g, alloc.get("mid_cylinder", 0), rng, plans, refine)
     add(pts, nrm, "mid_cylinder")
 
-    # --- 端盖 ---
-    if g.include_nose_tip and alloc.get("nose_tip_cap", 0) > 0:
-        n = alloc["nose_tip_cap"]
-        rr = np.sqrt(rng.random(n)) * g.radius(0.0)
-        phi = rng.random(n) * 2 * np.pi
-        add(
-            np.stack([np.zeros(n), rr * np.cos(phi), rr * np.sin(phi)], axis=1),
-            np.tile([-1.0, 0.0, 0.0], (n, 1)),
-            "nose_cone",
-        )
+    # --- 端盖（只有尾端面）---
     if g.include_tail_cap and alloc.get("tail_cap", 0) > 0:
         pts, nrm = _sample_tail_cap(g, alloc["tail_cap"], rng, refine)
         add(pts, nrm, "tail_cap")
 
     # --- 舵面（4 片平分点数，余数按片补齐）---
-    fin_report = {}
     for name, plan in plans.items():
         n_face = alloc.get(f"fin_{name}_faces", 0)
         n_edge = alloc.get(f"fin_{name}_edges", 0)
@@ -1200,20 +1188,6 @@ def build_pointcloud(
                 g, plan, edge_counts[index], rng, az0, x_max=g.total_length, refine=refine,
             )
             add(pts, nrm, label)
-        fin_report[name] = {
-            "n_faces": n_face,
-            "n_edges": n_edge,
-            "x_root_le": plan.x_root_le,
-            "x_root_te": plan.x_root_te,
-            "x_tip_le": plan.x_tip_le,
-            "x_tip_te": plan.x_tip_te,
-            "c_root": plan.c_root,
-            "c_tip": plan.c_tip,
-            "span": plan.span,
-            "sweep_le": plan.sweep_le,
-            "area_one_fin_m2": plan.area(),
-            "is_right_trapezoid": plan.is_right_trapezoid(),
-        }
 
     points = np.concatenate(chunks, axis=0)
     normal_arr = np.concatenate(normals, axis=0)
@@ -1238,9 +1212,6 @@ def build_pointcloud(
     points, normal_arr, label_arr = points[perm], normal_arr[perm], label_arr[perm]
 
     info = {
-        "n_points": int(len(points)),
-        "seed": seed,
-        "noise_sigma": noise,
         "sampling_mode": "cfd-local-refinement" if refine else "area-weighted uniform",
         "cfd_refinement": _cfd_refinement_report(),
         "count_adjustment": int(raw_count - n_total),
@@ -1250,7 +1221,6 @@ def build_pointcloud(
         "points_per_part": {
             PART_LABELS[i]: int((label_arr == i).sum()) for i in PART_LABELS
         },
-        "fins": fin_report,
     }
     return points, normal_arr, label_arr, info
 
@@ -1630,21 +1600,6 @@ def write_obj(path: Path, verts: np.ndarray, faces: np.ndarray) -> None:
     lines += [f"v {v[0]:.8f} {v[1]:.8f} {v[2]:.8f}" for v in verts]
     lines += [f"f {f[0] + 1} {f[1] + 1} {f[2] + 1}" for f in faces]
     write_text(path, lines)
-
-
-def load_points(path: Path) -> np.ndarray:
-    """读取本脚本生成的二进制 PLY 或 XYZ。"""
-    if path.suffix.lower() == ".ply":
-        raw = path.read_bytes()
-        end = raw.index(b"end_header")
-        header = raw[:end].decode("ascii", errors="ignore")
-        n = 0
-        for line in header.splitlines():
-            if line.startswith("element vertex"):
-                n = int(line.split()[-1])
-        body = raw[raw.index(b"\n", end) + 1:]
-        return np.frombuffer(body, dtype="<f4", count=n * 3).reshape(n, 3).astype(float)
-    return np.loadtxt(path, dtype=float).reshape(-1, 3)
 
 
 def render_preview(points: np.ndarray, path: Path) -> bool:
