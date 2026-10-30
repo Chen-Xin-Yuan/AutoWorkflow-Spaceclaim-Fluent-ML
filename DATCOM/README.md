@@ -18,7 +18,9 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 | 文件 | 用途 |
 | --- | --- |
-| `01_batch_datcom.py` | DATCOM 批量计算主脚本：输入工作区 README 的 14 个几何参数与来流条件。11 个主尺寸来自总表，3 个翼型参数来自 `fin_section.py`。脚本自动生成 `for005.dat`、调用 `datcom.exe`、解析气动系数，并输出几何核对报告与三视图 |
+| `01_batch_datcom.py` | DATCOM 批量计算主脚本：读输入总表 → 生成 `for005.dat` → 调用 `datcom.exe` → 解析系数 → 写系数表与参数快照，并调用 `report.py` 出几何核对产物 |
+| `report.py` | 几何核对产物：`for022.dat` 反查、`geometry_check.txt` 核对报告、三视图 PNG、CL/CD 与 CN/CA 互校。只读算例目录已有的文件 |
+| `datcom_spec.py` | 两个脚本共用的固定名称与参数表：协议文件名、归档叶子名、单位换算、11 个主尺寸的中文名与卡片落点 |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
 | `fin_section.py` | 对称舵面截面：可切六边形（`SECTYP = HEX`）或 NACA 四位数，三个参数与外形方程都在这。批量 DATCOM 与点云共用这一份。怎么定参数见文末「四、舵面翼型」 |
 
