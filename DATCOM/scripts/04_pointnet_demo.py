@@ -26,7 +26,7 @@
         根部弦长 c_root > 梢部弦长 c_tip；前缘后掠量 sweep_le ≡ c_root - c_tip，
         由前者自动派生（不单独填参数），保证后缘始终垂直于弹轴。
     建模方式: 在子午面 (x, r) 内画侧视梯形（根部贴在弹体圆柱表面上），
-    厚度按对称 NACA 翼型加在周向。翼型三个参数见 scripts/naca_section.py，
+    厚度按对称截面（六边形或 NACA）加在周向。翼型参数见 scripts/naca_section.py，
     与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
 
 采样: 默认按 CFD 关键部位加密，总点数不变。舵面、前缘/后缘、根梢、锥顶倒角、
@@ -66,7 +66,7 @@ from pathlib import Path
 
 import numpy as np
 
-from naca_section import NACA_SECTION, NacaSection
+from naca_section import FIN_SECTION as DEFAULT_FIN_SECTION, FinSection
 
 # --------------------------------------------------------------------------- #
 # 输入 / 输出 / 参数配置（命令行参数覆盖这里的运行默认值）
@@ -84,9 +84,9 @@ MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
 
-# 舵面翼型与批量 DATCOM 共用 scripts/naca_section.py 顶部的三个参数。
-# 改厚度、前缘半径指数或最大厚度位置时，只改那一处。翼型保持上下对称。
-FIN_SECTION = NACA_SECTION
+# 舵面截面与批量 DATCOM 共用 scripts/naca_section.py 顶部的类型开关和三个参数。
+# 改截面类型、厚度、平顶长度或 LER 时，只改那一处。截面保持上下对称。
+FIN_SECTION = DEFAULT_FIN_SECTION
 DEFAULT_N_POINTS = 16384
 DEFAULT_SEED = 0
 DEFAULT_GAUSS = 0.0
@@ -200,8 +200,9 @@ class MissileGeometry:
     nose_segments: int = 120           # 头锥母线离散段数
 
     # --- 舵面共同参数 ---
-    # 翼型默认取 naca_section.NACA_SECTION。绝对厚度 = 厚度比 × 当地弦长。
-    naca: NacaSection = field(default_factory=lambda: FIN_SECTION)
+    # 截面默认取 naca_section 的当前翼型（HEX 六边形 / NACA 四位数）。
+    # 绝对厚度 = 厚度比 × 当地弦长。
+    section: FinSection = field(default_factory=lambda: FIN_SECTION)
     fin_azimuth_deg: tuple = (0.0, 90.0, 180.0, 270.0)  # 一组内 4 片，90° 等距
 
     # --- 舵面轴向位置 ---
@@ -369,7 +370,7 @@ class MissileGeometry:
     def fin_half_thickness_envelope(self) -> float:
         """两套舵面里，翼型表面偏离弦线的最大距离（米）。校验用它做包络。"""
         chords = (self.fwd_c_root, self.fwd_c_tip, self.aft_c_root, self.aft_c_tip)
-        return max(chords) * self.naca.max_offset_ratio()
+        return max(chords) * self.section.max_offset_ratio()
 
 
 @dataclass
@@ -476,7 +477,7 @@ def surface_group_areas(g: MissileGeometry) -> dict[str, float]:
     areas["mid_cylinder"] = float(2 * math.pi * g.body_radius * g.midbody_length)
 
     # 舵面（4 片 × 上下表面 / 根梢两个翼型端面）
-    cap_ratio = g.naca.section_area_ratio()
+    cap_ratio = g.section.section_area_ratio()
     for name, p in plans.items():
         areas[f"fin_{name}_faces"] = 4.0 * 2.0 * p.area()
         areas[f"fin_{name}_edges"] = 4.0 * cap_ratio * (p.c_root ** 2 + p.c_tip ** 2)
@@ -571,7 +572,7 @@ def _place_fin_point(g: MissileGeometry, plan: FinPlanform, a: float, v: float, 
     """把翼型截面上的点放回弹体坐标。v 是弦向参数，s 是厚度参数，+1 为上表面。"""
     chord = float(plan.chord(a))
     x_le = float(plan.leading_x(a))
-    xc, yc = g.naca.interior_xy(v, s)
+    xc, yc = g.section.interior_xy(v, s)
     x = x_le + xc * chord
     r = float(g.radius(x)) + a
     return np.array([x, 0.0, 0.0]) + r * _radial_dir(az) + (yc * chord) * _fin_normal_dir(az)
@@ -903,7 +904,7 @@ def _sample_fin_junctions(g: MissileGeometry, n: int, rng, plans: dict[str, FinP
     for (plan, azimuth), count in zip(stations, counts):
         if count <= 0:
             continue
-        half_thickness = 0.5 * g.naca.thickness_ratio * float(plan.c_root)
+        half_thickness = 0.5 * g.section.thickness_ratio * float(plan.c_root)
         tight = math.atan2(half_thickness, g.body_radius) * float(CFD_FIN_ROOT_AZIMUTH_MULTIPLE)
         wide = max(math.radians(float(CFD_BODY_FIN_AZIMUTH_DEG)), tight)
         part = _split_counts(count, CFD_JUNCTION_SPLIT)
@@ -1005,7 +1006,7 @@ def _sample_tail_cap(g: MissileGeometry, n: int, rng, refine: bool):
 
 def _leading_edge_chord_fraction(g: MissileGeometry) -> float:
     chord_band = _clamped_band(CFD_FIN_CHORD_BAND)
-    tight = g.naca.leading_edge_radius_ratio() * float(CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE)
+    tight = g.section.leading_edge_radius_ratio() * float(CFD_FIN_LE_TIGHT_RADIUS_MULTIPLE)
     if tight <= 0.0:
         tight = 0.008
     ceiling = chord_band if chord_band > 0.0 else 0.008
@@ -1058,12 +1059,12 @@ def _airfoil_section_xy(g: MissileGeometry, n: int, rng, refine: bool):
     if n <= 0:
         return np.zeros(0), np.zeros(0)
     if not refine:
-        return g.naca.sample_interior(n, rng)
+        return g.section.sample_interior(n, rng)
     n_edge = int(round(n * float(CFD_FIN_EDGE_PERIMETER_FRACTION)))
     n_edge = min(max(n_edge, 0), n)
     xs, ys = [], []
     if n - n_edge:
-        xi, yi = g.naca.sample_interior(n - n_edge, rng)
+        xi, yi = g.section.sample_interior(n - n_edge, rng)
         xs.append(xi)
         ys.append(yi)
     if n_edge:
@@ -1079,7 +1080,7 @@ def _airfoil_section_xy(g: MissileGeometry, n: int, rng, refine: bool):
                 x = 1.0 - x
             s = rng.random(count) * 2.0 - 1.0
             xy = np.array(
-                [g.naca.interior_xy(float(x[i]), float(s[i])) for i in range(count)],
+                [g.section.interior_xy(float(x[i]), float(s[i])) for i in range(count)],
                 dtype=float,
             )
             xs.append(xy[:, 0])
@@ -1090,7 +1091,7 @@ def _airfoil_section_xy(g: MissileGeometry, n: int, rng, refine: bool):
 def _sample_fin_faces(
     g: MissileGeometry, plan: FinPlanform, n, rng, az0, x_max=None, refine: bool = False,
 ):
-    """舵面上下表面。refine 时前缘、后缘、根部、梢部更密，厚度仍取 NACA 翼型。"""
+    """舵面上下表面。refine 时前缘、后缘、根部、梢部更密，厚度仍取当前截面。"""
     if n <= 0:
         return np.zeros((0, 3)), np.zeros((0, 3))
     if x_max is None:
@@ -1305,22 +1306,26 @@ def add_fin_plate_mesh(
     nv: int = 24,
     x_max: float | None = None,
 ) -> None:
-    """把一片舵面按 NACA 翼型加成网格。弦向用余弦间距，让前缘圆角有足够的点。"""
+    """把一片舵面按当前截面加成网格。弦向用余弦间距，让前缘圆角有足够的点。"""
     if x_max is None:
         x_max = g.total_length
     az = math.radians(az0)
+    # 六边形截面的前后缘在几何上都是尖点（该处半厚为 0），上下表面必须共用顶点，
+    # 网格才既有封闭流形、又没有零面积三角形；NACA 后缘还有 0.09% 弦长的小厚度，
+    # 这时仍按上下两排顶点建面，保持原有拓扑不变。
+    closed_te = float(g.section.half_thickness_array(np.array([1.0]))[0]) <= 1e-12
 
     grid: dict[tuple, int] = {}
     for iu in range(nu + 1):
         a = plan.span * iu / nu
         for iv in range(nv + 1):
             v = 0.5 * (1.0 - math.cos(math.pi * iv / nv))
-            if iv == 0:
-                # 前缘上下表面交于同一点，必须共用顶点，网格才能封闭。
+            if iv == 0 or (iv == nv and closed_te):
+                # 前缘（以及六边形的尖后缘）上下表面交于同一点，必须共用顶点。
                 p = _place_fin_point(g, plan, a, v, 1.0, az)
                 if p[0] > x_max:
                     p = np.array([x_max, p[1], p[2]])
-                grid[(iu, 0)] = len(verts)
+                grid[(iu, iv)] = len(verts)
                 verts.append(list(p))
                 continue
             for side_i, side in enumerate((-1.0, 1.0)):
@@ -1331,8 +1336,8 @@ def add_fin_plate_mesh(
                 verts.append(list(p))
 
     def vid(iu, iv, side):
-        if iv == 0:
-            return grid[(iu, 0)]
+        if iv == 0 or (iv == nv and closed_te):
+            return grid[(iu, iv)]
         return grid[(iu, iv, 0 if side < 0.0 else 1)]
 
     for iu in range(nu):
@@ -1375,7 +1380,7 @@ def add_fin_plate_mesh(
 
 
 def build_mesh(g: MissileGeometry, n_az: int = MESH_AZIMUTH_SEGMENTS) -> tuple[np.ndarray, np.ndarray]:
-    """整弹三角网格（封闭流形：头部收成一点、尾部加端盖、舵面为 NACA 翼型）。"""
+    """整弹三角网格（封闭流形：头部收成一点、尾部加端盖、舵面为当前截面）。"""
     plans = fin_planforms(g)
     verts: list[list[float]] = []
     faces: list[tuple[int, int, int]] = []
@@ -1897,11 +1902,11 @@ def main() -> int:
     meta = {
         "description": "missile-shaped point cloud: conical nose with a spherical tip fillet "
                        "+ constant-radius cylinder body (tail radius == body radius, no boat-tail), "
-                       "two fin groups (4 right-trapezoid fins each, 90 deg apart, NACA section). "
+                       "two fin groups (4 right-trapezoid fins each, 90 deg apart, symmetric fin section). "
                        "Each fin group is positioned by its leading-edge axial distance from the "
                        "nose tip (fwd_x_root_le / aft_x_root_le); the aft group is NOT required "
                        "to be flush with the tail.",
-        "fin_section": g.naca.as_dict(),
+        "fin_section": g.section.as_dict(),
         "generator": "scripts/04_pointnet_demo.py",
         "project_root": str(PROJECT_ROOT),
         "geometry": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(g).items()},
@@ -1945,7 +1950,7 @@ def main() -> int:
     )
 
     print(f"[OK] points = {n}  (requested {args.n_points})")
-    print(f"     fin section = NACA {g.naca.designation_body()}")
+    print(f"     fin section = {g.section.designation()}")
     print(f"     bbox min = {np.round(points.min(axis=0), 4).tolist()}")
     print(f"     bbox max = {np.round(points.max(axis=0), 4).tolist()}")
     print(f"     r_max    = {radial.max():.4f}  (aft-fin tip radius)")

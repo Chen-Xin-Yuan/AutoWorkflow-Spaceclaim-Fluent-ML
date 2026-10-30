@@ -43,8 +43,11 @@ DATCOM 建模约定（改动前务必读）：
        力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    9. 舵面翼型是对称 NACA 四位数，三个参数定义在 scripts/naca_section.py。
-       两套舵面共用同一翼型；点云脚本导入同一份参数。
+    9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/naca_section.py：
+       默认六边形（SECTYP = HEX，LER/ZUPPER/LMAXU/LFLATU 四个数组直接写进
+       $FINSET，文件末尾不再有 NACA 卡）；也可以切成 NACA 四位数（SECTYP =
+       NACA，截面写在末尾的 NACA-1-4-... 控制卡上）。两套舵面共用同一截面，
+       点云脚本导入同一份参数。
 
 运行产物（data_lib/runs/low/<geometry_id>/，工作目录里的协议文件名不留在这里）：
     <geometry_id>_for005.dat             本次实际喂给 DATCOM 的输入
@@ -52,7 +55,7 @@ DATCOM 建模约定（改动前务必读）：
     <geometry_id>_for022.dat             Tecplot ASCII 几何外形（英尺）
     <geometry_id>_aero_coefficients.csv  该几何唯一的系数表，各高度、各工况都合并在这里。
                                          每行 = 工况编号 + 来流 + 11 个主尺寸 +
-                                         舵面翼型（NACA 编号与三个参数）+ 气动系数
+                                         舵面翼型（截面编号与三个参数）+ 气动系数
     <geometry_id>_geometry_check.txt     几何模型核对报告
     <geometry_id>_geometry_check.png     几何三视图（脚本自绘，仅供速查）
     <geometry_id>_case_params.json       本算例的几何、来流与派生量快照
@@ -79,7 +82,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from naca_section import NACA_SECTION, resolve_naca_section
+from naca_section import FIN_SECTION as DEFAULT_FIN_SECTION, resolve_fin_section
 
 # =============================================================================
 # 1. 用户配置区
@@ -183,9 +186,10 @@ CRUCIFORM_COUNT = 4
 # 力矩参考点轴向位置（m）。None = 取 L/2（弹身中点）。
 XCG_M = None
 
-# 舵面翼型。三个默认值在 scripts/naca_section.py 顶部，点云脚本使用同一份。
-# 演示算例可在 CASES 里用 "fin_section" 字典覆盖其中几项，键名与 NacaSection 字段相同。
-FIN_SECTION = NACA_SECTION
+# 舵面翼型。类型与三个默认值在 scripts/naca_section.py 顶部（SECTION_TYPE 选
+# "HEX" 或 "NACA"），点云脚本使用同一份。演示算例可在 CASES 里用 "fin_section"
+# 字典覆盖其中几项，键名与所选截面类型的字段相同。
+FIN_SECTION = DEFAULT_FIN_SECTION
 
 # -----------------------------------------------------------------------------
 # 1.4 算例批量配置（每个元素 = 一个算例 = 结果根下的一个 <name>\ 目录）
@@ -252,22 +256,11 @@ GEOMETRY_CN_NAMES = {
     "B_F": "后舵展长B_F(m)",
 }
 
-# 舵面翼型也进系数表：翼型由 scripts/naca_section.py 的三个参数决定，同一个
-# geometry_id 的所有工况共用一副截面。表里带上这四列，才能直接看出这批系数
-# 对应哪种 NACA 翼型，不必再去翻 case_params.json。
-FIN_SECTION_CN_NAMES = {
-    "designation": "舵面翼型",
-    "thickness_percent": "翼型相对厚度(%)",
-    "le_radius_index": "翼型前缘半径指数",
-    "max_thickness_tenths": "翼型最大厚度位置(1/10弦长)",
-}
-# 列顺序：翼型编号在前，随后是三个控制参数。
-FIN_SECTION_FIELDS = (
-    "designation",
-    "thickness_percent",
-    "le_radius_index",
-    "max_thickness_tenths",
-)
+# 舵面翼型也进系数表：翼型由 scripts/naca_section.py 的三个参数（截面类型可选）
+# 决定，同一个 geometry_id 的所有工况共用一副截面。表里带上这几列，才能直接
+# 看出这批系数对应哪种截面，不必再去翻 case_params.json。
+# 列名随截面类型变化，由截面类的 CSV_COLUMNS 给出（见 build_for005 写进 meta 的
+# fin_section_columns），这里不再维护第二份表头。
 
 # 每个主尺寸最终落到 DATCOM 的哪个卡片变量（核对报告里逐项标注，方便对照 for005.dat）
 GEOMETRY_CARD_HINT = {
@@ -485,7 +478,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     if not alpha_list:
         raise ValueError("ALPHA_LIST 不能为空。")
 
-    section = resolve_naca_section(FIN_SECTION if fin_section is None else fin_section)
+    section = resolve_fin_section(FIN_SECTION if fin_section is None else fin_section)
 
     g = geometry
     radius = g["D"] / 2.0
@@ -541,7 +534,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         tip_le = le_m + _fin_le_offset(chord_root, chord_tip, le_mode)
         block = [
             f"$FINSET{index}",
-            " SECTYP = NACA,",
+            section.sectyp_line(),
             f" NPANEL = {_num(cruciform_count)},",
             f" PHIF = {_num_list(phif)},",
             f" XLE = {_num(le_m * M_TO_IN)},",
@@ -550,8 +543,11 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             f" SWEEP = {_num(sweep)},",
             # 本机 DATCOM 对第二组 STA=2.0 会直接终止且无输出，固定写 1.0
             " STA = 1.0,",
-            "$END",
         ]
+        # 六边形截面的四个参数数组写在这里；NACA 截面返回空，截面走文件末尾的控制卡。
+        for name, values in section.finset_extra_items():
+            block.append(f" {name} = {_num_list(values)},")
+        block.append("$END")
         detail = {
             "name": FIN_DISPLAY_NAME.get(index, f"舵面{index}"),
             "set_index": index,
@@ -590,9 +586,10 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         "DIM IN",      # 长度单位英寸
         "DAMP",        # 输出动导数
         "SAVE",
-        section.control_card(1),
-        section.control_card(2),
     ]
+    # NACA 截面的翼型控制卡放在所有控制卡之后；六边形截面的参数已经写进 $FINSET，
+    # 这一步返回空列表。
+    lines += section.control_cards()
     text = "\n".join(lines) + "\n"
 
     meta = {
@@ -617,6 +614,11 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             "le_mode": le_mode,
             "body_radius_m": radius,
             "fin_section": section.as_dict(),
+            # 供核对报告 / 控制台摘要直接引用的一句中文说明。
+            "fin_section_text": section.describe(),
+            # 翼型列随截面类型变化（六边形是平顶长度+LER，NACA 是指数+厚度位置），
+            # 由截面自己给出列名，CSV 表头才不会张冠李戴。
+            "fin_section_columns": [list(item) for item in section.CSV_COLUMNS],
             "fins": [front_fin, rear_fin],
         },
     }
@@ -981,8 +983,8 @@ def build_output_table(df, meta):
     """
     把解析结果整理成最终输出的 CSV 表（一行一个工况）。
 
-    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 舵面翼型（NACA 编号
-    与三个控制参数）+ OUTPUT_COEFFICIENTS 里的气动系数。输入参数一律用中文表头，
+    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 舵面翼型（截面编号
+    与三个参数）+ OUTPUT_COEFFICIENTS 里的气动系数。输入参数一律用中文表头，
     便于直接对照 README 参数；翼型几列让每行都能看出算的是哪种舵面截面。
 
     Returns
@@ -991,8 +993,11 @@ def build_output_table(df, meta):
     """
     geometry = meta["geometry_m"]
     altitude_m = meta["flow"]["altitude_m"]
-    # 翼型参数随几何一起记在 derived 里（build_for005 写入 NacaSection.as_dict()）。
-    section = (meta.get("derived") or {}).get("fin_section") or {}
+    # 翼型参数随几何一起记在 derived 里（build_for005 写入截面对象的 as_dict()），
+    # 列名也由截面类型给出：六边形是「平顶长度 + LER」，NACA 是「指数 + 厚度位置」。
+    derived = meta.get("derived") or {}
+    section = derived.get("fin_section") or {}
+    section_columns = [tuple(item) for item in derived.get("fin_section_columns") or ()]
 
     rows = []
     for _, row in df.iterrows():
@@ -1003,26 +1008,24 @@ def build_output_table(df, meta):
         }
         for key in REQUIRED_GEOMETRY_KEYS:
             record[GEOMETRY_CN_NAMES[key]] = geometry[key]
-        for key in FIN_SECTION_FIELDS:
-            record[FIN_SECTION_CN_NAMES[key]] = _fin_section_cell(section, key)
+        for key, cn_name in section_columns:
+            record[cn_name] = _fin_section_cell(section, key)
         for datcom_name, cn_name in OUTPUT_COEFFICIENTS:
             record[cn_name] = row.get(datcom_name, float("nan"))
         rows.append(record)
 
     columns = [CSV_FLOW_NAMES[key] for key in ("mach", "alpha", "alt")]
     columns += [GEOMETRY_CN_NAMES[key] for key in REQUIRED_GEOMETRY_KEYS]
-    columns += [FIN_SECTION_CN_NAMES[key] for key in FIN_SECTION_FIELDS]
+    columns += [cn_name for _key, cn_name in section_columns]
     columns += [cn_name for _datcom_name, cn_name in OUTPUT_COEFFICIENTS]
     return pd.DataFrame(rows, columns=columns)
 
 
 def _fin_section_cell(section, key):
-    """翼型列的值。编号补上 NACA 前缀，其它参数原样给出。"""
+    """翼型列的值。截面编号本身就带类型前缀（NACA ... / HEX ...），其余原样给出。"""
     value = section.get(key)
     if value is None:
         return float("nan")
-    if key == "designation":
-        return f"NACA {value}"
     return value
 
 
@@ -1396,10 +1399,7 @@ def render_geometry_report(case_name, meta, for005_text, checks):
         f"PHIF = {', '.join(f'{a:g}' for a in d['phif_deg'])} 度。")
     add("  · 弹体 = 圆锥头部 + 等直径圆柱段；每道舵按 NPANEL = "
         f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
-    section = d["fin_section"]
-    add(f"  · 舵面翼型 NACA {section['designation']}（对称）："
-        f"最大厚度 {section['thickness_percent']:g}% 弦长，位于 {section['max_thickness_fraction']:.1f} 弦长；"
-        f"前缘半径指数 {section['le_radius_index']}。")
+    add(f"  · 舵面翼型 {d['fin_section_text']}")
     add("")
     add("一、输入的 11 个主尺寸（README 参数，单位 m）")
     for key in REQUIRED_GEOMETRY_KEYS:
@@ -1711,12 +1711,10 @@ def print_geometry_brief(meta):
     g = meta["geometry_m"]
     d = meta["derived"]
     ref = meta["reference"]
-    section = d["fin_section"]
     print(f"    几何: L = {g['L']:.3f} m, D = {g['D']:.3f} m, L_N = {g['L_N']:.3f} m, "
           f"SREF = {ref['sref_m2']:.6f} m², LREF = {ref['lref_m']:.3f} m, "
           f"XCG = {ref['xcg_m']:.3f} m")
-    print(f"    翼型: NACA {section['designation']}，"
-          f"前缘半径/弦长 = {section['leading_edge_radius_over_chord']:.5f}")
+    print(f"    翼型: {d['fin_section_text']}")
     for fin in d["fins"]:
         print(f"    {fin['name']}: XLE = {fin['root_le_m']:.3f} m, "
               f"根弦 {fin['root_chord_m']:.3f} m, 梢弦 {fin['tip_chord_m']:.3f} m, "
