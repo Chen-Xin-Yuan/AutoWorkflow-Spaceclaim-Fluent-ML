@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""DATCOM 协议的固定名称、归档叶子名、单位换算与 11 个主尺寸参数表。
+"""DATCOM 协议的固定名称、归档叶子名、单位换算、11 个主尺寸参数表与基准几何。
 
 `01_batch_datcom.py` 和 `report.py` 共用这一份，避免两份常量各自漂移：
 协议文件名、归档命名、单位换算、参数中文名与卡片落点都在这里改一处即可。
 
-本模块只有常量和一个纯函数：没有文件读写，因此也没有输入 / 输出路径配置区。
+本模块只有常量与纯函数（参数校验）：没有文件读写，因此也没有输入 / 输出路径配置区。
 路径（项目根、结果根、输入总表）由调用方在运行时按脚本位置推导。
 """
 
@@ -45,6 +45,9 @@ M_TO_FT = 3.280839895013123      # 1 m = 3.28084 ft（DATCOM 的 ALT 用英尺�
 # =============================================================================
 # 4. 11 个主尺寸（单位 m，字段名与 README / 建模程序一致）
 # =============================================================================
+# 梢弦下限：0 会让梢边退化，DATCOM 会算错，与建模程序一致抬到 1 mm。
+MIN_TIP_CHORD_M = 0.001
+
 REQUIRED_GEOMETRY_KEYS = (
     "L_N", "L", "D",
     "L_W", "C_RW", "C_TW", "B_W",
@@ -83,3 +86,88 @@ GEOMETRY_CARD_HINT = {
 
 # 两道舵面的中文名（$FINSET1 = 前舵，$FINSET2 = 后舵）
 FIN_DISPLAY_NAME = {1: "前舵", 2: "后舵"}
+
+
+# =============================================================================
+# 5. 基准几何（README「几何参数定义与范围」的基准值）
+# =============================================================================
+# 演示算例的合并基准，也是几何核对报告里「与基准几何差异」那一节的参照。
+BASELINE_GEOMETRY = {
+    "L_N": 0.49,    # 鼻锥长度
+    "L": 3.69,      # 轴向总长
+    "D": 0.18,      # 机身直径
+    "L_W": 1.72,    # 前十字舵轴向位置（弹尖 → 舵根可见前缘）
+    "C_RW": 0.23,   # 前十字舵根弦长
+    "C_TW": 0.06,   # 前十字舵梢弦长
+    "B_W": 0.23,    # 前十字舵展长（从弹体表面向外量）
+    "L_F": 3.20,    # 后十字舵轴向位置
+    "C_RF": 0.38,   # 后十字舵根弦长
+    "C_TF": 0.19,   # 后十字舵梢弦长
+    "B_F": 0.22,    # 后十字舵展长（从弹体表面向外量）
+}
+
+
+# =============================================================================
+# 6. 几何参数校验（11 个主尺寸）
+# =============================================================================
+def normalize_geometry(raw):
+    """
+    校验并规整 11 个主尺寸（单位 m）。
+
+    Returns
+    -------
+    (geometry, notes) : geometry 为 float 字典；notes 为自动修正 / 提示文本列表。
+
+    Raises
+    ------
+    ValueError
+        缺参数、非数值或几何不自洽时，一次性列出全部问题。
+    """
+    errors = []
+    geometry = {}
+    for key in REQUIRED_GEOMETRY_KEYS:
+        if key not in raw or raw[key] is None or raw[key] == "":
+            errors.append(f"缺少几何参数 {key}。")
+            continue
+        try:
+            geometry[key] = float(raw[key])
+        except (TypeError, ValueError):
+            errors.append(f"几何参数 {key} 必须是数值，收到 {raw[key]!r}。")
+    if errors:
+        raise ValueError("\n".join(errors))
+
+    notes = []
+    # 与建模程序一致：非负但小于 1 mm 的梢弦抬到 1 mm，否则梢边退化、DATCOM 会算错
+    for key in ("C_TW", "C_TF"):
+        if 0 <= geometry[key] < MIN_TIP_CHORD_M:
+            notes.append(
+                f"{key} = {geometry[key]:g} m 小于 {MIN_TIP_CHORD_M} m，"
+                f"按建模程序约定抬到 {MIN_TIP_CHORD_M} m。"
+            )
+            geometry[key] = MIN_TIP_CHORD_M
+
+    def need(condition, message):
+        if not condition:
+            errors.append(message)
+
+    g = geometry
+    need(g["L_N"] > 0, "鼻锥长度 L_N 必须大于 0。")
+    need(g["L"] > 0, "轴向总长 L 必须大于 0。")
+    need(g["D"] > 0, "机身直径 D 必须大于 0。")
+    need(g["L_N"] < g["L"], f"鼻锥长度 L_N ({g['L_N']:g}) 必须小于总长 L ({g['L']:g})。")
+    need(g["D"] < g["L"], f"机身直径 D ({g['D']:g}) 必须小于总长 L ({g['L']:g})。")
+    for root, tip, span in (("C_RW", "C_TW", "B_W"), ("C_RF", "C_TF", "B_F")):
+        need(g[root] > 0, f"{root} 必须大于 0。")
+        need(g[span] > 0, f"{span} 必须大于 0。")
+        need(g[tip] >= 0, f"{tip} 不能为负。")
+    need(g["L_W"] >= g["L_N"], f"前舵轴向位置 L_W ({g['L_W']:g}) 必须不早于锥柱交接处 L_N ({g['L_N']:g})。")
+    need(g["L_W"] + g["C_RW"] <= g["L"], "前舵超出弹尾：L_W + C_RW 必须不大于 L。")
+    need(g["L_F"] >= g["L_N"], f"后舵轴向位置 L_F ({g['L_F']:g}) 必须不早于锥柱交接处 L_N ({g['L_N']:g})。")
+    need(g["L_F"] + g["C_RF"] <= g["L"], "后舵超出弹尾：L_F + C_RF 必须不大于 L。")
+    need(
+        g["L_W"] + g["C_RW"] <= g["L_F"],
+        f"前后舵重叠：L_W + C_RW ({g['L_W'] + g['C_RW']:g}) 必须不大于 L_F ({g['L_F']:g})。",
+    )
+    if errors:
+        raise ValueError("\n".join(errors))
+    return geometry, notes

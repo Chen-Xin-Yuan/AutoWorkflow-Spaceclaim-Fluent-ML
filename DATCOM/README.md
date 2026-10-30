@@ -20,7 +20,8 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | --- | --- |
 | `01_batch_datcom.py` | DATCOM 批量计算主脚本：读输入总表 → 生成 `for005.dat` → 调用 `datcom.exe` → 解析系数 → 写系数表与参数快照，并调用 `report.py` 出几何核对产物 |
 | `report.py` | 几何核对产物：`for022.dat` 反查、`geometry_check.txt` 核对报告、三视图 PNG、CL/CD 与 CN/CA 互校。只读算例目录已有的文件 |
-| `datcom_spec.py` | 两个脚本共用的固定名称与参数表：协议文件名、归档叶子名、单位换算、11 个主尺寸的中文名与卡片落点 |
+| `datcom_spec.py` | 共用常量与纯函数：协议文件名、归档叶子名、单位换算、11 个主尺寸的中文名与卡片落点、基准几何、几何校验 |
+| `demo_cases.py` | `--demo` 用的固定演示几何、来流和算例列表；只被 `01` 在演示分支里懒导入，正式运行不加载 |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
 | `fin_section.py` | 对称舵面截面：可切六边形（`SECTYP = HEX`）或 NACA 四位数，三个参数与外形方程都在这。批量 DATCOM 与点云共用这一份。怎么定参数见文末「四、舵面翼型」 |
 
@@ -94,7 +95,7 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
    写在 `scripts/fin_section.py`，前舵和后舵共用。同一个 `geometry_id` 的 11 个主尺寸必须相同。
    同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
 2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
-   `MISSILE_GEOMETRY`、`MACH_LIST`、`ALPHA_LIST` 和 `CASES` 只在 `--demo` 时使用。
+   演示几何、来流和算例列表在 `scripts/demo_cases.py`（`DEMO_GEOMETRY` 取 `datcom_spec.BASELINE_GEOMETRY`），只在 `--demo` 时使用。
 3. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
 4. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
    同一个 `geometry_id` 的气动系数只保留 `<geometry_id>_aero_coefficients.csv` 一张表，
@@ -116,7 +117,7 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 python scripts/01_batch_datcom.py --list          # 只看输入总表里的算例与工况
 python scripts/01_batch_datcom.py --dry-run       # 按总表生成 for005.dat 与几何核对图，不调用 DATCOM
 python scripts/01_batch_datcom.py                 # 读取 data_lib/inputs/cases.csv 并计算
-python scripts/01_batch_datcom.py --demo          # 用脚本顶部的演示几何和来流，不读总表
+python scripts/01_batch_datcom.py --demo          # 用 demo_cases.py 的演示几何和来流，不读总表
 python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 ```
 
@@ -125,7 +126,9 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 ### 2. 批量扩展
 
 - 多组几何对比：在 `data_lib/inputs/cases.csv` 里为新几何另起一个 `geometry_id`，并写全它的来流组合。
-- 演示单组几何：加 `--demo`，此时才使用脚本顶部的 `CASES`。
+- 演示单组几何：加 `--demo`，此时才使用 `scripts/demo_cases.py` 里的 `DEMO_CASES`；
+  演示算例的产物同样写到 `../data_lib/runs/low/<算例名>/`，但目录名不是总表里的 `geometry_id`，
+  验证完请手动删掉那次目录。
 - 一个 `geometry_id` 加一个 `altitude_m` = 一次 DATCOM 调用，结果落在 `../data_lib/runs/low/<geometry_id>/`。
 
 ### 3. Git 管理

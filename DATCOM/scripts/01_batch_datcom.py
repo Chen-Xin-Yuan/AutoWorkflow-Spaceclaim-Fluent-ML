@@ -4,8 +4,8 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
 ================================================
 输入：data_lib/inputs/cases.csv（输入总表）。同一个 geometry_id、同一个
       altitude_m 的各行合成一次 DATCOM 调用；马赫数和攻角只取表里写出的组合。
-      文件顶部的 MISSILE_GEOMETRY、MACH_LIST、ALPHA_LIST、CASES，以及
-      --params / --mach / --alpha / --alt，只在 --demo 时使用，用来演示单组基准几何。
+      --demo 与 --params / --mach / --alpha / --alt 用 scripts/demo_cases.py 里
+      固定的演示几何与来流，不读总表，只用于改码后的冒烟与快速对比。
 输出：data_lib/runs/low/<geometry_id>/。datcom.exe 运行时的工作目录是
       data_lib/runs/low/.work，里面仍用 for005.dat、for006.dat、for022.dat。
       算例写完后，这些文件改名为 <geometry_id>_for005.dat 等。气动系数只写一张
@@ -16,7 +16,7 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
     python 01_batch_datcom.py                       # 读取输入总表并计算
     python 01_batch_datcom.py --list                # 只看总表里的算例与工况
     python 01_batch_datcom.py --dry-run             # 只生成 for005.dat 不调用 datcom
-    python 01_batch_datcom.py --demo                 # 用顶部演示参数，不读总表
+    python 01_batch_datcom.py --demo                 # 用 demo_cases.py 的演示参数，不读总表
     python 01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 
 几何参数（11 项，单位 m，字段名与 README / 建模程序一致）：
@@ -73,8 +73,9 @@ import pandas as pd
 
 from datcom_spec import (
     CSV_NAME, DATCOM_LOG_NAME, FIN_DISPLAY_NAME, FOR005_NAME, FOR006_NAME,
-    FOR022_NAME, GEOMETRY_CN_NAMES, INPUT_REDIRECT, M_TO_FT, M_TO_IN,
-    PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, WORK_SUBDIR, archived_filename,
+    BASELINE_GEOMETRY, FOR022_NAME, GEOMETRY_CN_NAMES, INPUT_REDIRECT, M_TO_FT,
+    M_TO_IN, PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, WORK_SUBDIR, archived_filename,
+    normalize_geometry,
 )
 from fin_section import FIN_SECTION as DEFAULT_FIN_SECTION, resolve_fin_section
 from report import (
@@ -101,8 +102,8 @@ RESULT_ROOT = os.path.join(WORKSPACE_ROOT, "data_lib", "runs", "low")
 # 输入总表：正式运行只读这一张表。路径相对工作区根。
 # 同一个 geometry_id 加同一个 altitude_m 单元格合成一次调用。
 # 输出：RESULT_ROOT/<geometry_id>/；中间文件：RESULT_ROOT/WORK_SUBDIR/。
-# 下方 MISSILE_GEOMETRY / MACH_LIST / ALPHA_LIST / CASES 与 --params / --mach /
-# --alpha / --alt 都是演示入口，只有加上 --demo 才会使用。
+# 演示入口（--demo 及其 --params / --mach / --alpha / --alt）用的是
+# scripts/demo_cases.py 里的固定几何与来流，正式运行不会加载它。
 INPUT_TABLE = os.path.join(WORKSPACE_ROOT, "data_lib", "inputs", "cases.csv")
 MASTER_TABLE_COLUMNS = (
     "geometry_id", "condition_id",
@@ -115,38 +116,9 @@ MASTER_TABLE_COLUMNS = (
 # 单算例超时（秒）。一次 30 个工况通常几秒到几十秒。
 TIMEOUT_SECONDS = 300
 
-# -----------------------------------------------------------------------------
-# 1.1 几何参数（README「几何参数定义与范围」，单位 m）
-# -----------------------------------------------------------------------------
-# 演示用基准几何。正式计算不读这里，只在 --demo 时使用。
-MISSILE_GEOMETRY = {
-    "L_N": 0.49,    # 鼻锥长度
-    "L": 3.69,      # 轴向总长
-    "D": 0.18,      # 机身直径
-    "L_W": 1.72,    # 前十字舵轴向位置（弹尖 → 舵根可见前缘）
-    "C_RW": 0.23,   # 前十字舵根弦长
-    "C_TW": 0.06,   # 前十字舵梢弦长
-    "B_W": 0.23,    # 前十字舵展长（从弹体表面向外量）
-    "L_F": 3.20,    # 后十字舵轴向位置
-    "C_RF": 0.38,   # 后十字舵根弦长
-    "C_TF": 0.19,   # 后十字舵梢弦长
-    "B_F": 0.22,    # 后十字舵展长（从弹体表面向外量）
-}
 
 # -----------------------------------------------------------------------------
-# 1.2 来流条件（README「来流参数与工况组合」）
-# -----------------------------------------------------------------------------
-# 演示用来流。正式计算的马赫数和攻角来自输入总表，不读这两份列表。
-MACH_LIST = [0.80, 0.84, 0.88, 0.92, 0.96, 1.00]
-ALPHA_LIST = [4.0, 4.5, 5.0, 5.5, 6.0]
-
-# 飞行高度（m）。DATCOM 的 ALT 卡片按英尺读，脚本自动换算；
-# 5000 m 会同时改变大气密度 / 音速与雷诺数，进而影响各系数。
-# 0.0 = 海平面。
-ALTITUDE_M = 000.0
-
-# -----------------------------------------------------------------------------
-# 1.3 可选建模约定（一般不用改）
+# 1.1 可选建模约定（一般不用改）
 # -----------------------------------------------------------------------------
 # 舵面梯形的前后缘对齐方式：trailing_aligned（后缘对齐）/ leading_aligned /
 # symmetric。与建模程序的 le_mode 一致，默认后缘对齐。
@@ -162,28 +134,12 @@ CRUCIFORM_COUNT = 4
 XCG_M = None
 
 # 舵面翼型。类型与三个默认值在 scripts/fin_section.py 顶部（SECTION_TYPE 选
-# "HEX" 或 "NACA"），点云脚本使用同一份。演示算例可在 CASES 里用 "fin_section"
-# 字典覆盖其中几项，键名与所选截面类型的字段相同。
+# "HEX" 或 "NACA"），点云脚本使用同一份。演示算例可在 demo_cases.py 的
+# DEMO_CASES 里用 "fin_section" 字典覆盖其中几项，键名与字段相同。
 FIN_SECTION = DEFAULT_FIN_SECTION
 
 # -----------------------------------------------------------------------------
-# 1.4 算例批量配置（每个元素 = 一个算例 = 结果根下的一个 <name>\ 目录）
-# -----------------------------------------------------------------------------
-# 演示算例，仅 --demo 使用。正式运行按输入总表的 geometry_id 分组。
-# "geometry" 里只需写要改的项，其余沿用 MISSILE_GEOMETRY；
-# 可选 "mach" / "alpha" / "alt" 覆盖演示来流。
-# 示例（把下面注释打开即可做几何对比）：
-#     {"name": "longer_nose", "geometry": {**MISSILE_GEOMETRY, "L_N": 0.60}},
-#     {"name": "bigger_rear_fin", "geometry": {"B_F": 0.25, "C_TF": 0.22}},
-CASES = [
-    {
-        "name": "readme_baseline",   # README 基准几何 + 全部 30 个来流工况
-        "geometry": MISSILE_GEOMETRY,
-    },
-]
-
-# -----------------------------------------------------------------------------
-# 1.5 输出内容配置（CSV 表头用中文，方便直接看懂）
+# 1.2 输出内容配置（CSV 表头用中文，方便直接看懂）
 # -----------------------------------------------------------------------------
 # 需要输出到 aero_coefficients.csv 的气动系数：(DATCOM 输出列名, CSV 中文表头)。
 # 默认只要升力 / 阻力 / 俯仰力矩；想要更多系数在这里加一行即可（列名见 for006.dat
@@ -259,70 +215,6 @@ def _num(value):
 def _num_list(values):
     """把数值序列格式化成 ``a,b,c`` 的 DATCOM 数组写法。"""
     return ",".join(_num(v) for v in values)
-
-
-def normalize_geometry(raw):
-    """
-    校验并规整 11 个主尺寸（单位 m）。
-
-    Returns
-    -------
-    (geometry, notes) : geometry 为 float 字典；notes 为自动修正 / 提示文本列表。
-
-    Raises
-    ------
-    ValueError
-        缺参数、非数值或几何不自洽时，一次性列出全部问题。
-    """
-    errors = []
-    geometry = {}
-    for key in REQUIRED_GEOMETRY_KEYS:
-        if key not in raw or raw[key] is None or raw[key] == "":
-            errors.append(f"缺少几何参数 {key}。")
-            continue
-        try:
-            geometry[key] = float(raw[key])
-        except (TypeError, ValueError):
-            errors.append(f"几何参数 {key} 必须是数值，收到 {raw[key]!r}。")
-    if errors:
-        raise ValueError("\n".join(errors))
-
-    notes = []
-    # 与建模程序一致：非负但小于 1 mm 的梢弦抬到 1 mm，否则梢边退化、DATCOM 会算错
-    for key in ("C_TW", "C_TF"):
-        if 0 <= geometry[key] < MIN_TIP_CHORD_M:
-            notes.append(
-                f"{key} = {geometry[key]:g} m 小于 {MIN_TIP_CHORD_M} m，"
-                f"按建模程序约定抬到 {MIN_TIP_CHORD_M} m。"
-            )
-            geometry[key] = MIN_TIP_CHORD_M
-
-    def need(condition, message):
-        if not condition:
-            errors.append(message)
-
-    g = geometry
-    need(g["L_N"] > 0, "鼻锥长度 L_N 必须大于 0。")
-    need(g["L"] > 0, "轴向总长 L 必须大于 0。")
-    need(g["D"] > 0, "机身直径 D 必须大于 0。")
-    need(g["L_N"] < g["L"], f"鼻锥长度 L_N ({g['L_N']:g}) 必须小于总长 L ({g['L']:g})。")
-    need(g["D"] < g["L"], f"机身直径 D ({g['D']:g}) 必须小于总长 L ({g['L']:g})。")
-    for root, tip, span in (("C_RW", "C_TW", "B_W"), ("C_RF", "C_TF", "B_F")):
-        need(g[root] > 0, f"{root} 必须大于 0。")
-        need(g[span] > 0, f"{span} 必须大于 0。")
-        need(g[tip] >= 0, f"{tip} 不能为负。")
-    need(g["L_W"] >= g["L_N"], f"前舵轴向位置 L_W ({g['L_W']:g}) 必须不早于锥柱交接处 L_N ({g['L_N']:g})。")
-    need(g["L_W"] + g["C_RW"] <= g["L"], "前舵超出弹尾：L_W + C_RW 必须不大于 L。")
-    need(g["L_F"] >= g["L_N"], f"后舵轴向位置 L_F ({g['L_F']:g}) 必须不早于锥柱交接处 L_N ({g['L_N']:g})。")
-    need(g["L_F"] + g["C_RF"] <= g["L"], "后舵超出弹尾：L_F + C_RF 必须不大于 L。")
-    need(
-        g["L_W"] + g["C_RW"] <= g["L_F"],
-        f"前后舵重叠：L_W + C_RW ({g['L_W'] + g['C_RW']:g}) 必须不大于 L_F ({g['L_F']:g})。",
-    )
-    if errors:
-        raise ValueError("\n".join(errors))
-    return geometry, notes
-
 
 def _fin_le_offset(chord_root, chord_tip, le_mode):
     """按前后缘对齐方式，返回梢弦前缘相对根弦前缘的轴向偏移（m）。"""
@@ -403,9 +295,9 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     (text, meta) : text 为 for005.dat 全文；meta 记录本次实际使用的换算结果。
     """
     if not mach_list:
-        raise ValueError("MACH_LIST 不能为空。")
+        raise ValueError("马赫数列表不能为空。")
     if not alpha_list:
-        raise ValueError("ALPHA_LIST 不能为空。")
+        raise ValueError("攻角列表不能为空。")
 
     section = resolve_fin_section(FIN_SECTION if fin_section is None else fin_section)
 
@@ -885,9 +777,9 @@ def run_one_case(case, work_dir):
     """
     name = case["name"]
     geometry = case["geometry"]
-    mach_list = case.get("mach", MACH_LIST)
-    alpha_list = case.get("alpha", ALPHA_LIST)
-    altitude_m = case.get("alt", ALTITUDE_M)
+    mach_list = case["mach"]
+    alpha_list = case["alpha"]
+    altitude_m = case["alt"]
 
     # 1) 生成 for005 文本（11 个主尺寸 + 来流条件 → DATCOM 卡片）
     for005_text, meta = build_for005(
@@ -904,7 +796,7 @@ def run_one_case(case, work_dir):
     os.makedirs(out_dir, exist_ok=True)
     print_geometry_brief(meta)
     geom_txt, geom_png, checks = write_geometry_outputs(
-        out_dir, name, meta, for005_text, baseline=MISSILE_GEOMETRY)
+        out_dir, name, meta, for005_text, baseline=BASELINE_GEOMETRY)
     bad = [msg for ok, msg in checks if not ok]
     print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过 → "
           f"{os.path.basename(geom_txt)}" + (f" + {os.path.basename(geom_png)}" if geom_png else ""))
@@ -1191,29 +1083,6 @@ def load_cases_from_master_table(path):
     return cases
 
 
-def _case_from_geometry(name, geometry, case=None, strict=False):
-    """
-    构造一个算例。
-
-    strict=False 时 geometry 只需写要改的项（其余沿用 MISSILE_GEOMETRY）；
-    strict=True（--params 的 JSON 参数文件）要求 11 个主尺寸齐全，避免拼写错误
-    被默认值悄悄兜住。
-    """
-    raw = dict(geometry or {})
-    if strict:
-        missing = [key for key in REQUIRED_GEOMETRY_KEYS if key not in raw]
-        if missing:
-            raise ValueError(f"参数文件缺少几何字段: {', '.join(missing)}")
-    merged = dict(MISSILE_GEOMETRY)
-    merged.update(raw)
-    normalized, notes = normalize_geometry(merged)
-    for note in notes:
-        print(f"[INFO] 算例 '{name}': {note}")
-    case = dict(case or {})
-    case.update({"name": name, "geometry": normalized})
-    return case
-
-
 def build_cases(args):
     """
     构造算例列表。每一项是一个 dict，键的含义就是全脚本对「算例」的定义：
@@ -1226,84 +1095,33 @@ def build_cases(args):
         le_mode / fin_phase / cruciform_count / xcg / timeout / fin_section
                           可选覆盖，缺项走文件顶部的默认值
 
-    正式运行只读输入总表。
-
-    --demo 才使用顶部 CASES、MISSILE_GEOMETRY 和命令行里的几何、马赫数、攻角、高度。
+    正式运行只读输入总表。--demo 的整套演示算例在 scripts/demo_cases.py，
+    这里懒导入，正式路径不会加载它。
     """
-    if not args.demo:
-        demo_switches = []
-        if args.params:
-            demo_switches.append("--params")
-        if args.mach:
-            demo_switches.append("--mach")
-        if args.alpha:
-            demo_switches.append("--alpha")
-        if args.alt is not None:
-            demo_switches.append("--alt")
-        if args.name:
-            demo_switches.append("--name")
-        if demo_switches:
-            raise ValueError(
-                "、".join(demo_switches) + " 只在 --demo 下有效。"
-                "正式运行请把几何和来流写进输入总表：" + INPUT_TABLE
-            )
-        cases = load_cases_from_master_table(INPUT_TABLE)
-        for case in cases:
-            case.setdefault("timeout", args.timeout)
-        return cases
+    if args.demo:
+        import demo_cases
 
-    flow = {}
-    if args.mach:
-        flow["mach"] = [float(m) for m in args.mach]
-    if args.alpha:
-        flow["alpha"] = [float(a) for a in args.alpha]
-    if args.alt is not None:
-        flow["alt"] = float(args.alt)
+        return demo_cases.build(args)
 
-    for key in ("mach", "alpha"):
-        if key in flow and not flow[key]:
-            raise ValueError(f"--{key} 不能为空。")
-    if flow.get("mach") and min(flow["mach"]) <= 0:
-        raise ValueError("马赫数必须大于 0。")
-    if flow.get("alpha") and any(abs(a) >= 90 for a in flow["alpha"]):
-        raise ValueError("攻角（度）的绝对值必须小于 90。")
-    if flow.get("alt", 0.0) < 0:
-        raise ValueError("飞行高度不能为负。")
-
-    cases = []
+    demo_switches = []
     if args.params:
-        if args.name and len(args.params) != 1:
-            raise ValueError("--name 只能和单个 --params 文件一起使用。")
-        for path in args.params:
-            # utf-8-sig：兼容 Windows 记事本 / PowerShell 写出的带 BOM 的 JSON
-            with open(path, "r", encoding="utf-8-sig") as f:
-                raw = json.load(f)
-            unknown = [k for k in raw if k not in REQUIRED_GEOMETRY_KEYS]
-            if unknown:
-                print(f"[INFO] {os.path.basename(path)}: 忽略非几何字段 {', '.join(unknown)}")
-            stem = os.path.splitext(os.path.basename(path))[0]
-            name = args.name or re.sub(r"[^0-9A-Za-z._-]+", "_", stem).strip("_") or "case"
-            case = _case_from_geometry(name, raw, dict(flow), strict=True)
-            cases.append(case)
-    else:
-        for entry in CASES:
-            if not isinstance(entry, dict) or "name" not in entry:
-                raise ValueError("CASES 的每个元素必须是含 'name' 的字典。")
-            case = _case_from_geometry(entry["name"], entry.get("geometry", {}),
-                                       {k: v for k, v in entry.items()
-                                        if k not in ("name", "geometry")})
-            case.update({k: v for k, v in flow.items() if k not in case})
-            cases.append(case)
+        demo_switches.append("--params")
+    if args.mach:
+        demo_switches.append("--mach")
+    if args.alpha:
+        demo_switches.append("--alpha")
+    if args.alt is not None:
+        demo_switches.append("--alt")
+    if args.name:
+        demo_switches.append("--name")
+    if demo_switches:
+        raise ValueError(
+            "、".join(demo_switches) + " 只在 --demo 下有效。"
+            "正式运行请把几何和来流写进输入总表：" + INPUT_TABLE
+        )
 
-    # 算例名唯一的校验：同名会写到同一个结果目录
-    seen = set()
+    cases = load_cases_from_master_table(INPUT_TABLE)
     for case in cases:
-        if case["name"] in seen:
-            raise ValueError(f"算例名重复: {case['name']}（结果会互相覆盖）")
-        seen.add(case["name"])
-        case.setdefault("mach", MACH_LIST)
-        case.setdefault("alpha", ALPHA_LIST)
-        case.setdefault("alt", ALTITUDE_M)
         case.setdefault("timeout", args.timeout)
     return cases
 
@@ -1320,16 +1138,17 @@ def parse_args(argv=None):
                "datcom.exe 运行时使用 data_lib/runs/low/.work 里的 for005.dat。",
     )
     parser.add_argument("--demo", action="store_true",
-                        help="使用文件顶部的演示几何、来流和 CASES，不读取输入总表。"
+                        help="使用 scripts/demo_cases.py 里的演示几何、来流和算例，不读取输入总表。"
                              "--params、--mach、--alpha、--alt、--name 只在此模式下有效。")
     parser.add_argument("--params", nargs="+", metavar="JSON",
                         help="仅 --demo：几何参数 JSON（11 个主尺寸，单位 m），每个文件一个算例。")
     parser.add_argument("--name", help="仅 --demo：算例名，只能和单个 --params 文件一起使用。")
     parser.add_argument("--mach", nargs="+", type=float,
-                        help=f"仅 --demo：覆盖马赫数列表（演示默认 {MACH_LIST}）。")
+                        help="仅 --demo：覆盖马赫数列表（默认见 demo_cases.DEMO_MACH）。")
     parser.add_argument("--alpha", nargs="+", type=float,
-                        help=f"仅 --demo：覆盖攻角列表（度，演示默认 {ALPHA_LIST}）。")
-    parser.add_argument("--alt", type=float, help=f"仅 --demo：覆盖飞行高度（m，默认 {ALTITUDE_M}）。")
+                        help="仅 --demo：覆盖攻角列表（度，默认见 demo_cases.DEMO_ALPHA）。")
+    parser.add_argument("--alt", type=float,
+                        help="仅 --demo：覆盖飞行高度（m，默认见 demo_cases.DEMO_ALTITUDE）。")
     parser.add_argument("--dry-run", action="store_true",
                         help="只生成输入卡片到 data_lib/runs/low/<算例名>/，不调用 datcom。")
     parser.add_argument("--list", action="store_true", help="列出算例与工况组合后退出。")
@@ -1408,7 +1227,7 @@ def main(argv=None):
                 f.write(text)
             print_geometry_brief(meta)
             geom_txt, geom_png, checks = write_geometry_outputs(
-                out_dir, case["name"], meta, text, baseline=MISSILE_GEOMETRY)
+                out_dir, case["name"], meta, text, baseline=BASELINE_GEOMETRY)
             bad = [msg for ok, msg in checks if not ok]
             print(f"    几何自检: {len(checks) - len(bad)}/{len(checks)} 项通过")
             for msg in bad:
