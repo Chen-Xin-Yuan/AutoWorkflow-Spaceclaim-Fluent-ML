@@ -24,8 +24,8 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
     L_W  前舵轴向位置（弹尖到舵根前缘）  C_RW 前舵根弦  C_TW 前舵梢弦  B_W 前舵展长
     L_F  后舵轴向位置                  C_RF 后舵根弦  C_TF 后舵梢弦  B_F 后舵展长
 
-不进输入总表的设计数据（鼻锥头型、舵面布局、基准几何）在 scripts/missile_spec.py，
-翼型参数在 scripts/fin_section.py，二者都由点云脚本 04 共用同一份。
+不进输入总表的设计数据（鼻锥头型、舵面翼型、舵面布局、基准几何）集中在
+scripts/missile_spec.py 前部的配置区，点云脚本 04 共用同一份。
 
 DATCOM 建模约定（改动前务必读）：
     1. DATCOM 输入用英寸（DIM IN），脚本内部一律用 m 计算，写卡片时换算。
@@ -49,10 +49,10 @@ DATCOM 建模约定（改动前务必读）：
        力矩参考点 XCG 默认取 L/2（可用 missile_spec.XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
-    9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/fin_section.py：
-       默认六边形（SECTYP = HEX，LER/ZUPPER/LMAXU/LFLATU 四个数组直接写进
-       $FINSET，文件末尾不再有 NACA 卡）；也可以切成 NACA 四位数（SECTYP =
-       NACA，截面写在末尾的 NACA-1-4-... 控制卡上）。两套舵面共用同一截面，
+    9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/missile_spec.py 前部的
+       1.2 配置区：默认六边形（SECTYP = HEX，LER/ZUPPER/LMAXU/LFLATU 四个数组
+       直接写进 $FINSET，文件末尾不再有 NACA 卡）；也可以切成 NACA 四位数
+       （SECTYP = NACA，截面写在末尾的 NACA-1-4-... 控制卡上）。两套舵面共用同一截面，
        点云脚本导入同一份参数。
 
 运行产物（`data_lib/runs/low/<geometry_id>/`）逐个文件列在 README「一、核心工作目录」的
@@ -83,10 +83,9 @@ from datcom_spec import (
     M_TO_IN, PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, WORK_SUBDIR, archived_filename,
     normalize_geometry,
 )
-from fin_section import resolve_fin_section
 from missile_spec import (
     BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE, FIN_SECTION, LE_MODE, NOSE_SHAPE,
-    XCG_M, fin_roll_angles, resolve_nose_shape,
+    XCG_M, fin_roll_angles, resolve_fin_section, resolve_nose_shape,
 )
 from report import (
     append_coefficient_check, append_tecplot_geometry_check, check_tecplot_geometry,
@@ -130,12 +129,13 @@ TIMEOUT_SECONDS = 300
 # -----------------------------------------------------------------------------
 # 1.1 不进输入总表的外形数据（定义在 scripts/missile_spec.py，一般不用改）
 # -----------------------------------------------------------------------------
-# 鼻锥头型、锥顶倒角、舵面布局、基准几何都放在 missile_spec.py，点云脚本 04 共用
-# 同一份，改那一处两边同时生效；舵面翼型三参数在 scripts/fin_section.py。
+# 鼻锥头型、锥顶倒角、舵面翼型三参数、舵面布局、基准几何都在 missile_spec.py 前部
+# 的配置区，点云脚本 04 共用同一份，改那一处两边同时生效。
 # 本脚本只在 import 处引用，不在这里维护第二份默认值：
 #     from missile_spec import (BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE,
 #                               FIN_SECTION, LE_MODE, NOSE_SHAPE, XCG_M, ...)
-# 想换头型（ogive / cone）、对齐方式或基准几何，请直接改 missile_spec.py。
+# 想换头型（ogive / cone）、翼型（HEX / NACA）、对齐方式或基准几何，
+# 请直接改 missile_spec.py。
 
 # -----------------------------------------------------------------------------
 # 1.2 输出内容配置（CSV 表头用中文，方便直接看懂）
@@ -164,9 +164,9 @@ CSV_FLOW_NAMES = {
 MIN_TIP_CHORD_M = 0.001          # 梢弦下限，与建模程序一致（0 会退化）
 
 
-# 舵面翼型也进系数表：翼型由 scripts/fin_section.py 的三个参数（截面类型可选）
-# 决定，同一个 geometry_id 的所有工况共用一副截面。表里带上这几列，才能直接
-# 看出这批系数对应哪种截面，不必再去翻 case_params.json。
+# 舵面翼型也进系数表：翼型由 scripts/missile_spec.py 顶部 1.2 节的三个参数
+# （截面类型可选 HEX / NACA）决定，同一个 geometry_id 的所有工况共用一副截面。
+# 表里带上这几列，才能直接看出这批系数对应哪种截面，不必再去翻 case_params.json。
 # 列名随截面类型变化，由截面类的 CSV_COLUMNS 给出（见 build_for005 写进 meta 的
 # fin_section_columns），这里不再维护第二份表头。
 
@@ -287,7 +287,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     if not alpha_list:
         raise ValueError("攻角列表不能为空。")
 
-    section = resolve_fin_section(FIN_SECTION if fin_section is None else fin_section)
+    section = resolve_fin_section(fin_section, FIN_SECTION)
     nose = resolve_nose_shape(nose_shape)
 
     g = geometry

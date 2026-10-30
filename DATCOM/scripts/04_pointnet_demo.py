@@ -28,8 +28,9 @@
         根部弦长 c_root > 梢部弦长 c_tip；前缘后掠量 sweep_le ≡ c_root - c_tip，
         由前者自动派生（不单独填参数），保证后缘始终垂直于弹轴。
     建模方式: 在子午面 (x, r) 内画侧视梯形（根部贴在弹体圆柱表面上），
-    厚度按对称截面（六边形或 NACA）加在周向。翼型参数见 scripts/fin_section.py，
-    与批量 DATCOM 使用同一份，根梢只是同一剖面按当地弦长缩放。
+    厚度按对称截面（六边形或 NACA）加在周向。翼型参数与头型都在
+    scripts/missile_spec.py 前部的配置区，与批量 DATCOM 使用同一份，
+    根梢只是同一剖面按当地弦长缩放。
 
 采样: 默认按 CFD 关键部位加密，总点数不变。舵面、前缘/后缘、根梢、锥顶倒角、
       头锥肩部、舵身交界和尾部底缘比大面积弹身更密。各组仍单独采样，4 片舵面
@@ -70,11 +71,10 @@ from pathlib import Path
 
 import numpy as np
 
-from fin_section import FinSection
 from missile_spec import (
     BASELINE_GEOMETRY, FIN_AZIMUTH_DEG, FIN_SECTION, LE_MODE, NOSE_SEGMENTS,
-    NOSE_SHAPE, NOSE_TIP_FILLET_RADIUS, NOSE_TIP_FILLET_RATIO, NoseProfile, NoseShape,
-    resolve_nose_shape,
+    NOSE_SHAPE, NOSE_TIP_FILLET_RADIUS, NOSE_TIP_FILLET_RATIO, FinSection, NoseProfile,
+    NoseShape, resolve_nose_shape,
 )
 
 # --------------------------------------------------------------------------- #
@@ -93,10 +93,9 @@ MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
 
-# 舵面截面与批量 DATCOM 共用 scripts/fin_section.py 顶部的类型开关和三个参数；
-# 头型、舵面布局、基准几何与批量 DATCOM 共用 scripts/missile_spec.py。
-# 改截面类型 / 头型时只改那两个模块的顶部，这里不要再写第二份默认值。
-# FIN_SECTION 由 missile_spec 转出（唯一来源在 fin_section.py），截面保持上下对称。
+# 头型、舵面翼型、舵面布局、基准几何全部来自 scripts/missile_spec.py 前部的配置区，
+# 与批量 DATCOM 共用同一份：改那一处，两边同时生效。这里不要再写第二份默认值。
+# 截面保持上下对称（FIN_SECTION / FinSection 由 missile_spec 提供）。
 DEFAULT_N_POINTS = 16384
 DEFAULT_SEED = 0
 DEFAULT_GAUSS = 0.0
