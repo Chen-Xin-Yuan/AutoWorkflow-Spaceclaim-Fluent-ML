@@ -30,7 +30,7 @@
 
 舵面翼型参数一共 3 个，但具体是哪 3 个取决于截面类型。DATCOM 与点云的默认截面是**对称六边形**（弯度 0，中弧与弦线重合）；也可以切成对称 NACA 四位数。基准值就是 `DATCOM/scripts/missile_spec.py` 前部 1.2 配置区的默认值。控制卡写法见 [DATCOM 说明](DATCOM/README.md) 的「四、舵面翼型」。
 
-鼻锥头型不属于这 14 个参数：默认是切线卵形（DATCOM `TNOSE = OGIVE`，也是不写 `TNOSE` 时的默认），可在同一个 `DATCOM/scripts/missile_spec.py` 配置区切成直线圆锥（`TNOSE = CONE`）。同一外形下两种头型的系数不同（Ma 0.8、α 4°：CL 2.229 / CD 0.430 / CM −5.712 对 CL 2.210 / CD 0.431 / CM −5.893），历史结果只在头型相同时可比。详见 [DATCOM 说明](DATCOM/README.md) 的「五、鼻锥头型」。
+鼻锥头型不属于这 14 个参数：在同一个 `DATCOM/scripts/missile_spec.py` 配置区用 `NOSE_SHAPE` 选切线卵形（`TNOSE = OGIVE`，也是 DATCOM 不写 `TNOSE` 时的默认头型）或直线圆锥（`TNOSE = CONE`）。同一外形下两种头型的系数不同（Ma 0.8、α 4°：CL 2.229 / CD 0.430 / CM −5.712 对 CL 2.210 / CD 0.431 / CM −5.893），历史结果只在头型相同时可比。详见 [DATCOM 说明](DATCOM/README.md) 的「五、鼻锥头型」。
 
 | 截面 | 设计变量 | 定义 | 允许值 | 基准 |
 |---|---|---|---|---|
@@ -148,7 +148,7 @@ SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `inputs/` | 目录 | 参数与原始输入：`cases.csv` 的几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`）。翼型三项在 `DATCOM/scripts/missile_spec.py` 前部配置区，几何参数共 14 个。另有 `missile_params_example.json`、`params_mine.json` |
+| `inputs/` | 目录 | 参数与原始输入：目前只有 `cases.csv`，几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`），末列 `origin` 记录来源（当前都是 `human`），DATCOM 脚本不读取这一列。翼型三项在 `DATCOM/scripts/missile_spec.py` 前部配置区，几何参数共 14 个。示例参数 JSON 不随仓库保存，避免与总表、配置区形成第三份参数 |
 | `queues/` | 目录 | 阶段队列与训练轮次：`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`。记录仍为空 |
 | `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，外形由 14 个几何参数决定，点数和最终格式仍待定 |
 | `runs/` | 目录 | 高保真 `high/<run-id>/<阶段>/`，低保真 `low/<geometry_id>/`。运行产物不入库，说明文件入库 |
@@ -304,12 +304,13 @@ SpaceClaim MCP 可使用 `.\scripts\run.ps1 spaceclaim-mcp`，其标准输出保
 
 ```powershell
 node .\spaceclaim\scripts\missile.mjs --list
-node .\spaceclaim\scripts\missile.mjs --preset .\data_lib\inputs\missile_params_example.json
+node .\spaceclaim\scripts\missile.mjs --preset .\my.json --generate-only
 ```
 
-`data_lib/inputs/missile_params_example.json` 填写[几何参数表](#几何参数定义与范围)中的 11 个主尺寸基准值
-（`L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`）。翼型使用同一节里的三个基准值。
-其余几何与区域配置沿用旧版默认值，仍可逐项覆盖。仅生成脚本的运行记为 `GENERATED`，`runtimeVerified` 恒为 false。
+预设 JSON 要自己准备：工作区不保存示例副本，避免与 `data_lib/inputs/cases.csv`、`DATCOM/scripts/missile_spec.py`
+形成第三份参数。字段名与默认值用 `--list` 查，也可以直接复用上一次运行生成的 `params.json`；按[几何参数表](#几何参数定义与范围)
+填 11 个主尺寸（`L_N` `L` `D` `L_W` `C_RW` `C_TW` `B_W` `L_F` `C_RF` `C_TF` `B_F`），翼型用同一节里的三个基准值；
+命令行开关优先于预设。其余几何与区域配置沿用旧版默认值，仍可逐项覆盖。仅生成脚本的运行记为 `GENERATED`，`runtimeVerified` 恒为 false。
 
 ## 数据与回退
 

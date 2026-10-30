@@ -7,7 +7,7 @@
  *
  * 输入：调用方提供的参数/剖面；输出：内存中的派生结果，不读写文件。
  * 常用参数及默认值统一在 missile-schema.mjs 文件前部。
- * `fin_section=naca` 时，翼型方程与 DATCOM/scripts/naca_section.py 的对称 NACA 四位数一致；
+ * `fin_section=naca` 时，翼型方程与 DATCOM/scripts/missile_spec.py 第 4 节 `NacaSection` 的对称 NACA 四位数一致；
  * 下面的参考厚度、前缘系数和后缘斜率是该方程的常数，不是可调设计参数。
  * AIRFOIL_SAMPLES_PER_SIDE 只决定 NACA 放样折线的弦向分辨率。
  * `fin_section=hexagon` 时，剖面是对称六边形，厚度和等厚段起止来自参数集。

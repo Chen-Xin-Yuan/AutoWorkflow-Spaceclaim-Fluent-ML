@@ -84,12 +84,13 @@ AI 可以理解自然语言、选择参数和安排工具调用；普通程序�
 ```powershell
 node scripts/missile.mjs --list
 node scripts/missile.mjs --help
-node scripts/missile.mjs --preset ..\data_lib\inputs\missile_params_example.json --generate-only
+node scripts/missile.mjs --preset my.json --generate-only
 node scripts/missile.mjs --k_nose 0.006 --name missile.scdoc --timeout 300000 --json
 node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 ```
 
-预设文件示例属于工作区数据目录；使用独立检出时需自行准备 JSON 文件。需要另选输出位置时，使用仓库外目录，例如 `--out ..\data_lib\runs`；程序会在其中新建唯一运行子目录。
+预设文件要自己准备：字段名与默认值见 `--list`，也可以直接复用上一次运行生成的 `params.json`；工作区不保存示例副本。
+需要另选输出位置时，使用仓库外目录，例如 `--out ..\data_lib\runs`；程序会在其中新建唯一运行子目录。
 
 | 几何参数 | 含义 | 默认值 |
 | --- | --- | --- |
@@ -102,7 +103,7 @@ node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 | `k_nose` | 锥柱交接倒圆半径 / `L` | 0.005 |
 | `k_tip` | 弹尖球面钝化半径 / `L` | 0.002 |
 
-工作区几何参数一共 14 个：上表前 11 个主尺寸，加上前后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。允许值与 `DATCOM/scripts/naca_section.py` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
+工作区几何参数一共 14 个：上表前 11 个主尺寸，加上前后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。允许值与 `DATCOM/scripts/missile_spec.py` 第 4 节 `NacaSection` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
 
 横截面由 `fin_section` 选择，默认 `naca`。`naca` 是对称 NACA 四位数，按当地弦长缩放，在埋入根部与梢部之间直线放样；此时 `le_radius_index` 和 `max_thickness_tenths` 进入剖面。`hexagon` 是对称六边形：最大厚度仍是 `thickness_percent`，上下表面在 `hex_flat_start` 与 `hex_flat_end` 之间与弦线平行，默认从当地弦长的 20% 到 82.3%。六边形不使用前缘半径指数和最大厚度位置。肩部和后缘的圆弧倒角默认是几何模块中的 `HEX_FILLET_RADIUS_M = 0.001` m（1 mm）。前缘圆弧单独使用 `HEX_FILLET_LE_RADIUS_M = 0.0018` m（1.8 mm）。两者都是绝对长度，不是弦长比例，也不是 schema 里的设计参数。未缩小时验收带为 ±10%。前缘圆弧的最前点和后缘圆弧的最后点落在原来的尖点站位上，并与两侧直线相切，因此按最前点、最后点量得的弦长不变，弹尖到舵面前缘的距离也不变。肩部圆弧与等厚平直段和斜边相切，最大厚度不变。六个尖角各是一条连续圆弧，与相邻直线在接点相切，草图用 `SketchArc.CreateSweepArc` 画出这条圆弧，不是弦，也不是折线。梢部肩圆可能短到内核创建时不留下曲线；这时草图按 `sketchScale` 放大绘制，再用 `Scale.Execute` 绕原点缩回，半径和展向站位仍是真值。`sketchScale` 由 `HEX_FILLET_SKETCH_MIN_ARC_M`（0.0002 m）和 `HEX_FILLET_SKETCH_MIN_SAGITTA_M`（5e-6 m）决定，不是设计参数。六边形舵梢部保持设计梯形的尖角：梢弦与前缘、后缘在设计站位直接相交，不做平面圆弧，也不切角，因此梢弦就是完整的设计梢弦。前舵和后舵与弹体的交接各自做一圈 `ConstantRound`。后舵半径是 `HEX_ROOT_JUNCTION_RADIUS_M = 0.003` m。前舵先试同一半径；径向接缝在默认参数下直接接受 0.003 m，若拒绝则沿 `HEX_ROOT_JUNCTION_PROBE_RADII_M` 降到不低于 `HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M = 0.0015` m 的最大可执行半径，即 1.5–3 mm 之间的 1.5 mm，不收到 1.5 mm 以下。实际半径写入成功目录的 `params.json`。交接边按“中点落在弹体柱面上”选边（`HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M = 0.001` m），前后舵用同一条规则；贴着柱面的局部弹体面不影响判断。每个站位把整圈接缝一次倒圆，不按边长筛掉短边：短边正是肩部圆弧那几段，去掉后链在切向接点断开，试过的 0.2 mm 以上半径全部被内核拒绝；整圈一起倒则后舵 3 mm、前舵 1.5 mm 都能执行。没有逐边降半径的回退，也没有零点几毫米的替代值。设计弦长和弹尖到前缘的距离不变。NACA 不做这两处根部圆角。肩部和后缘保持 1 mm，前缘是 1.8 mm。顺时针标志与弹身倒圆相同。根梢各自按当地弦长建弧，放样后每个尖角沿展向是一张连续圆角面。草图必须新建剖面实体，不能把已有实体交回放样。当地半厚度、弦长或等厚段放不下请求的相切圆角时，该半径收到仍能相切且草图放得下的最大值，并在该剖面的 `filletClamped` 与 `filletClampNote` 中说明。默认前舵梢弦 0.06 m、厚度 4.48% 时半厚度约 1.37 mm，放不下 1.8 mm 前缘圆，只缩小这一处前缘半径；肩部和后缘仍是 1 mm。其余三个默认站位的前缘保持 1.8 mm。**前舵与后舵都保持径向，两者在同一平面内，不斜置。** 早期版本曾把前舵绕弦向轴转过六边形斜边半角（默认约 6.4°），理由是“根部截面与弹体切面平行、夹角为 0°，内核会拒绝该接缝的 `ConstantRound`”。V241 实测推翻了这一前提：径向前舵的接缝同样接受完整 3 mm `ConstantRound`（48 条边、8 个实测圆柱面），与后舵完全相同。斜置因此没有换来任何东西，反而在轴向后视图中让前后舵形成剪刀状双影，所以已彻底移除。`hexagonBevelAngle` 仍用于描述剖面自身的斜边坡度，但不再改变舵面朝向。NACA 剖面不涉及这些根部圆角。放样、圆周阵列和合并与 NACA 相同。
 

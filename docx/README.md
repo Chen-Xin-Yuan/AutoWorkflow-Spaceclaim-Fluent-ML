@@ -1,7 +1,7 @@
 # 文献、说明和技能导航
 
 - `reference_papers/`：原文献目录，文件保留原样。
-- `prompts/`：项目提示词；配套参数位于 `../data_lib/inputs/params_mine.json`。
+- `prompts/`：项目提示词（`prompt_for_sc.md`）；提示词让模型自己写参数 JSON，工作区不保存配套参数文件。
 - `skills/`：完整保留的独立 skill 项目；`skills/Fluent_skill/` 含自身 Git。
 - `dependency-inventory.json`：依赖清单。
 - `task_note.md`：任务笔记。

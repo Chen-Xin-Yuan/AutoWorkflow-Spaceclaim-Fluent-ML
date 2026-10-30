@@ -2,7 +2,7 @@
 
 `DATCOM/scripts/01_batch_datcom.py` 读取 `data_lib/inputs/cases.csv`。同一个 `geometry_id` 加同一个 `altitude_m` 是一次调用。归档写进 `<geometry_id>/`。`datcom.exe` 运行当下使用 `.work`，里面是 `for005.dat`、`for006.dat`、`for022.dat`，算完后删除。
 
-`--demo` 的演示算例也写在这里，但目录名不是总表里的 `geometry_id`，`data_lib/runs/low/README.md` 的目录表不会列出它，验证完请手动删除。
+`--demo` 的演示算例也写在这里，但目录名不是总表里的 `geometry_id`，本文件的目录表不会列出它，验证完请手动删除。
 
 当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07。对应归档是 `1/`。
 

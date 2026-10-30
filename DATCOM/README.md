@@ -7,7 +7,7 @@
 
 DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.dat`。
 
-`for005.dat` 是旧版手工算例模板（六边形截面，默认翼型参数就照它取的）。`01_batch_datcom.py` 不再改写它，
+`for005.dat` 是旧版手工算例模板（六边形截面，早期翼型参数的取值参考过它）。`01_batch_datcom.py` 不再改写它，
 而是按几何、来流和 `scripts/missile_spec.py` 里的截面参数整份生成 `for005.dat`。
 
 不要把算例结果放在这里。`01_batch_datcom.py` 把结果写到 `../data_lib/runs/low/<geometry_id>/`，运行中的协议文件放在 `../data_lib/runs/low/.work/`。
@@ -90,7 +90,8 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 `01_batch_datcom.py` 的入口参数就是工作区 README「参数化方式与来流条件」里的 14 个几何参数和来流条件：
 
 1. 正式输入是工作区的 `data_lib/inputs/cases.csv`。每一行是一个工况，列依次为
-   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`。
+   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`；末列还有 `origin`
+   记录来源（当前都是 `human`），脚本不读取这一列。
    同一个 `geometry_id` 的 11 个主尺寸必须相同。
    同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
    不进总表的外形数据（翼型截面类型与三个参数、鼻锥头型、锥顶倒角、舵面布局、基准几何）
@@ -228,11 +229,12 @@ tan(前缘半楔角) = ZUPPER / LMAXU          截面积 / c² = ZUPPER × (1 + 
 头型和锥顶倒角不属于输入总表，写在 `scripts/missile_spec.py` 前部 1.1 配置区（与翼型、舵面布局、基准几何同一处），`01_batch_datcom.py`（DATCOM 计算）与 `04_pointnet_demo.py`（点云 / CFD）共用这一份，改一处两边同时生效：
 
 ```python
-NOSE_SHAPE = "ogive"        # "ogive" = 切线卵形，"cone" = 直线圆锥
+NOSE_SHAPE = "ogive"            # "ogive" = 切线卵形，"cone" = 直线圆锥
 NOSE_TIP_FILLET_RATIO = 0.004   # 锥顶倒角半径 = 比例 × 总长（只有点云用）
+# 上面只是写法示例，当前取值以 missile_spec.py 1.1 节为准
 ```
 
-- `ogive` 对应 DATCOM 的 `TNOSE = OGIVE`，**也是不写 `TNOSE` 时的默认头型**；`cone` 对应 `TNOSE = CONE`。卡片值只能是 `OGIVE` / `CONE` 两个名字——写成手册里打印的标签 `CONIC` 会让 DATCOM 直接 `FATAL ERROR` 终止。
+- `ogive` 对应 DATCOM 的 `TNOSE = OGIVE`，**也是不写 `TNOSE` 时的默认头型**；`cone` 对应 `TNOSE = CONE`。卡片值只能是 `OGIVE` / `CONE` 两个名字——写成手册里打印的标签 `CONIC` 会让 DATCOM 直接 `FATAL ERROR` 终止。DATCOM 内部把它记成数字：`OGIVE` = 1、`CONE` = 0，`for006.dat` 的派生清单里印的就是 `TNOSE = 1.`。写名字由 DATCOM 自己翻译，**不要直接写数字**——实测 `TNOSE = 2` 会静默换成另一种头型（同一工况 CD 0.430 → 1.180），`5`–`9` 静默退化成圆锥，`-1` 让程序崩掉（退出码 3），带引号的 `'OGIVE'` 一律 `FATAL ERROR`。
 - 两种头型的母线差别：圆锥是直线（`r = R_body·x/L_N`），切线卵形是半径 ρ 的圆弧（`ρ = (L_N² + R_body²)/(2·R_body)`，在肩部与圆柱相切、斜率为 0），同一 `L_N` 下卵形更"饱满"。
 - 同一外形（Ma 0.8，α 4°，六边形舵面）：卵形 CL 2.229 / CD 0.430 / CM −5.712，圆锥 CL 2.210 / CD 0.431 / CM −5.893。换头型会整体改变气动系数，历史结果只在头型相同时可比。
 - `for022.dat` 反查只核对弹体的起止位置、最大半径和舵面几何，不核对头锥母线形状；母线的正确性由 `for005.dat` 的 `TNOSE` 卡片 + `04_pointnet_demo.py` 的自检（球冠相切、斜率连续、网格封闭）保证。
