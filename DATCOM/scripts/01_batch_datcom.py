@@ -118,7 +118,6 @@ WORK_SUBDIR = ".work"
 FOR005_NAME = "for005.dat"        # DATCOM 输入文件名
 INPUT_REDIRECT = "_input.txt"     # shell 重定向应答文件
 FOR006_NAME = "for006.dat"        # DATCOM 输出（首选）
-DATCOM_OUT_NAME = "datcom.out"    # DATCOM 输出（备用名）
 FOR022_NAME = "for022.dat"        # DATCOM 写出的 Tecplot ASCII 几何外形（单位英尺）
 
 # 归档文件的叶子名。算例目录里实际文件名是 <算例名>_<叶子名>。
@@ -280,12 +279,6 @@ GEOMETRY_CARD_HINT = {
 # 两道舵面的中文名（$FINSET1 = 前舵，$FINSET2 = 后舵）
 FIN_DISPLAY_NAME = {1: "前舵", 2: "后舵"}
 
-# namelist 数组变量 -> 计数器变量 的自动联动（仅用于 overrides 高级改写）
-ARRAY_COUNTERS = {
-    "MACH": "NMACH",
-    "ALPHA": "NALPHA",
-    "ALT": "NALT",
-}
 
 # 解析结果的内部列顺序（CSV 只输出 OUTPUT_COEFFICIENTS 里列出的系数）
 PREFERRED_COLUMNS = [
@@ -626,18 +619,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
 
 
 # =============================================================================
-# 4. 输入文件的高级改写（overrides，可选）
+# 4. for005 文本中的 namelist 区域定位（报告与卡片核对用）
 # =============================================================================
-
-def _value_str(value):
-    """把 Python 值格式化成 DATCOM namelist 自由格式文本。"""
-    if isinstance(value, (list, tuple)):
-        return ",".join(_value_str(v) for v in value)
-    if isinstance(value, bool):
-        return "T" if value else "F"
-    if isinstance(value, str):
-        return value          # 原样写入（如 'NACA'、'BODY'）
-    return _num(value)
 
 
 def _find_namelist_region(lines, block_name):
@@ -671,113 +654,6 @@ def _find_namelist_region(lines, block_name):
     if start is not None:
         return start, len(lines)
     return None, None
-
-
-def _replace_or_insert(lines, start, end, var, value_str):
-    """在块区域 lines[start+1:end] 中替换变量行；不存在则插入到闭合行前。"""
-    pat = re.compile(r"^(\s*)" + re.escape(var) + r"(\s*=).*$", re.IGNORECASE)
-    for idx in range(start + 1, end):
-        m = pat.match(lines[idx])
-        if m:
-            lines[idx] = f"{m.group(1)}{var} = {value_str},"
-            return True
-    lines.insert(end, f" {var} = {value_str},")
-    return False
-
-
-def _sync_counter(lines, start, end, var, value):
-    """数组变量给了多值时，若块内有计数器变量（NMACH/NALPHA/NALT）则同步其值。"""
-    if not isinstance(value, (list, tuple)):
-        return
-    cnt = ARRAY_COUNTERS.get(var.upper())
-    if not cnt:
-        return
-    pat = re.compile(r"^(\s*)" + re.escape(cnt) + r"(\s*=).*$", re.IGNORECASE)
-    for idx in range(start + 1, end):
-        m = pat.match(lines[idx])
-        if m:
-            lines[idx] = f"{m.group(1)}{cnt} = {_num(len(value))},"
-            return
-
-
-def render_input(template_text, overrides):
-    """
-    基于输入文本，按 overrides 改写后返回新的 for005 文本。
-
-    overrides: {"块名": {"变量": 值或值列表}, ...}，块名不带 $，变量名不区分大小写。
-    用于覆盖 11 个主尺寸没有建模的 DATCOM 关键字（高级用法，一般留空）。
-    """
-    lines = template_text.splitlines()
-    for block_name, var_map in overrides.items():
-        start, end = _find_namelist_region(lines, block_name)
-        if start is None:
-            existing = sorted({re.sub(r'^\s*\$', '', ln).strip().upper()
-                               for ln in lines
-                               if ln.strip().startswith("$")
-                               and not ln.strip().startswith("$END")})
-            raise ValueError(
-                f"模板中找不到 namelist 块 '${block_name.upper()}'。"
-                f"模板现有的块: {existing}"
-            )
-        for var, value in var_map.items():
-            _replace_or_insert(lines, start, end, var, _value_str(value))
-            _sync_counter(lines, start, end, var, value)
-    return "\n".join(lines) + "\n"
-
-
-def check_fltcon_warnings(for005_text):
-    """
-    对 $FLTCON 做经验性一致性检查，提前暴露会导致 0 结果的配置错误。
-
-    Returns
-    -------
-    list[str]
-    """
-    warns = []
-    lines = for005_text.splitlines()
-    start, end = _find_namelist_region(lines, "FLTCON")
-    if start is None:
-        return warns
-
-    def _row(var):
-        pat = re.compile(r"^(\s*)" + re.escape(var) + r"\s*=(.*)$", re.IGNORECASE)
-        for idx in range(start + 1, end):
-            mt = pat.match(lines[idx])
-            if mt:
-                return mt.group(2)
-        return None
-
-    def _n_values(raw):
-        if raw is None:
-            return None
-        vals = [x for x in raw.rstrip().rstrip(",").strip().split(",") if x.strip()]
-        return len(vals) or None
-
-    def _scalar(raw):
-        if raw is None:
-            return None
-        try:
-            return float(raw.rstrip().rstrip(",").strip())
-        except ValueError:
-            return None
-
-    n_mach = _n_values(_row("MACH"))
-    n_alt = _n_values(_row("ALT"))
-    n_alpha = _n_values(_row("ALPHA"))
-    nmach_v = _scalar(_row("NMACH"))
-    nalpha_v = _scalar(_row("NALPHA"))
-
-    if n_mach and nmach_v is not None and int(nmach_v) != n_mach:
-        warns.append(f"FLTCON: NMACH={nmach_v:g} 与 MACH 实际值个数 {n_mach} 不一致。")
-    if n_alpha and nalpha_v is not None and int(nalpha_v) != n_alpha:
-        warns.append(f"FLTCON: NALPHA={nalpha_v:g} 与 ALPHA 实际值个数 {n_alpha} 不一致。")
-    if n_mach and n_mach > 1 and (n_alt is None or n_alt < n_mach):
-        warns.append(
-            f"FLTCON: MACH 给了 {n_mach} 个值，但 ALT 只有 {n_alt or 0} 个。"
-            "Missile DATCOM 要求每个马赫数对应一组大气条件（ALT 数组需与 MACH 等长），"
-            "否则报 'ATMOSPHERIC CONDITIONS NOT SPECIFIED NMACH TIMES' 且不输出结果。"
-        )
-    return warns
 
 
 def extract_error_hints(result_text, limit=6):
@@ -851,17 +727,16 @@ def run_datcom(exe_path, work_dir, timeout):
 
 def read_result_file(work_dir):
     """
-    读取 DATCOM 结果文件：优先 for006.dat，不存在则回退 datcom.out。
+    读取 DATCOM 结果文件 for006.dat。
 
     Returns
     -------
     tuple (file_path, text) 或 (None, None)
     """
-    for cand in (os.path.join(work_dir, FOR006_NAME),
-                 os.path.join(work_dir, DATCOM_OUT_NAME)):
-        if os.path.exists(cand) and os.path.getsize(cand) > 0:
-            with open(cand, "r", encoding="utf-8", errors="ignore") as f:
-                return cand, f.read()
+    path = os.path.join(work_dir, FOR006_NAME)
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return path, f.read()
     return None, None
 
 
@@ -1082,27 +957,6 @@ def write_summary_csv(path, table):
             order = list(table.columns) + [c for c in merged.columns if c not in table.columns]
             table = merged.reindex(columns=order)
     table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
-
-
-def remove_stale_case_csvs(out_dir, conditions):
-    """删掉旧版本按工况拆出来的单行表。返回实际删除的文件路径。
-
-    同一个 geometry_id 的数据只保留 <geometry_id>_aero_coefficients.csv 一张表，
-    老结果目录里遗留的 <run_id>_datcom.csv 一并清掉，不再分散。
-    """
-    removed = []
-    if not conditions:
-        return removed
-    for item in conditions:
-        target = os.path.join(out_dir, f"{item['run_id']}{LEGACY_CASE_CSV_SUFFIX}")
-        if os.path.isfile(target):
-            try:
-                os.remove(target)
-            except OSError as exc:
-                print(f"[WARN] 无法删除旧的单工况表 {os.path.basename(target)}（{exc}）")
-                continue
-            removed.append(target)
-    return removed
 
 
 _TECPLOT_ZONE = re.compile(r'ZONE\s+T\s*=\s*"([^"]*)"\s*(.*)$', re.IGNORECASE)
@@ -1781,16 +1635,7 @@ def run_one_case(case, work_dir):
         fin_section=case.get("fin_section", FIN_SECTION),
     )
 
-    # 2) 可选的高级改写
-    overrides = case.get("overrides") or {}
-    if overrides:
-        for005_text = render_input(for005_text, overrides)
-
-    # 2.1) 改写后一致性检查（提前暴露会 0 结果的配置问题）
-    for warn in check_fltcon_warnings(for005_text):
-        print(f"[WARN] 算例 '{name}': {warn}")
-
-    # 2.2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
+    # 2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
     out_dir = os.path.join(RESULT_ROOT, name)
     os.makedirs(out_dir, exist_ok=True)
     print_geometry_brief(meta)
@@ -1821,7 +1666,7 @@ def run_one_case(case, work_dir):
     result_path, result_text = read_result_file(work_dir)
     if result_text is None:
         raise RuntimeError(
-            f"算例 '{name}' 未生成结果文件（{FOR006_NAME}/{DATCOM_OUT_NAME}），"
+            f"算例 '{name}' 未生成结果文件 {FOR006_NAME}，"
             f"请检查工作目录 {work_dir} 中的 for005.dat"
         )
 
@@ -1869,13 +1714,11 @@ def run_one_case(case, work_dir):
 
     # 6.1) 系数表：输入参数（中文表头）+ 只要的三个系数。整个几何只写这一张表。
     csv_path = os.path.join(out_dir, archived_filename(name, CSV_NAME))
-    stale_case_csvs = []
     csv_written = False
     if not df.empty:
         table = attach_case_identity(build_output_table(df, meta), case)
         try:
             write_summary_csv(csv_path, table)
-            stale_case_csvs = remove_stale_case_csvs(out_dir, case.get("conditions") or [])
             csv_written = True
         except OSError as exc:
             # 常见原因：CSV 正被 Excel 等程序打开，Windows 上会拒绝写入
@@ -1889,9 +1732,6 @@ def run_one_case(case, work_dir):
         status = append_coefficient_check(geom_txt, df)
         if status:
             print(f"    {status}")
-        if stale_case_csvs:
-            print(f"    已清理旧版单工况表 {len(stale_case_csvs)} 个，"
-                  f"该几何的系数只保留 {os.path.basename(csv_path)}")
 
     # 7) 参数快照：以后想复现某个算例，看这个文件即可
     params = {
@@ -1901,7 +1741,6 @@ def run_one_case(case, work_dir):
         "mass_unit": "m",
         "datcom_input_unit": "in",
         **meta,
-        "overrides": overrides,
     }
     with open(os.path.join(out_dir, archived_filename(name, PARAMS_NAME)), "w", encoding="utf-8") as f:
         json.dump(params, f, ensure_ascii=False, indent=2)
@@ -1912,7 +1751,6 @@ def run_one_case(case, work_dir):
         "expected": expected,
         "out_dir": out_dir,
         "csv_path": csv_path if csv_written else None,
-        "stale_case_csvs": stale_case_csvs,
         "geometry_txt": geom_txt,
         "geometry_png": geom_png,
         "geometry_tecplot": tecplot_path,
@@ -2084,7 +1922,6 @@ def load_cases_from_master_table(path):
                 "alt": altitude_bucket["alt"],
                 "altitude_text": altitude_text,
                 "conditions": conditions,
-                "source": path,
             })
     return cases
 
@@ -2171,8 +2008,7 @@ def build_cases(args):
                 print(f"[INFO] {os.path.basename(path)}: 忽略非几何字段 {', '.join(unknown)}")
             stem = os.path.splitext(os.path.basename(path))[0]
             name = args.name or re.sub(r"[^0-9A-Za-z._-]+", "_", stem).strip("_") or "case"
-            case = _case_from_geometry(name, raw, {**flow, "params_file": path},
-                                       strict=True)
+            case = _case_from_geometry(name, raw, dict(flow), strict=True)
             cases.append(case)
     else:
         for entry in CASES:
@@ -2194,7 +2030,6 @@ def build_cases(args):
         case.setdefault("alpha", ALPHA_LIST)
         case.setdefault("alt", ALTITUDE_M)
         case.setdefault("timeout", args.timeout)
-        case["source"] = "demo"
     return cases
 
 
