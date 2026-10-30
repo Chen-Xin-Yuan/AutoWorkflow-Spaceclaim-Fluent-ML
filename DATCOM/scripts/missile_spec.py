@@ -19,8 +19,8 @@
 
 第 3、4 节是解析式（两种鼻锥头型的母线 / 侧面积 / 倒角相切点，两种舵面翼型的
 外形方程与 DATCOM 卡片文本），第 5 节把配置区的东西组装成可以直接用的对象
-（``FIN_SECTION`` / ``FIN_AZIMUTH_DEG`` / ``resolve_fin_section``，以及第 3 节末尾的
-``resolve_nose_shape``）。这三节都是纯函数与类，正常改参数不需要动。
+（``FIN_SECTION`` / ``FIN_AZIMUTH_DEG``，以及第 3 节末尾的 ``resolve_nose_shape``）。
+这三节都是纯函数与类，正常改参数不需要动；翼型与头型都**不能**按算例覆盖。
 
 本模块没有文件输入输出：DATCOM 的协议名、单位换算、11 个主尺寸的校验在
 ``datcom_spec.py``，路径由调用方给出。
@@ -888,34 +888,3 @@ def fin_roll_angles(fin_phase=FIN_PHASE, count=CRUCIFORM_COUNT):
 
 # 点云脚本按这个元组布 4 片舵；与 01 写进 PHIF 的角度是同一组数。
 FIN_AZIMUTH_DEG = tuple(fin_roll_angles())
-
-# =============================================================================
-# 覆盖入口：把「默认截面 + 增量字典」规整成一个截面对象
-# =============================================================================
-def resolve_fin_section(value, default=FIN_SECTION):
-    """把 ``value`` 规整成截面对象。
-
-    Parameters
-    ----------
-    value : FinSection | dict | None
-        None 用 ``default``；字典只覆盖 ``default`` 同类型的字段
-        （`01_batch_datcom.py` 的 --demo 算例用 ``{"flat_percent": 61.0}`` 这种写法）。
-    default : FinSection
-        当前截面，默认取上面按配置区构造出的 ``FIN_SECTION``。
-    """
-    if value is None or value is default:
-        return default
-    if isinstance(value, FinSection):
-        return value
-    if isinstance(value, dict):
-        fields = tuple(section_field for section_field, _cn in default.CSV_COLUMNS[1:])
-        fields = tuple(name for name in fields if name != "designation")
-        unknown = [key for key in value if key not in fields]
-        if unknown:
-            raise ValueError("fin_section 含不能识别的翼型参数：" + ", ".join(unknown))
-        data = {key: getattr(default, key) for key in fields}
-        data.update(value)
-        return type(default)(**data)
-    raise TypeError(
-        f"fin_section 必须是 {type(default).__name__} 或字典，收到 {type(value).__name__}。"
-    )

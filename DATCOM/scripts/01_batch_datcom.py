@@ -84,8 +84,8 @@ from datcom_spec import (
     normalize_geometry,
 )
 from missile_spec import (
-    BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE, FIN_SECTION, LE_MODE, NOSE_SHAPE,
-    XCG_M, fin_roll_angles, resolve_fin_section, resolve_nose_shape,
+    BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE, FIN_SECTION, LE_MODE,
+    XCG_M, fin_roll_angles, resolve_nose_shape,
 )
 from report import (
     append_coefficient_check, append_tecplot_geometry_check, check_tecplot_geometry,
@@ -261,9 +261,12 @@ def _fin_sweep_card_deg(chord_root, chord_tip, span, le_mode):
 
 def build_for005(geometry, mach_list, alpha_list, altitude_m,
                  xcg_m=None, le_mode=LE_MODE, fin_phase=FIN_PHASE,
-                 cruciform_count=CRUCIFORM_COUNT, fin_section=None, nose_shape=None):
+                 cruciform_count=CRUCIFORM_COUNT):
     """
     按几何参数与来流条件生成完整的 for005.dat 文本。
+
+    翼型与鼻锥头型不在这里传：它们只来自 scripts/missile_spec.py 前部的配置区
+    （``FIN_SECTION`` / ``NOSE_SHAPE``），改那里两边同时生效，算例不能按个例覆盖。
 
     Parameters
     ----------
@@ -275,8 +278,6 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         飞行高度（m），DATCOM 的 ALT 卡片按英尺写入。
     xcg_m : float | None
         力矩参考点（m），None 取 L/2。
-    nose_shape : NoseShape | str | None
-        鼻锥头型，None 取 missile_spec.NOSE_SHAPE（"ogive" / "cone"）。
 
     Returns
     -------
@@ -287,8 +288,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     if not alpha_list:
         raise ValueError("攻角列表不能为空。")
 
-    section = resolve_fin_section(fin_section, FIN_SECTION)
-    nose = resolve_nose_shape(nose_shape)
+    section = FIN_SECTION
+    nose = resolve_nose_shape()
 
     g = geometry
     radius = g["D"] / 2.0
@@ -779,14 +780,13 @@ def run_one_case(case, work_dir):
     altitude_m = case["alt"]
 
     # 1) 生成 for005 文本（11 个主尺寸 + 来流条件 → DATCOM 卡片）
+    #    翼型与头型不按算例覆盖，直接取 missile_spec.py 的当前配置。
     for005_text, meta = build_for005(
         geometry, mach_list, alpha_list, altitude_m,
         xcg_m=case.get("xcg", XCG_M),
         le_mode=case.get("le_mode", LE_MODE),
         fin_phase=case.get("fin_phase", FIN_PHASE),
         cruciform_count=case.get("cruciform_count", CRUCIFORM_COUNT),
-        fin_section=case.get("fin_section", FIN_SECTION),
-        nose_shape=case.get("nose_shape", NOSE_SHAPE),
     )
 
     # 2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
@@ -1090,8 +1090,10 @@ def build_cases(args):
         mach/alpha/alt    来流：马赫数列表、攻角列表（度）、高度（m）
         altitude_text     总表里的高度原值（打印用，可能是字符串）
         conditions        总表这一格的全部 (mach, alpha) 行，CSV 合并时按它对齐
-        le_mode / fin_phase / cruciform_count / xcg / timeout / fin_section
-                          可选覆盖，缺项走文件顶部的默认值
+        le_mode / fin_phase / cruciform_count / xcg / timeout
+                          可选覆盖，缺项走 missile_spec.py 的默认值
+
+    翼型与鼻锥头型不在算例里：它们只来自 scripts/missile_spec.py，算例无法覆盖。
 
     正式运行只读输入总表。--demo 的整套演示算例在 scripts/demo_cases.py，
     这里懒导入，正式路径不会加载它。
@@ -1170,8 +1172,9 @@ def describe_cases(cases):
         print(f"    高度  : {alt_label} m")
         geometry = case["geometry"]
         print("    几何  : " + ", ".join(f"{k}={v:g}" for k, v in geometry.items()))
-        nose = resolve_nose_shape(case.get("nose_shape", NOSE_SHAPE))
+        nose = resolve_nose_shape()
         print(f"    头型  : {nose.label()}（missile_spec.NOSE_SHAPE，点云共用）")
+        print(f"    翼型  : {FIN_SECTION.describe()}")
 
 
 def main(argv=None):
@@ -1218,8 +1221,6 @@ def main(argv=None):
                 le_mode=case.get("le_mode", LE_MODE),
                 fin_phase=case.get("fin_phase", FIN_PHASE),
                 cruciform_count=case.get("cruciform_count", CRUCIFORM_COUNT),
-                fin_section=case.get("fin_section", FIN_SECTION),
-                nose_shape=case.get("nose_shape", NOSE_SHAPE),
             )
             out_dir = os.path.join(RESULT_ROOT, case["name"])
             os.makedirs(out_dir, exist_ok=True)

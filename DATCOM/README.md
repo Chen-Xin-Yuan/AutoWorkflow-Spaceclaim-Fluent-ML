@@ -131,6 +131,9 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
   演示算例的产物同样写到 `../data_lib/runs/low/<算例名>/`，但目录名不是总表里的 `geometry_id`，
   验证完请手动删掉那次目录。
 - 一个 `geometry_id` 加一个 `altitude_m` = 一次 DATCOM 调用，结果落在 `../data_lib/runs/low/<geometry_id>/`。
+- 翼型与鼻锥头型**不能按算例或命令行覆盖**：总表和 `--demo` 算例里都没有这两个字段
+  （`DEMO_CASES` 写了会直接报错），要换就改 `scripts/missile_spec.py`，改完两侧脚本同时生效。
+  换翼型 / 头型后得到的系数与旧结果不可直接比较，记得在系数表里看清「舵面翼型」列。
 
 ### 3. Git 管理
 

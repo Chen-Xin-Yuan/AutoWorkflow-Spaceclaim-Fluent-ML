@@ -13,8 +13,10 @@
     DEMO_ALPHA     命令行没给 --alpha 时的默认攻角列表（度）
     DEMO_ALTITUDE  命令行没给 --alt 时的默认飞行高度（m），0 = 海平面
     DEMO_CASES     算例列表；每项 name + 可选 geometry 增量 / mach / alpha / alt /
-                   le_mode / fin_phase / cruciform_count / xcg / fin_section
+                   le_mode / fin_phase / cruciform_count / xcg
 基准几何是 `missile_spec.BASELINE_GEOMETRY`，与工作区 README 的基准参数表同一份。
+舵面翼型与鼻锥头型**不能**按算例覆盖：它们只来自 `missile_spec.py` 前部的配置区，
+想换翼型 / 头型请改那里（改完两侧脚本同时生效）。
 唯一的外部输入是 --params 指定的几何 JSON（11 个主尺寸，单位 m）。
 """
 
@@ -49,8 +51,15 @@ DEMO_CASES = [
 # 示例（把下面注释放开即可做对比；改完记得验证完删掉演示归档）：
 #     {"name": "longer_nose", "geometry": {"L_N": 0.60}},
 #     {"name": "bigger_rear_fin", "geometry": {"B_F": 0.25, "C_TF": 0.22}},
-#     {"name": "flat_61", "geometry": {}, "fin_section": {"flat_percent": 61.0}},
 #     {"name": "m12_alpha4", "geometry": {}, "mach": [1.2], "alpha": [4.0]},
+# 注意：翼型（HEX / NACA 与三个参数）和鼻锥头型不在算例里，改 missile_spec.py。
+
+# 每个算例允许出现的键（除 name / geometry 外的覆盖项）。
+# 外形类的翼型 / 头型故意不在其中：它们属于 missile_spec.py，不能按算例改。
+CASE_OVERRIDE_KEYS = (
+    "mach", "alpha", "alt", "altitude_text", "xcg", "timeout",
+    "le_mode", "fin_phase", "cruciform_count",
+)
 
 
 def build(args):
@@ -122,6 +131,13 @@ def _cases_from_config(flow):
     for entry in DEMO_CASES:
         if not isinstance(entry, dict) or "name" not in entry:
             raise ValueError("DEMO_CASES 的每个元素必须是含 'name' 的字典。")
+        unknown = [k for k in entry if k not in ("name", "geometry", *CASE_OVERRIDE_KEYS)]
+        if unknown:
+            raise ValueError(
+                f"算例 '{entry['name']}' 含不能识别的键：{', '.join(unknown)}。"
+                f"可用的覆盖键见 CASE_OVERRIDE_KEYS；"
+                f"翼型与鼻锥头型不能按算例改，请改 missile_spec.py。"
+            )
         extra = {k: v for k, v in entry.items() if k not in ("name", "geometry")}
         case = _make_case(entry["name"], entry.get("geometry", {}), extra)
         case.update({k: v for k, v in flow.items() if k not in case})
