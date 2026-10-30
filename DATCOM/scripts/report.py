@@ -25,6 +25,7 @@ from datcom_spec import (
     FOR022_NAME, GEOMETRY_CARD_HINT, GEOMETRY_CN_NAMES, GEOMETRY_PNG_NAME,
     GEOMETRY_TXT_NAME, M_TO_IN, REQUIRED_GEOMETRY_KEYS, archived_filename,
 )
+from missile_spec import resolve_nose_shape
 
 # 报告头里写的脚本名：这份核对报告总是由 01_batch_datcom.py 触发生成的。
 REPORT_SOURCE_SCRIPT = "01_batch_datcom.py"
@@ -266,6 +267,24 @@ def _card_value(lines, block, var, index=0):
     return None
 
 
+def _card_token(lines, block, var):
+    """读 for005 文本里某个 namelist 块内取名称/字符串值的变量（如 ``TNOSE = OGIVE``）。
+
+    数值变量用 `_card_value`；这里专给 ``TNOSE`` 这类"值是名字"的卡片用，
+    读不到返回 None。
+    """
+    start, end = _find_namelist_region(lines, block)
+    if start is None:
+        return None
+    pattern = re.compile(r"^(\s*)" + re.escape(var) + r"\s*=\s*([^,]*)", re.IGNORECASE)
+    for idx in range(start + 1, end):
+        match = pattern.match(lines[idx])
+        if match:
+            token = match.group(2).strip().strip("'\" ").upper()
+            return token or None
+    return None
+
+
 def geometry_self_checks(meta, for005_text):
     """
     逐项比对"实际写进 for005.dat 的卡片值"与"由 11 个主尺寸算出的期望值"。
@@ -293,12 +312,23 @@ def geometry_self_checks(meta, for005_text):
 
     inch = M_TO_IN
 
-    # 1) 弹体：圆锥头部 + 等直径圆柱段
+    # 1) 弹体：头锥（卵形 / 圆锥）+ 等直径圆柱段
     check("$AXIBOD LNOSE", g["L_N"] * inch, _card_value(lines, "AXIBOD", "LNOSE"))
     check("$AXIBOD DNOSE", g["D"] * inch, _card_value(lines, "AXIBOD", "DNOSE"))
     check("$AXIBOD LCENTR", (g["L"] - g["L_N"]) * inch,
           _card_value(lines, "AXIBOD", "LCENTR"))
     check("$AXIBOD DCENTR", g["D"] * inch, _card_value(lines, "AXIBOD", "DCENTR"))
+    # 头型由 TNOSE 卡片决定（值是名字，不是数值），漏写会退回 DATCOM 默认的卵形
+    nose = d.get("nose_shape") or {}
+    if nose.get("datcom_token"):
+        actual = _card_token(lines, "AXIBOD", "TNOSE")
+        ok = actual == nose["datcom_token"].upper()
+        checks.append((
+            ok,
+            f"$AXIBOD TNOSE：期望 {nose['datcom_token']}（{nose.get('cn_name', '头型')}），"
+            f"卡片 {actual if actual else '没读到'}"
+            + ("" if ok else "  ← 不一致"),
+        ))
     # 2) 参考量
     check("$REFQ SREF (in²)", ref["sref_in2"], _card_value(lines, "REFQ", "SREF"))
     check("$REFQ LREF (= D)", ref["lref_in"], _card_value(lines, "REFQ", "LREF"))
@@ -335,6 +365,41 @@ def _pad_display(text, width):
     return text + " " * max(width - used, 0)
 
 
+def _nose_shape_text(derived):
+    """报告里描述鼻锥头型的一句话（老 meta 没有该字段时按 DATCOM 默认卵形说明）。"""
+    nose = derived.get("nose_shape") or {}
+    if nose.get("label"):
+        return nose["label"]
+    return "切线卵形（DATCOM 默认，未写 TNOSE 卡片）"
+
+
+def _body_outline(meta, samples=64):
+    """弹体上半侧母线 [(x, r)]：头锥按实际头型绘制，后接等直圆柱段。
+
+    头型取自 meta（"ogive" / "cone"），由 missile_spec 的解析式给出母线；
+    meta 里没有头型时按导弹默认的切线卵形画。
+    """
+    g = meta["geometry_m"]
+    derived = meta["derived"]
+    radius = derived["body_radius_m"]
+    key = (derived.get("nose_shape") or {}).get("key")
+    try:
+        profile = resolve_nose_shape(key).profile(g["L_N"], radius)
+        grid = [g["L_N"] * index / samples for index in range(samples + 1)]
+        outline = [(x, float(r)) for x, r in zip(grid, profile.radius(grid))]
+    except (ValueError, TypeError):
+        outline = [(0.0, 0.0), (g["L_N"], radius)]          # 头型未知时退回直线锥
+    outline.append((g["L"], radius))
+    return outline
+
+
+def _body_polygon(meta):
+    """侧视 / 俯视用的弹体闭合多边形（上下对称）。"""
+    outline = _body_outline(meta)
+    return ([(x, r) for x, r in outline]
+            + [(x, -r) for x, r in reversed(outline)])
+
+
 def render_geometry_report(case_name, meta, for005_text, checks, baseline=None):
     """生成几何模型核对报告（纯文本），供人工确认建模是否正确。"""
     g = meta["geometry_m"]
@@ -359,8 +424,9 @@ def render_geometry_report(case_name, meta, for005_text, checks, baseline=None):
     add("  · B_W / B_F = 舵面外露展长，从弹体表面向外量，不是全展长。")
     add(f"  · 前后缘对齐 {d['le_mode']}；滚转布局 {d['fin_phase']}，"
         f"PHIF = {', '.join(f'{a:g}' for a in d['phif_deg'])} 度。")
-    add("  · 弹体 = 圆锥头部 + 等直径圆柱段；每道舵按 NPANEL = "
+    add("  · 弹体 = 头锥 + 等直径圆柱段；每道舵按 NPANEL = "
         f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
+    add(f"  · 鼻锥头型 {_nose_shape_text(d)}")
     add(f"  · 舵面翼型 {d['fin_section_text']}")
     add("")
     add("一、输入的 11 个主尺寸（README 参数，单位 m）")
@@ -535,8 +601,7 @@ def plot_geometry(meta, path):
 
         # ---- 侧视图（X-Z）：竖直的两片舵可见，水平的两片与弹体轮廓重合 ----
         ax_side.add_patch(Polygon(
-            [(0.0, 0.0), (g["L_N"], radius), (length, radius),
-             (length, -radius), (g["L_N"], -radius)],
+            _body_polygon(meta),
             closed=True, facecolor=body_color, edgecolor="black", lw=1.2, zorder=1))
         for idx, fin in enumerate(fins):
             color = colors[idx % len(colors)]
@@ -587,8 +652,7 @@ def plot_geometry(meta, path):
 
         # ---- 俯视图（X-Y）：水平的两片舵可见 ----
         ax_top.add_patch(Polygon(
-            [(0.0, 0.0), (g["L_N"], radius), (length, radius),
-             (length, -radius), (g["L_N"], -radius)],
+            _body_polygon(meta),
             closed=True, facecolor=body_color, edgecolor="black", lw=1.2, zorder=1))
         for idx, fin in enumerate(fins):
             color = colors[idx % len(colors)]
@@ -680,6 +744,7 @@ def print_geometry_brief(meta):
     print(f"    几何: L = {g['L']:.3f} m, D = {g['D']:.3f} m, L_N = {g['L_N']:.3f} m, "
           f"SREF = {ref['sref_m2']:.6f} m², LREF = {ref['lref_m']:.3f} m, "
           f"XCG = {ref['xcg_m']:.3f} m")
+    print(f"    头型: {_nose_shape_text(d)}")
     print(f"    翼型: {d['fin_section_text']}")
     for fin in d["fins"]:
         print(f"    {fin['name']}: XLE = {fin['root_le_m']:.3f} m, "

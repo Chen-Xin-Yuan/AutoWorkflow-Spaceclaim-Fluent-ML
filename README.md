@@ -8,6 +8,8 @@
 
 外形用 14 个几何参数描述：下面 11 个主尺寸，以及随后 3 个舵面翼型参数。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，定义在 `DATCOM/scripts/fin_section.py`，点云脚本读取同一份。
 
+**不在这 14 个参数里**的外形数据（不进总表，属设计固定项）集中在 `DATCOM/scripts/missile_spec.py`，DATCOM 批量计算与点云脚本共用：基准几何、鼻锥头型（`NOSE_SHAPE = "ogive"` 切线卵形 / `"cone"` 直线圆锥，对应 DATCOM 的 `TNOSE`）、锥顶倒角（只有点云用）和舵面布局（`LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`）。
+
 | 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
 |---|---|---|---|---|
 | `L_N` | 鼻锥长度 | — | — | 0.49 |
@@ -27,6 +29,8 @@
 表中保留原图的设计范围。当前建模程序会将小于 0.001 m 的非负梢弦长自动修正为 0.001 m，具体建模约定见 [SpaceClaim 参数化建模说明](spaceclaim/README.md#参数化建模)。
 
 舵面翼型参数一共 3 个，但具体是哪 3 个取决于截面类型。DATCOM 与点云的默认截面是**对称六边形**（弯度 0，中弧与弦线重合）；也可以切成对称 NACA 四位数。基准值就是 `fin_section.py` 顶部的默认值。控制卡写法见 [DATCOM 说明](DATCOM/README.md) 的「四、舵面翼型」。
+
+鼻锥头型不属于这 14 个参数：默认是切线卵形（DATCOM `TNOSE = OGIVE`，也是不写 `TNOSE` 时的默认），可在 `DATCOM/scripts/missile_spec.py` 切成直线圆锥（`TNOSE = CONE`）。同一外形下两种头型的系数不同（Ma 0.8、α 4°：CL 2.229 / CD 0.430 / CM −5.712 对 CL 2.210 / CD 0.431 / CM −5.893），历史结果只在头型相同时可比。详见 [DATCOM 说明](DATCOM/README.md) 的「五、鼻锥头型」。
 
 | 截面 | 设计变量 | 定义 | 允许值 | 基准 |
 |---|---|---|---|---|
@@ -218,7 +222,7 @@ python DATCOM/scripts/01_batch_datcom.py
 | `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
 | `{geometry_id}_datcom.log` | 该次调用的标准输出和标准错误 |
 
-点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型取 `fin_section.py` 的三个参数。这 14 个几何参数一起决定外形。默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
+点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型取 `fin_section.py` 的三个参数，头型与锥顶倒角取 `missile_spec.py`（与 DATCOM 共用）。这 14 个几何参数加头型一起决定外形。默认写到 `data_lib/datasets/point_clouds/`。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
 
 当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
 

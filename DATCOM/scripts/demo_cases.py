@@ -14,7 +14,7 @@
     DEMO_ALTITUDE  命令行没给 --alt 时的默认飞行高度（m），0 = 海平面
     DEMO_CASES     算例列表；每项 name + 可选 geometry 增量 / mach / alpha / alt /
                    le_mode / fin_phase / cruciform_count / xcg / fin_section
-基准几何是 `datcom_spec.BASELINE_GEOMETRY`，与工作区 README 的基准参数表同一份。
+基准几何是 `missile_spec.BASELINE_GEOMETRY`，与工作区 README 的基准参数表同一份。
 唯一的外部输入是 --params 指定的几何 JSON（11 个主尺寸，单位 m）。
 """
 
@@ -25,10 +25,10 @@ import os
 import re
 
 from datcom_spec import (
-    BASELINE_GEOMETRY,
     REQUIRED_GEOMETRY_KEYS,
     normalize_geometry,
 )
+from missile_spec import BASELINE_GEOMETRY
 
 # =============================================================================
 # 参数配置区

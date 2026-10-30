@@ -3,18 +3,20 @@
 """导弹外形点云生成 + 几何校验 + 三视图预览（PointNet / PointNet++ 演示数据）。
 
 外形定义（回转轴 = +X，单位 m）:
-    总弹长 total_length = 圆锥头锥 nose_length + 等直圆柱 midbody_length
+    总弹长 total_length = 头锥 nose_length + 等直圆柱 midbody_length
     （total_length 本身就是完整弹长，不要再加 nose_length）
     x = 0                 : 头部顶点（锥顶倒角球冠的最前点）
     [0.000, x_t]          : 锥顶倒角（球冠，半径 R_fillet），半径 0 -> r_t
-    [x_t, nose_length]    : 圆锥头锥，半径 r_t -> R_body（与倒角球相切，无折点）
+    [x_t, nose_length]    : 头锥母线，半径 r_t -> R_body（与倒角球相切，无折点）
     [nose_length, total_length] : 等直圆柱弹身，半径恒为 R_body
     x = total_length      : 尾部端面（尾盖）
 
-    头部就是圆锥 + 锥顶倒角，不再用卵形母线；尾部半径与弹身半径相同，
-    不做收缩（无 boat-tail）。锥顶倒角半径 R_fillet = nose_tip_fillet_ratio ×
-    total_length（默认比例 0.005 = 弹长的 0.5%，可改），也可用 nose_tip_fillet_radius
-    直接给绝对值（米）；置 0 即退化成尖锥。x_t / r_t 由"倒角球与圆锥相切"解析求出。
+    头锥头型由 scripts/missile_spec.py 顶部的 NOSE_SHAPE 决定，与批量 DATCOM
+    共用同一份：ogive = 切线卵形（也是 DATCOM 不写 TNOSE 时的默认头型），
+    cone = 直线圆锥。尾部半径与弹身半径相同，不做收缩（无 boat-tail）。
+    锥顶倒角半径 R_fillet = NOSE_TIP_FILLET_RATIO × total_length（默认 0.4%，
+    约 1.5 cm），也可用 nose_tip_fillet_radius 直接给绝对值（米）；置 0 即
+    退化成尖头。x_t / r_t 由"倒角球与头锥母线相切"解析求出，两种头型同一套解法。
 
 舵面（两组，每组 4 片，绕弹轴每 90 度等距分布）:
     位置参数: 每组一个"轴向长度" = 舵面前沿（根部前缘，整片舵面最靠前的点）
@@ -48,8 +50,10 @@
     python scripts/04_pointnet_demo.py --geometry-id <id>   # 从 cases.csv 读 11 个主尺寸
     python scripts/04_pointnet_demo.py --params geometry.json
 
-调整锥顶倒角: 改 MissileGeometry.nose_tip_fillet_ratio（倒角半径 = 比例 × total_length）
-    或用 nose_tip_fillet_radius 直接给绝对半径（米）；置 0 即退化成尖锥。
+调整头型 / 锥顶倒角: 头型在 scripts/missile_spec.py 顶部（NOSE_SHAPE = ogive / cone，
+    与批量 DATCOM 共用）；倒角半径改 MissileGeometry.nose_tip_fillet_ratio
+    （倒角半径 = 比例 × total_length）或用 nose_tip_fillet_radius 直接给绝对半径
+    （米）；置 0 即退化成尖头。
 
 部件标签: 0 头锥 / 1 圆柱弹身 / 2 尾端面 / 3 前组舵面 / 4 后组舵面
 """
@@ -66,7 +70,12 @@ from pathlib import Path
 
 import numpy as np
 
-from fin_section import FIN_SECTION as DEFAULT_FIN_SECTION, FinSection
+from fin_section import FinSection
+from missile_spec import (
+    BASELINE_GEOMETRY, FIN_AZIMUTH_DEG, FIN_SECTION, LE_MODE, NOSE_SEGMENTS,
+    NOSE_SHAPE, NOSE_TIP_FILLET_RADIUS, NOSE_TIP_FILLET_RATIO, NoseProfile, NoseShape,
+    resolve_nose_shape,
+)
 
 # --------------------------------------------------------------------------- #
 # 输入 / 输出 / 参数配置（命令行参数覆盖这里的运行默认值）
@@ -84,9 +93,10 @@ MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
 
-# 舵面截面与批量 DATCOM 共用 scripts/fin_section.py 顶部的类型开关和三个参数。
-# 改截面类型、厚度、平顶长度或 LER 时，只改那一处。截面保持上下对称。
-FIN_SECTION = DEFAULT_FIN_SECTION
+# 舵面截面与批量 DATCOM 共用 scripts/fin_section.py 顶部的类型开关和三个参数；
+# 头型、舵面布局、基准几何与批量 DATCOM 共用 scripts/missile_spec.py。
+# 改截面类型 / 头型时只改那两个模块的顶部，这里不要再写第二份默认值。
+# FIN_SECTION 由 missile_spec 转出（唯一来源在 fin_section.py），截面保持上下对称。
 DEFAULT_N_POINTS = 16384
 DEFAULT_SEED = 0
 DEFAULT_GAUSS = 0.0
@@ -169,7 +179,7 @@ OUTPUT_FILES = {
 
 # 部件标签（PointNet / PointNet++ 分割演示用）
 PART_LABELS = {
-    0: "nose_cone",       # 头锥（圆锥 + 锥顶倒角球冠）
+    0: "nose_cone",       # 头锥（头型见 missile_spec.py + 锥顶倒角球冠）
     1: "mid_cylinder",    # 圆柱弹身（尾部同半径，无尾锥）
     2: "tail_cap",        # 尾端面（尾盖）
     3: "fin_forward",     # 前组舵面（4 片）
@@ -185,25 +195,33 @@ TOL_AZ_SHEET = 1e-3   # 方位角容差附加量（度）
 
 # --------------------------------------------------------------------------- #
 # 一、几何定义
-# 字段默认值集中在紧接下方的配置类中，保持唯一来源，不在入口处另写一份。
+# 字段默认值来自 scripts/missile_spec.py 的 BASELINE_GEOMETRY（唯一来源），
+# 这里只做 11 个主尺寸 → 类字段的映射，不重复维护第二份数值。
+# 正式几何由 --geometry-id / --params 覆盖这些默认值。
 # --------------------------------------------------------------------------- #
+_BASELINE = BASELINE_GEOMETRY
+
+
 @dataclass
 class MissileGeometry:
     """导弹几何参数（单位：米）。"""
 
     # --- 弹身 ---
-    total_length: float = 3.69          # 总弹长：头部顶点 x=0 → 尾部端面 x=total_length（含头锥）
-    body_radius: float = 0.09          # 弹身圆柱半径（尾部半径同值，不区分尾锥）
-    nose_length: float = 0.46           # 圆锥头锥轴向长度（总弹长的一部分）
-    nose_tip_fillet_ratio: float = 0.004         # 锥顶倒角半径 = ratio × total_length
-    nose_tip_fillet_radius: float | None = None  # 直接给倒角半径(m)，非 None 时覆盖上面的比例
-    nose_segments: int = 120           # 头锥母线离散段数
+    total_length: float = _BASELINE["L"]              # 总弹长：头部顶点 x=0 → 尾部端面（含头锥）
+    body_radius: float = _BASELINE["D"] / 2.0         # 弹身圆柱半径（尾部半径同值，不区分尾锥）
+    nose_length: float = _BASELINE["L_N"]             # 头锥轴向长度（总弹长的一部分）
+    # 头型：ogive = 切线卵形 / cone = 直线圆锥，与批量 DATCOM 的 TNOSE 同一份。
+    nose_shape: NoseShape = field(default_factory=lambda: resolve_nose_shape(NOSE_SHAPE))
+    nose_tip_fillet_ratio: float = NOSE_TIP_FILLET_RATIO      # 锥顶倒角半径 = 比例 × total_length
+    nose_tip_fillet_radius: float | None = NOSE_TIP_FILLET_RADIUS  # 直接给倒角半径(m)，非 None 时覆盖比例
+    nose_segments: int = NOSE_SEGMENTS                # 头锥母线离散段数（网格用）
 
     # --- 舵面共同参数 ---
     # 截面默认取 fin_section 的当前翼型（HEX 六边形 / NACA 四位数）。
     # 绝对厚度 = 厚度比 × 当地弦长。
     section: FinSection = field(default_factory=lambda: FIN_SECTION)
-    fin_azimuth_deg: tuple = (0.0, 90.0, 180.0, 270.0)  # 一组内 4 片，90° 等距
+    # 一组内 4 片舵，90° 等距；角度由 missile_spec 的 FIN_PHASE / CRUCIFORM_COUNT 派生
+    fin_azimuth_deg: tuple = FIN_AZIMUTH_DEG
 
     # --- 舵面轴向位置 ---
     # "轴向长度" = 舵面前沿（根部前缘，即整片舵面最靠前的位置）到弹头顶点 x=0 的轴向距离。
@@ -212,17 +230,17 @@ class MissileGeometry:
     #       （后缘不得伸出弹尾；超了校验会 FAIL，而不是被悄悄裁掉）。
 
     # --- 前组舵面 ---
-    fwd_x_root_le: float = 1.72       # 前组：前沿到弹头顶点 x=0 的轴向距离
-    fwd_c_root: float = 0.230
-    fwd_c_tip: float = 0.06
-    fwd_span: float = 0.230
+    fwd_x_root_le: float = _BASELINE["L_W"]   # 前组：前沿到弹头顶点 x=0 的轴向距离
+    fwd_c_root: float = _BASELINE["C_RW"]
+    fwd_c_tip: float = _BASELINE["C_TW"]
+    fwd_span: float = _BASELINE["B_W"]
     # 前缘后掠量不单独给：sweep_le ≡ c_root - c_tip，由属性自动派生（后缘垂直于弹轴）
 
     # --- 后组舵面 ---
-    aft_x_root_le: float = 3.200       # 后组：前沿到弹头顶点 x=0 的轴向距离
-    aft_c_root: float = 0.380
-    aft_c_tip: float = 0.190
-    aft_span: float = 0.220
+    aft_x_root_le: float = _BASELINE["L_F"]   # 后组：前沿到弹头顶点 x=0 的轴向距离
+    aft_c_root: float = _BASELINE["C_RF"]
+    aft_c_tip: float = _BASELINE["C_TF"]
+    aft_span: float = _BASELINE["B_F"]
 
     # --- 端盖 ---
     include_nose_tip: bool = True
@@ -237,56 +255,34 @@ class MissileGeometry:
         return self.total_length - self.nose_length
 
     # ------------------------------------------------------------------ #
-    # 锥顶倒角几何（解析式：倒角球与圆锥母线相切）
+    # 头锥几何（解析式在 missile_spec.py：切线卵形 / 直线圆锥 + 锥顶倒角）
     # ------------------------------------------------------------------ #
     @property
     def tip_fillet_radius(self) -> float:
-        """锥顶倒角球冠半径 R（米）：默认 = nose_tip_fillet_ratio × total_length。"""
+        """锥顶倒角球冠半径 R（米）：默认 = NOSE_TIP_FILLET_RATIO × total_length。"""
         if self.nose_tip_fillet_radius is not None:
             return float(self.nose_tip_fillet_radius)
         return float(self.nose_tip_fillet_ratio) * float(self.total_length)
 
     @property
-    def nose_cone_slope(self) -> float:
-        """圆锥母线斜率 m = dr/dx。
+    def nose_profile(self) -> NoseProfile:
+        """头锥母线解析对象：头型 + 长度 + 弹身半径 + 倒角半径。
 
-        母线须同时满足: 与锥顶倒角球（球心 (R, 0)、半径 R，球面最前点即 x=0）相切；
-        且在 x = nose_length 处半径正好等于 body_radius。记 d = nose_length - R、
-        Rb = body_radius，则 m 满足
-            m²(d² - R²) - 2·Rb·d·m + (Rb² - R²) = 0
-        取较小的那个根 = 与球冠前方相切的那条母线。
-        R = 0 时退化为尖锥 m = Rb / nose_length。
+        头型由 missile_spec.NOSE_SHAPE 决定（ogive / cone），与批量 DATCOM 的
+        TNOSE 卡片同一份；倒角只影响点云 / CFD，DATCOM 头锥是数学尖点。
         """
-        R, Rb, Ln = self.tip_fillet_radius, self.body_radius, self.nose_length
-        if R <= 0.0:
-            return Rb / Ln
-        if R >= min(Rb, Ln / 2.0):
-            raise ValueError(
-                f"锥顶倒角半径 R={R:.6g} m 与头锥几何不相容：需 0 <= R < "
-                f"min(body_radius={Rb:g}, nose_length/2={Ln / 2:g})；"
-                f"请调小 nose_tip_fillet_ratio 或 nose_tip_fillet_radius"
-            )
-        d = Ln - R
-        disc = d * d + Rb * Rb - R * R          # > 0 由 R < min(Rb, Ln/2) 保证
-        return (Rb * d - R * math.sqrt(disc)) / (d * d - R * R)
+        return self.nose_shape.profile(
+            self.nose_length, self.body_radius, self.tip_fillet_radius)
 
     @property
     def nose_tangent_x(self) -> float:
-        """倒角球与圆锥母线的切点轴向坐标 x_t（R = 0 时为 0）。"""
-        R = self.tip_fillet_radius
-        if R <= 0.0:
-            return 0.0
-        m = self.nose_cone_slope
-        return self.nose_length - (self.nose_length - R + m * self.body_radius) / (1.0 + m * m)
+        """倒角球与头锥母线的切点轴向坐标 x_t（R = 0 时为 0）。"""
+        return self.nose_profile.tangent_x
 
     @property
     def nose_tangent_r(self) -> float:
-        """切点半径 r_t（R = 0 时为 0）."""
-        R = self.tip_fillet_radius
-        if R <= 0.0:
-            return 0.0
-        m = self.nose_cone_slope
-        return self.body_radius - m * (self.nose_length - R + m * self.body_radius) / (1.0 + m * m)
+        """切点半径 r_t（R = 0 时为 0）。"""
+        return self.nose_profile.tangent_r
 
     # ------------------------------------------------------------------ #
     # 舵面前缘后掠量：模型要求后缘垂直于弹轴（直角梯形），因此
@@ -304,26 +300,13 @@ class MissileGeometry:
         return self.aft_c_root - self.aft_c_tip
 
     def radius(self, x):
-        """回转体母线：x -> 半径（圆锥头锥 + 锥顶球冠倒角 + 等直圆柱）。"""
+        """回转体母线：x -> 半径（头锥（卵形/圆锥）+ 锥顶球冠倒角 + 等直圆柱）。"""
         x = np.asarray(x, dtype=float)
         nose = x < self.nose_length
         y = np.empty_like(x)
 
         if nose.any():
-            xn = x[nose]
-            R = self.tip_fillet_radius
-            if R > 0.0:
-                xt, rt, m = self.nose_tangent_x, self.nose_tangent_r, self.nose_cone_slope
-                cap = xn <= xt
-                yn = np.empty_like(xn)
-                # 球冠段: r = sqrt(R² - (R-x)²) = sqrt(2Rx - x²)
-                yn[cap] = np.sqrt(np.clip(2.0 * R * xn[cap] - xn[cap] ** 2, 0.0, None))
-                # 圆锥段: 与球冠在 x_t 处相切
-                yn[~cap] = rt + m * (xn[~cap] - xt)
-                y[nose] = yn
-            else:
-                y[nose] = self.body_radius * xn / self.nose_length      # 尖锥
-
+            y[nose] = self.nose_profile.radius(x[nose])                 # 头锥（含倒角）
         # 等直圆柱：尾部半径与弹身相同，无尾锥收缩
         y[~nose] = self.body_radius
         return y
@@ -339,32 +322,12 @@ class MissileGeometry:
         y = np.zeros_like(x)
 
         if nose.any():
-            xn = x[nose]
-            R = self.tip_fillet_radius
-            if R > 0.0:
-                xt, m = self.nose_tangent_x, self.nose_cone_slope
-                cap = xn <= xt
-                sl = np.empty_like(xn)
-                denom = np.sqrt(np.clip(2.0 * R * xn[cap] - xn[cap] ** 2, 1e-12, None))
-                sl[cap] = (R - xn[cap]) / denom
-                sl[~cap] = m
-                y[nose] = sl
-            else:
-                y[nose] = self.body_radius / self.nose_length
+            y[nose] = self.nose_profile.slope(x[nose])
         return y
 
     def nose_lateral_area(self) -> float:
-        """头锥侧面积（解析式，含锥顶倒角球冠）。
-
-        球冠段: A = 2πR·x_t；圆锥段（圆台侧面积）: A = π(r_t + R_body)·斜高。
-        """
-        R, Rb, Ln = self.tip_fillet_radius, self.body_radius, self.nose_length
-        if R <= 0.0:
-            return math.pi * Rb * math.hypot(Ln, Rb)                     # 尖锥
-        xt, rt = self.nose_tangent_x, self.nose_tangent_r
-        cap = 2.0 * math.pi * R * xt
-        cone = math.pi * (rt + Rb) * math.hypot(Ln - xt, Rb - rt)
-        return cap + cone
+        """头锥侧面积（解析式，含锥顶倒角球冠；圆锥与卵形各自的闭式解）。"""
+        return float(self.nose_profile.lateral_area())
 
     @property
     def fin_half_thickness_envelope(self) -> float:
@@ -464,7 +427,7 @@ def surface_group_areas(g: MissileGeometry) -> dict[str, float]:
     areas: dict[str, float] = {}
     plans = fin_planforms(g)
 
-    # 头锥（圆锥 + 锥顶倒角球冠）侧面积
+    # 头锥（头型见 missile_spec.py + 锥顶倒角球冠）侧面积
     areas["nose_cone"] = float(g.nose_lateral_area())
 
     # 等直圆柱弹身段（尾部半径与弹身相同，不再有尾锥/尾锥面积）
@@ -1200,7 +1163,7 @@ def build_pointcloud(
         normals.append(nrm)
         labels.append(np.full(len(pts), LABEL_ID[label], dtype=np.int8))
 
-    # --- 回转体两段：圆锥头锥 + 等直圆柱弹身（尾部同半径，无尾锥）---
+    # --- 回转体两段：头锥（卵形 / 圆锥）+ 等直圆柱弹身（尾部同半径，无尾锥）---
     pts, nrm = _sample_nose_surface(g, alloc.get("nose_cone", 0), rng, refine)
     add(pts, nrm, "nose_cone")
     pts, nrm = _sample_cylinder_surface(g, alloc.get("mid_cylinder", 0), rng, plans, refine)
@@ -1385,13 +1348,8 @@ def build_mesh(g: MissileGeometry, n_az: int = MESH_AZIMUTH_SEGMENTS) -> tuple[n
     verts: list[list[float]] = []
     faces: list[tuple[int, int, int]] = []
 
-    # 头部：锥顶倒角球冠 + 圆锥；球冠段多切几刀，网格上能看出倒角
-    R = g.tip_fillet_radius
-    if R > 0.0:
-        xt = g.nose_tangent_x
-        profile_x = [0.25 * xt, 0.5 * xt, 0.75 * xt, xt, g.nose_length]
-    else:
-        profile_x = [g.nose_length]                     # 尖锥：顶点扇形直连到 x = nose_length
+    # 头部：头锥母线（卵形要沿弧细分，圆锥两站就够）+ 锥顶倒角球冠多切几刀
+    profile_x = g.nose_profile.stations(g.nose_segments)
     # 等直圆柱弹身段（尾部与弹身同半径，无尾锥）
     profile_x += list(np.linspace(g.nose_length, g.total_length, 4)[1:])
     xs = np.array(sorted(set(profile_x)))
@@ -1518,7 +1476,12 @@ def validate(
             f"quadrants={quadrants} max_az_dev={dev.max():.2f} deg",
         )
 
-    # 4) 侧视直角梯形
+    # 4) 侧视直角梯形（点云只能建后缘垂直于弹轴的梯形，DATCOM 的对齐方式必须一致）
+    check(
+        "planform: LE_MODE == trailing_aligned (matches right-trapezoid model)",
+        LE_MODE == "trailing_aligned",
+        f"missile_spec.LE_MODE = {LE_MODE!r}",
+    )
     for name, plan in plans.items():
         check(
             f"{name} planform is right trapezoid (TE vertical)",
@@ -1560,7 +1523,7 @@ def validate(
         f"midbody_length({g.midbody_length:g})",
     )
 
-    # 圆柱段取两处抽样（不写死 0.3：头锥变长后 0.3 会落在圆锥上）
+    # 圆柱段取两处抽样（不写死 0.3：头锥变长后 0.3 会落在头锥上）
     x_cyl = [0.5 * (g.nose_length + g.total_length), g.total_length]
     r_cyl = [float(g.radius(xi)) for xi in x_cyl]
     check(
@@ -1575,33 +1538,46 @@ def validate(
         f"r_tail={float(g.radius(g.total_length)):.3f} == r_body={g.body_radius:.3f}",
     )
 
-    # 7) 锥顶倒角（球冠与圆锥相切、无折点）
+    # 7) 锥顶倒角（球冠与头锥母线相切、无折点；两种头型同一套检查）
+    profile = g.nose_profile
     R = g.tip_fillet_radius
-    xt = g.nose_tangent_x
+    xt = profile.tangent_x
+    nose_cn = g.nose_shape.cn_name
     if R > 0.0:
-        # 倒角球球心 (R, 0) 到圆锥母线的距离应等于 R（相切）
-        m = g.nose_cone_slope
-        dist_axis = abs(g.body_radius - m * (g.nose_length - R)) / math.sqrt(1.0 + m * m)
+        # 倒角球球心 (R, 0) 到头锥母线的最近距离应等于 R（相切）
+        xs_prof = np.linspace(xt, g.nose_length, 4001)
+        rs_prof = profile.radius(xs_prof)
+        dist = np.hypot(xs_prof - R, rs_prof)
+        gap = float(dist.min()) - R
         check(
-            "nose: tip fillet is tangent to the cone (distance == R)",
-            abs(dist_axis - R) < 1e-9 and 0.0 < xt < g.nose_length,
-            f"R={R:.6f} dist={dist_axis:.6f} x_t={xt:.6f} m={m:.6f}",
+            f"nose: tip fillet is tangent to the {nose_cn} profile (min distance == R)",
+            abs(gap) < 1e-6 and 0.0 < xt < g.nose_length,
+            f"R={R:.6f} min_dist={float(dist.min()):.6f} x_t={xt:.6f} "
+            f"头型={nose_cn}",
         )
-        # 切点处斜率连续（球冠解析斜率应等于圆锥斜率，即无折点）
+        # 切点处斜率连续（球冠解析斜率应等于头锥母线斜率，即无折点）
         s_cap = (R - xt) / math.sqrt(max(2.0 * R * xt - xt * xt, 1e-300))
+        s_body = float(profile.slope(xt))
         check(
-            "nose: fillet/cone slopes match at the tangent point",
-            abs(s_cap - m) < 1e-6,
-            f"slope_cap={s_cap:.6f} slope_cone={m:.6f}",
+            "nose: fillet/nose slopes match at the tangent point",
+            abs(s_cap - s_body) < 1e-9,
+            f"slope_cap={s_cap:.9f} slope_{nose_cn}={s_body:.9f}",
         )
         # 球冠段母线应与解析球面一致
         xs_cap = np.linspace(0.0, xt, 16)
         err = float(np.max(np.abs(g.radius(xs_cap) - np.sqrt(np.clip(2 * R * xs_cap - xs_cap**2, 0, None)))))
         check("nose: tip cap follows the sphere profile", err < 1e-9, f"max err = {err:.2e}")
     else:
-        check("nose: sharp cone (fillet disabled)", True, "R = 0")
+        # 无倒角：母线应从尖点 x=0 起、到肩部 x=nose_length 收到 body_radius
+        r0 = float(g.radius(0.0))
+        rl = float(g.radius(g.nose_length))
+        check(
+            f"nose: sharp {nose_cn} profile (fillet disabled)",
+            abs(r0) < 1e-12 and abs(rl - g.body_radius) < 1e-12,
+            f"R = 0，r(0)={r0:.2e}，r(L_N)={rl:.6f} == r_body={g.body_radius:.6f}",
+        )
 
-    # 8) 舵面根部应落在圆柱段上（避免舵面长在圆锥头上）
+    # 8) 舵面根部应落在圆柱段上（避免舵面长在头锥上）
     check(
         "fin roots lie on the cylindrical body section",
         all(p.x_root_le >= g.nose_length for p in plans.values()),
@@ -1731,18 +1707,19 @@ def render_nose_profile(g: MissileGeometry, path: Path) -> bool:
     R = g.tip_fillet_radius
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), dpi=140)
 
-    # 左：锥顶放大（球冠母线 + 相切圆锥 + 尖锥参考线）
+    # 左：锥顶放大（球冠母线 + 相切头锥母线 + 无倒角的理想母线作参考）
     ax = axes[0]
     x_tip = min(g.nose_length, max(4.0 * R, 0.05))
     x = np.linspace(0.0, x_tip, 600)
     ax.plot(x, g.radius(x), "k-", lw=2, label="r(x)")
-    ax.plot(x, g.body_radius * x / g.nose_length, "r--", lw=1, label="ideal sharp cone")
+    ideal = g.nose_shape.profile(g.nose_length, g.body_radius).radius(x)
+    ax.plot(x, ideal, "r--", lw=1, label=f"ideal sharp {g.nose_shape.key}")
     if R > 0.0:
         t = np.linspace(0.0, np.pi / 2.0, 120)
         ax.plot(R - R * np.cos(t), R * np.sin(t), "g:", lw=1, label=f"fillet sphere R={R:.4f}")
         ax.plot([g.nose_tangent_x], [g.nose_tangent_r], "bo", ms=6,
                 label=f"tangent x_t={g.nose_tangent_x:.4f}")
-    ax.set_title("nose tip zoom (cone + tip fillet)")
+    ax.set_title(f"nose tip zoom ({g.nose_shape.key} + tip fillet)")
     ax.set_xlabel("x / m")
     ax.set_ylabel("r / m")
     ax.legend(fontsize=8)
@@ -1758,7 +1735,8 @@ def render_nose_profile(g: MissileGeometry, path: Path) -> bool:
     ax.axvline(g.nose_length, color="r", ls=":", lw=1,
                label=f"nose/cylinder joint x={g.nose_length:g}")
     ax.axhline(0.0, color="gray", lw=0.6)
-    ax.set_title("full body: cone nose + constant-radius cylinder")
+    ax.set_title(f"full body: {g.nose_shape.key} nose "
+                 f"(TNOSE = {g.nose_shape.datcom_token}) + constant-radius cylinder")
     ax.set_xlabel("x / m")
     ax.set_ylabel("r / m")
     ax.legend(fontsize=8)
@@ -1900,12 +1878,21 @@ def main() -> int:
         checks = {name: ok for name, ok, _ in results}
 
     meta = {
-        "description": "missile-shaped point cloud: conical nose with a spherical tip fillet "
-                       "+ constant-radius cylinder body (tail radius == body radius, no boat-tail), "
+        "description": "missile-shaped point cloud: nose (tangent ogive or cone, see nose_shape) "
+                       "with a spherical tip fillet + constant-radius cylinder body "
+                       "(tail radius == body radius, no boat-tail), "
                        "two fin groups (4 right-trapezoid fins each, 90 deg apart, symmetric fin section). "
                        "Each fin group is positioned by its leading-edge axial distance from the "
                        "nose tip (fwd_x_root_le / aft_x_root_le); the aft group is NOT required "
                        "to be flush with the tail.",
+        "nose_shape": {
+            "key": g.nose_shape.key,
+            "cn_name": g.nose_shape.cn_name,
+            "datcom_token": g.nose_shape.datcom_token,
+            "tip_fillet_radius_m": float(g.tip_fillet_radius),
+            "tangent_x_m": float(g.nose_tangent_x),
+            "tangent_r_m": float(g.nose_tangent_r),
+        },
         "fin_section": g.section.as_dict(),
         "generator": "scripts/04_pointnet_demo.py",
         "project_root": str(PROJECT_ROOT),
@@ -1950,6 +1937,7 @@ def main() -> int:
     )
 
     print(f"[OK] points = {n}  (requested {args.n_points})")
+    print(f"     nose = {g.nose_shape.label()}")
     print(f"     fin section = {g.section.designation()}")
     print(f"     bbox min = {np.round(points.min(axis=0), 4).tolist()}")
     print(f"     bbox max = {np.round(points.max(axis=0), 4).tolist()}")

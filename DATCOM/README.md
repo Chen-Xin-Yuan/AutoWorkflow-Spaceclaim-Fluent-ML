@@ -20,14 +20,15 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 | --- | --- |
 | `01_batch_datcom.py` | DATCOM 批量计算主脚本：读输入总表 → 生成 `for005.dat` → 调用 `datcom.exe` → 解析系数 → 写系数表与参数快照，并调用 `report.py` 出几何核对产物 |
 | `report.py` | 几何核对产物：`for022.dat` 反查、`geometry_check.txt` 核对报告、三视图 PNG、CL/CD 与 CN/CA 互校。只读算例目录已有的文件 |
-| `datcom_spec.py` | 共用常量与纯函数：协议文件名、归档叶子名、单位换算、11 个主尺寸的中文名与卡片落点、基准几何、几何校验 |
+| `datcom_spec.py` | DATCOM 协议侧的共用常量与纯函数：协议文件名、归档叶子名、单位换算、11 个主尺寸的中文名与卡片落点、几何校验 |
+| `missile_spec.py` | **不进输入总表的外形设计数据**：基准几何、鼻锥头型（`NOSE_SHAPE = ogive / cone`，即 DATCOM 的 `TNOSE`）、锥顶倒角、舵面布局（`LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`），外加两种头型的母线 / 侧面积解析式。`01` 与 `04` 共用这一份 |
 | `demo_cases.py` | `--demo` 用的固定演示几何、来流和算例列表；只被 `01` 在演示分支里懒导入，正式运行不加载 |
 | `04_pointnet_demo.py` | 导弹外形点云数据集生成（PointNet 演示，自带几何校验和三视图预览） |
 | `fin_section.py` | 对称舵面截面：可切六边形（`SECTYP = HEX`）或 NACA 四位数，三个参数与外形方程都在这。批量 DATCOM 与点云共用这一份。怎么定参数见文末「四、舵面翼型」 |
 
 
 
-`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型取 `fin_section.py` 的三个参数，合计 14 个几何参数；带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型取 `fin_section.py` 的三个参数，合计 14 个几何参数；头型与锥顶倒角取 `missile_spec.py`（不进总表，见文末「五、鼻锥头型」）。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
 ### `../data_lib/runs/low/`（运行结果，项目外）
 
@@ -94,8 +95,9 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
    翼型截面类型（`SECTION_TYPE`：六边形或 NACA）和三个翼型参数
    写在 `scripts/fin_section.py`，前舵和后舵共用。同一个 `geometry_id` 的 11 个主尺寸必须相同。
    同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
+   鼻锥头型、锥顶倒角、舵面布局和基准几何都不在总表里，见 `scripts/missile_spec.py`。
 2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
-   演示几何、来流和算例列表在 `scripts/demo_cases.py`（`DEMO_GEOMETRY` 取 `datcom_spec.BASELINE_GEOMETRY`），只在 `--demo` 时使用。
+   演示几何、来流和算例列表在 `scripts/demo_cases.py`（`DEMO_GEOMETRY` 取 `missile_spec.BASELINE_GEOMETRY`），只在 `--demo` 时使用。
 3. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
 4. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
    同一个 `geometry_id` 的气动系数只保留 `<geometry_id>_aero_coefficients.csv` 一张表，
@@ -211,6 +213,21 @@ tan(前缘半楔角) = ZUPPER / LMAXU          截面积 / c² = ZUPPER × (1 + 
 - NACA：`舵面翼型`（如 `NACA 0004.48-63`）、`翼型相对厚度(%)`、`翼型前缘半径指数`、`翼型最大厚度位置(1/10弦长)`
 
 同一张表里两种口径可以共存：旧行只在旧列名上有值、新行只在新列名上有值，缺的单元格留空，脚本不去猜。
+
+## 五、鼻锥头型
+
+头型和锥顶倒角不属于输入总表，写在 `scripts/missile_spec.py` 顶部，`01_batch_datcom.py`（DATCOM 计算）与 `04_pointnet_demo.py`（点云 / CFD）共用这一份，改一处两边同时生效：
+
+```python
+NOSE_SHAPE = "ogive"        # "ogive" = 切线卵形，"cone" = 直线圆锥
+NOSE_TIP_FILLET_RATIO = 0.004   # 锥顶倒角半径 = 比例 × 总长（只有点云用）
+```
+
+- `ogive` 对应 DATCOM 的 `TNOSE = OGIVE`，**也是不写 `TNOSE` 时的默认头型**；`cone` 对应 `TNOSE = CONE`。卡片值只能是 `OGIVE` / `CONE` 两个名字——写成手册里打印的标签 `CONIC` 会让 DATCOM 直接 `FATAL ERROR` 终止。
+- 两种头型的母线差别：圆锥是直线（`r = R_body·x/L_N`），切线卵形是半径 ρ 的圆弧（`ρ = (L_N² + R_body²)/(2·R_body)`，在肩部与圆柱相切、斜率为 0），同一 `L_N` 下卵形更"饱满"。
+- 同一外形（Ma 0.8，α 4°，六边形舵面）：卵形 CL 2.229 / CD 0.430 / CM −5.712，圆锥 CL 2.210 / CD 0.431 / CM −5.893。换头型会整体改变气动系数，历史结果只在头型相同时可比。
+- `for022.dat` 反查只核对弹体的起止位置、最大半径和舵面几何，不核对头锥母线形状；母线的正确性由 `for005.dat` 的 `TNOSE` 卡片 + `04_pointnet_demo.py` 的自检（球冠相切、斜率连续、网格封闭）保证。
+- 锥顶倒角（`R_f`）只存在于点云 / CFD 模型里：DATCOM 的头锥是数学尖点，不建倒角。倒角半径置 0 即退化成尖头，此时点云母线与 DATCOM 完全一致。
 
 ---
 

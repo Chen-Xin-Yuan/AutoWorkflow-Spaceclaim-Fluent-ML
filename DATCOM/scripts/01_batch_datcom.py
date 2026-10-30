@@ -24,10 +24,16 @@ README 参数 → Missile DATCOM 气动计算自动化脚本
     L_W  前舵轴向位置（弹尖到舵根前缘）  C_RW 前舵根弦  C_TW 前舵梢弦  B_W 前舵展长
     L_F  后舵轴向位置                  C_RF 后舵根弦  C_TF 后舵梢弦  B_F 后舵展长
 
+不进输入总表的设计数据（鼻锥头型、舵面布局、基准几何）在 scripts/missile_spec.py，
+翼型参数在 scripts/fin_section.py，二者都由点云脚本 04 共用同一份。
+
 DATCOM 建模约定（改动前务必读）：
     1. DATCOM 输入用英寸（DIM IN），脚本内部一律用 m 计算，写卡片时换算。
-    2. 弹体 = 圆锥头部（DATCOM 默认头型）+ 等直径圆柱段：
-       LNOSE = L_N, DNOSE = D, LCENTR = L - L_N, DCENTR = D。
+    2. 弹体 = 头锥 + 等直径圆柱段：LNOSE = L_N, DNOSE = D,
+       LCENTR = L - L_N, DCENTR = D。头型由 missile_spec.py 顶部的 NOSE_SHAPE
+       决定，写进 $AXIBOD 的 TNOSE 卡片（OGIVE = 切线卵形 / CONE = 直线圆锥）。
+       实测：不写 TNOSE 时 DATCOM 默认就是切线卵形，不是圆锥；写成 CONIC 会
+       直接 FATAL ERROR，名字只能是 OGIVE / CONE。点云脚本用同一个头型建母线。
     3. 每个十字舵建模为 4 片舵（NPANEL = 4），PHIF 在 "+" 布局下为
        0/90/180/270，"x" 布局为 45/135/225/315。
     4. 翼面梯形：SSPAN 为距弹轴的回转半径站（根部 = D/2，梢部 = D/2 + 展长），
@@ -40,7 +46,7 @@ DATCOM 建模约定（改动前务必读）：
        FUSELAGE 与每个舵面 4 片的 FINSET 区）。脚本把它拷进算例目录，并用它
        反查建模是否正确 —— 这比只看输入卡片更硬。
     7. 参考量按导弹惯例取机身横截面与直径：SREF = π(D/2)²，LREF = D，
-       力矩参考点 XCG 默认取 L/2（可用 XCG_M 覆盖）。
+       力矩参考点 XCG 默认取 L/2（可用 missile_spec.XCG_M 覆盖）。
     8. STA 固定写 1.0：本机 DATCOM 03/11 在第二个舵面组 STA=2.0 时会
        直接终止且不输出任何结果（已实测），所以两个舵面组都写 1.0。
     9. 舵面翼型是对称截面，类型和三个参数定义在 scripts/fin_section.py：
@@ -73,11 +79,15 @@ import pandas as pd
 
 from datcom_spec import (
     CSV_NAME, DATCOM_LOG_NAME, FIN_DISPLAY_NAME, FOR005_NAME, FOR006_NAME,
-    BASELINE_GEOMETRY, FOR022_NAME, GEOMETRY_CN_NAMES, INPUT_REDIRECT, M_TO_FT,
+    FOR022_NAME, GEOMETRY_CN_NAMES, INPUT_REDIRECT, M_TO_FT,
     M_TO_IN, PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, WORK_SUBDIR, archived_filename,
     normalize_geometry,
 )
-from fin_section import FIN_SECTION as DEFAULT_FIN_SECTION, resolve_fin_section
+from fin_section import resolve_fin_section
+from missile_spec import (
+    BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE, FIN_SECTION, LE_MODE, NOSE_SHAPE,
+    XCG_M, fin_roll_angles, resolve_nose_shape,
+)
 from report import (
     append_coefficient_check, append_tecplot_geometry_check, check_tecplot_geometry,
     parse_tecplot_geometry, print_geometry_brief, write_geometry_outputs,
@@ -118,25 +128,14 @@ TIMEOUT_SECONDS = 300
 
 
 # -----------------------------------------------------------------------------
-# 1.1 可选建模约定（一般不用改）
+# 1.1 不进输入总表的外形数据（定义在 scripts/missile_spec.py，一般不用改）
 # -----------------------------------------------------------------------------
-# 舵面梯形的前后缘对齐方式：trailing_aligned（后缘对齐）/ leading_aligned /
-# symmetric。与建模程序的 le_mode 一致，默认后缘对齐。
-LE_MODE = "trailing_aligned"
-
-# 舵面滚转布局："+"（十字，舵面在水平/竖直平面）或 "x"（X 形，错开 45°）
-FIN_PHASE = "+"
-
-# 每道舵面的片数（十字舵 = 4）
-CRUCIFORM_COUNT = 4
-
-# 力矩参考点轴向位置（m）。None = 取 L/2（弹身中点）。
-XCG_M = None
-
-# 舵面翼型。类型与三个默认值在 scripts/fin_section.py 顶部（SECTION_TYPE 选
-# "HEX" 或 "NACA"），点云脚本使用同一份。演示算例可在 demo_cases.py 的
-# DEMO_CASES 里用 "fin_section" 字典覆盖其中几项，键名与字段相同。
-FIN_SECTION = DEFAULT_FIN_SECTION
+# 鼻锥头型、锥顶倒角、舵面布局、基准几何都放在 missile_spec.py，点云脚本 04 共用
+# 同一份，改那一处两边同时生效；舵面翼型三参数在 scripts/fin_section.py。
+# 本脚本只在 import 处引用，不在这里维护第二份默认值：
+#     from missile_spec import (BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE,
+#                               FIN_SECTION, LE_MODE, NOSE_SHAPE, XCG_M, ...)
+# 想换头型（ogive / cone）、对齐方式或基准几何，请直接改 missile_spec.py。
 
 # -----------------------------------------------------------------------------
 # 1.2 输出内容配置（CSV 表头用中文，方便直接看懂）
@@ -260,22 +259,9 @@ def _fin_sweep_card_deg(chord_root, chord_tip, span, le_mode):
     return math.degrees(math.atan2(desired - base_offset, span))
 
 
-def _fin_roll_angles(fin_phase, count):
-    """十字舵/舵面组的滚转角列表：'+' 从 0° 起，'x' 从 45° 起，均分 360°。"""
-    if not isinstance(count, int) or count < 2 or count % 2 != 0:
-        raise ValueError(f"CRUCIFORM_COUNT 必须是大于等于 2 的偶数，收到 {count!r}。")
-    if fin_phase == "+":
-        start = 0.0
-    elif fin_phase == "x":
-        start = 45.0
-    else:
-        raise ValueError(f"不支持的 FIN_PHASE {fin_phase!r}，仅支持 '+' 或 'x'。")
-    return [start + 360.0 * index / count for index in range(count)]
-
-
 def build_for005(geometry, mach_list, alpha_list, altitude_m,
                  xcg_m=None, le_mode=LE_MODE, fin_phase=FIN_PHASE,
-                 cruciform_count=CRUCIFORM_COUNT, fin_section=None):
+                 cruciform_count=CRUCIFORM_COUNT, fin_section=None, nose_shape=None):
     """
     按几何参数与来流条件生成完整的 for005.dat 文本。
 
@@ -289,6 +275,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         飞行高度（m），DATCOM 的 ALT 卡片按英尺写入。
     xcg_m : float | None
         力矩参考点（m），None 取 L/2。
+    nose_shape : NoseShape | str | None
+        鼻锥头型，None 取 missile_spec.NOSE_SHAPE（"ogive" / "cone"）。
 
     Returns
     -------
@@ -300,6 +288,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         raise ValueError("攻角列表不能为空。")
 
     section = resolve_fin_section(FIN_SECTION if fin_section is None else fin_section)
+    nose = resolve_nose_shape(nose_shape)
 
     g = geometry
     radius = g["D"] / 2.0
@@ -310,7 +299,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     sref_m2 = math.pi * radius ** 2
     lref_m = g["D"]
     alt_ft = altitude_m * M_TO_FT
-    phif = _fin_roll_angles(fin_phase, cruciform_count)
+    phif = fin_roll_angles(fin_phase, cruciform_count)
 
     lines = []
     # ---- $FLTCON：马赫数 / 攻角 / 高度 ----
@@ -333,13 +322,14 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         f" XCG = {_num(xcg * M_TO_IN)},",
         "$END",
     ]
-    # ---- $AXIBOD：圆锥头部 + 等直径圆柱段 ----
+    # ---- $AXIBOD：头锥（TNOSE 决定卵形/圆锥）+ 等直径圆柱段 ----
     lines += [
         "$AXIBOD",
         f" LNOSE = {_num(g['L_N'] * M_TO_IN)},",
         f" DNOSE = {_num(g['D'] * M_TO_IN)},",
         f" LCENTR = {_num((g['L'] - g['L_N']) * M_TO_IN)},",
         f" DCENTR = {_num(g['D'] * M_TO_IN)},",
+        nose.card_line(),
         "$END",
     ]
 
@@ -434,6 +424,13 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
             "phif_deg": phif,
             "le_mode": le_mode,
             "body_radius_m": radius,
+            # 头型：DATCOM 的 TNOSE 卡片值 + 中文名，核对报告与参数快照都引用这里
+            "nose_shape": {
+                "key": nose.key,
+                "cn_name": nose.cn_name,
+                "datcom_token": nose.datcom_token,
+                "label": nose.label(),
+            },
             "fin_section": section.as_dict(),
             # 供核对报告 / 控制台摘要直接引用的一句中文说明。
             "fin_section_text": section.describe(),
@@ -789,6 +786,7 @@ def run_one_case(case, work_dir):
         fin_phase=case.get("fin_phase", FIN_PHASE),
         cruciform_count=case.get("cruciform_count", CRUCIFORM_COUNT),
         fin_section=case.get("fin_section", FIN_SECTION),
+        nose_shape=case.get("nose_shape", NOSE_SHAPE),
     )
 
     # 2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
@@ -1172,6 +1170,8 @@ def describe_cases(cases):
         print(f"    高度  : {alt_label} m")
         geometry = case["geometry"]
         print("    几何  : " + ", ".join(f"{k}={v:g}" for k, v in geometry.items()))
+        nose = resolve_nose_shape(case.get("nose_shape", NOSE_SHAPE))
+        print(f"    头型  : {nose.label()}（missile_spec.NOSE_SHAPE，点云共用）")
 
 
 def main(argv=None):
@@ -1219,6 +1219,7 @@ def main(argv=None):
                 fin_phase=case.get("fin_phase", FIN_PHASE),
                 cruciform_count=case.get("cruciform_count", CRUCIFORM_COUNT),
                 fin_section=case.get("fin_section", FIN_SECTION),
+                nose_shape=case.get("nose_shape", NOSE_SHAPE),
             )
             out_dir = os.path.join(RESULT_ROOT, case["name"])
             os.makedirs(out_dir, exist_ok=True)

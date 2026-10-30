@@ -1,8 +1,8 @@
 # 文件数据仓库
 
-- `inputs/`：参数与原始输入。`cases.csv` 是工作流输入总表，一行一个工况，几何列是 11 个主尺寸，并包含 `altitude_m`。翼型三个参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths` 的基准值在 `DATCOM/scripts/fin_section.py`。几何参数一共 14 个。当前有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07。标识符编码仍待定。`missile_params_example.json` 填写 11 个主尺寸；`params_mine.json` 是配套提示词使用的自有参数。
+- `inputs/`：参数与原始输入。`cases.csv` 是工作流输入总表，一行一个工况，几何列是 11 个主尺寸，并包含 `altitude_m`。翼型三个参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths` 的基准值在 `DATCOM/scripts/fin_section.py`。几何参数一共 14 个。鼻锥头型（`NOSE_SHAPE` = ogive / cone）、锥顶倒角、舵面布局和基准几何不在总表里，集中在 `DATCOM/scripts/missile_spec.py`，DATCOM 批量计算与点云共用。当前有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07。标识符编码仍待定。`missile_params_example.json` 填写 11 个主尺寸；`params_mine.json` 是配套提示词使用的自有参数。
 - `queues/`：五份队列。四份阶段队列按工况记录状态，`ml.json` 按训练轮次记录。字段见 `queues/README.md`。这 4 行试算还没有写入队列。
-- `datasets/`：数据集。`point_clouds/` 接收 `DATCOM/scripts/04_pointnet_demo.py` 的点云。脚本用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，并套用 `fin_section.py` 的 3 个翼型参数。点数和最终格式仍待定。
+- `datasets/`：数据集。`point_clouds/` 接收 `DATCOM/scripts/04_pointnet_demo.py` 的点云。脚本用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，并套用 `fin_section.py` 的 3 个翼型参数与 `missile_spec.py` 的头型。点数和最终格式仍待定。
 - `runs/`：运行目录。高保真在 `high/<run-id>/<阶段>/`，`<run-id>` 是 `run-<时间戳>-<短ID>`。低保真在 `low/<geometry_id>/`。说明见 `runs/README.md`。
 - `datcom_data/`：早先 DATCOM 脚本写出的算例结果，保留作历史记录。当前 `01_batch_datcom.py` 改写到 `runs/low/<geometry_id>/`。
 - `legacy/`：历史模型、网格、日志和 workflow，保留原文件内容；`migration-manifest.json` 解释旧路径与来源。
