@@ -164,11 +164,20 @@ CSV_FLOW_NAMES = {
 MIN_TIP_CHORD_M = 0.001          # 梢弦下限，与建模程序一致（0 会退化）
 
 
-# 舵面翼型也进系数表：翼型由 scripts/missile_spec.py 顶部 1.2 节的三个参数
-# （截面类型可选 HEX / NACA）决定，同一个 geometry_id 的所有工况共用一副截面。
-# 表里带上这几列，才能直接看出这批系数对应哪种截面，不必再去翻 case_params.json。
-# 列名随截面类型变化，由截面类的 CSV_COLUMNS 给出（见 build_for005 写进 meta 的
-# fin_section_columns），这里不再维护第二份表头。
+# 舵面翼型**不**进系数表、也不进 case_params.json：翼型由 scripts/missile_spec.py
+# 顶部 1.2 节固定（HEX / NACA 与各自三个参数），同一个 geometry_id 的所有工况共用
+# 一副截面。暂时不在产物里记录翼型参数；要知道某批系数用的哪套截面，看运行时
+# 控制台打印的「翼型: ...」或当时的 missile_spec.py 配置。
+#
+# 下面这些列是早期版本写过、现在下线的翼型列：合并旧表时丢掉，新表不再带着空列。
+RETIRED_CSV_COLUMNS = (
+    "舵面翼型",
+    "翼型相对厚度(%)",
+    "翼型平顶长度(%)",
+    "翼型前缘LER",
+    "翼型前缘半径指数",
+    "翼型最大厚度位置(1/10弦长)",
+)
 
 
 # 解析结果的内部列顺序（CSV 只输出 OUTPUT_COEFFICIENTS 里列出的系数）
@@ -432,12 +441,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
                 "datcom_token": nose.datcom_token,
                 "label": nose.label(),
             },
-            "fin_section": section.as_dict(),
-            # 供核对报告 / 控制台摘要直接引用的一句中文说明。
-            "fin_section_text": section.describe(),
-            # 翼型列随截面类型变化（六边形是平顶长度+LER，NACA 是指数+厚度位置），
-            # 由截面自己给出列名，CSV 表头才不会张冠李戴。
-            "fin_section_columns": [list(item) for item in section.CSV_COLUMNS],
+            # 舵面翼型不进 meta：它只来自 missile_spec.py，暂不写进任何产物
+            # （系数表、case_params.json、核对报告都不记翼型参数）。
             "fins": [front_fin, rear_fin],
         },
     }
@@ -646,9 +651,10 @@ def build_output_table(df, meta):
     """
     把解析结果整理成最终输出的 CSV 表（一行一个工况）。
 
-    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + 舵面翼型（截面编号
-    与三个参数）+ OUTPUT_COEFFICIENTS 里的气动系数。输入参数一律用中文表头，
-    便于直接对照 README 参数；翼型几列让每行都能看出算的是哪种舵面截面。
+    列 = 来流输入（马赫数 / 攻角 / 高度）+ 11 个几何输入 + OUTPUT_COEFFICIENTS
+    里的气动系数。输入参数一律用中文表头，便于直接对照 README 参数。
+    **不写舵面翼型与鼻锥头型的参数**：它们属于 missile_spec.py 的固定配置，
+    不进输入也不进产物（需要知道当时用的哪套截面，看运行时控制台打印）。
 
     Returns
     -------
@@ -656,11 +662,6 @@ def build_output_table(df, meta):
     """
     geometry = meta["geometry_m"]
     altitude_m = meta["flow"]["altitude_m"]
-    # 翼型参数随几何一起记在 derived 里（build_for005 写入截面对象的 as_dict()），
-    # 列名也由截面类型给出：六边形是「平顶长度 + LER」，NACA 是「指数 + 厚度位置」。
-    derived = meta.get("derived") or {}
-    section = derived.get("fin_section") or {}
-    section_columns = [tuple(item) for item in derived.get("fin_section_columns") or ()]
 
     rows = []
     for _, row in df.iterrows():
@@ -671,25 +672,14 @@ def build_output_table(df, meta):
         }
         for key in REQUIRED_GEOMETRY_KEYS:
             record[GEOMETRY_CN_NAMES[key]] = geometry[key]
-        for key, cn_name in section_columns:
-            record[cn_name] = _fin_section_cell(section, key)
         for datcom_name, cn_name in OUTPUT_COEFFICIENTS:
             record[cn_name] = row.get(datcom_name, float("nan"))
         rows.append(record)
 
     columns = [CSV_FLOW_NAMES[key] for key in ("mach", "alpha", "alt")]
     columns += [GEOMETRY_CN_NAMES[key] for key in REQUIRED_GEOMETRY_KEYS]
-    columns += [cn_name for _key, cn_name in section_columns]
     columns += [cn_name for _datcom_name, cn_name in OUTPUT_COEFFICIENTS]
     return pd.DataFrame(rows, columns=columns)
-
-
-def _fin_section_cell(section, key):
-    """翼型列的值。截面编号本身就带类型前缀（NACA ... / HEX ...），其余原样给出。"""
-    value = section.get(key)
-    if value is None:
-        return float("nan")
-    return value
 
 
 def _flow_matches(row, mach, alpha):
@@ -725,8 +715,9 @@ def attach_case_identity(table, case):
 def write_summary_csv(path, table):
     """写入系数总表。同一几何再次运行时，只替换本次工况，保留其它高度的行。
 
-    保留的旧行如果缺这次新增的列（例如后来才加的翼型四列），这些单元格留空，
-    不去猜旧行当时用的是哪副翼型。
+    合并旧表时会把早期版本写过、现已下线的翼型列（见 RETIRED_CSV_COLUMNS）丢掉：
+    翼型参数暂不进产物，旧表里的这几列不再保留。其它历史行按 identity 三列对齐，
+    本次没算到的行原样留下。
     """
     identity = ["geometry_id", "condition_id", "altitude_m"]
     if os.path.isfile(path) and set(identity) <= set(table.columns):
@@ -744,6 +735,9 @@ def write_summary_csv(path, table):
             # 以本次的列顺序为准；旧表里多出来的列（如果换过 OUTPUT_COEFFICIENTS）放最后。
             order = list(table.columns) + [c for c in merged.columns if c not in table.columns]
             table = merged.reindex(columns=order)
+    retired = [column for column in RETIRED_CSV_COLUMNS if column in table.columns]
+    if retired:
+        table = table.drop(columns=retired)
     table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
 
 

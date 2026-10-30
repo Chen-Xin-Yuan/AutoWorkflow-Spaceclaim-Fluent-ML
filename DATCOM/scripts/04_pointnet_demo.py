@@ -1892,10 +1892,15 @@ def main() -> int:
             "tangent_x_m": float(g.nose_tangent_x),
             "tangent_r_m": float(g.nose_tangent_r),
         },
-        "fin_section": g.section.as_dict(),
+        # 舵面翼型暂不进产物（只来自 missile_spec.py）；下面 geometry 里也把 section 剔掉。
         "generator": "scripts/04_pointnet_demo.py",
         "project_root": str(PROJECT_ROOT),
-        "geometry": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(g).items()},
+        # geometry 里剔掉 section：翼型参数暂不写进产物。其余字段（含头型）照旧记录。
+        "geometry": {
+            k: (list(v) if isinstance(v, tuple) else v)
+            for k, v in asdict(g).items()
+            if k != "section"
+        },
         "main_dimensions": main_dimensions,
         "fin_planforms": {
             k: {

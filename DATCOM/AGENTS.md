@@ -4,7 +4,7 @@
 
 ## 布局速览
 - `scripts/`：Python 代码。几何参数一共 14 个：`data_lib/inputs/cases.csv` 里的 11 个主尺寸，加上前舵和后舵共用的 3 个翼型参数，翼型可以选择naca或者六边形，通过一个对象（包括一个类别和三个参数）来进行切换。`01_batch_datcom.py` 读取总表，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，翼型与批量计算共用这一份，并写点云。
-- 不进输入总表的外形数据（鼻锥头型 `NOSE_SHAPE = "ogive" / "cone"` 即 DATCOM 的 `TNOSE`、锥顶倒角、舵面翼型 `SECTION_TYPE = "HEX" / "NACA"` 与两套三个参数、舵面布局 `LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`、基准几何）以及鼻锥母线 / 舵面翼型的外形方程，全部在 `scripts/missile_spec.py`：前部是唯一配置区，后面是解析式。`01` 与 `04` 共用这一份，改一处两边同时生效；不要再拆出第二个参数文件（原来的 `fin_section.py` 已并入）。`datcom_spec.py` 只管 DATCOM 协议与参数校验，不要往里塞外形数据。
+- 不进输入总表的外形数据（鼻锥头型 `NOSE_SHAPE = "ogive" / "cone"` 即 DATCOM 的 `TNOSE`、锥顶倒角、舵面翼型 `SECTION_TYPE = "HEX" / "NACA"` 与两套三个参数、舵面布局 `LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`、基准几何）以及鼻锥母线 / 舵面翼型的外形方程，全部在 `scripts/missile_spec.py`：前部是唯一配置区，后面是解析式。`01` 与 `04` 共用这一份，改一处两边同时生效；不要再拆出第二个参数文件（原来的 `fin_section.py` 已并入）。这些数据目前**也不写进产物**（系数表、`case_params.json`、`geometry_check.txt`、点云 `*_meta.json` 都不记翼型），只在运行时打到控制台；要加回产物先跟用户确认。`datcom_spec.py` 只管 DATCOM 协议与参数校验，不要往里塞外形数据。
 - `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/`。项目目录里不再保留旧结果目录。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 

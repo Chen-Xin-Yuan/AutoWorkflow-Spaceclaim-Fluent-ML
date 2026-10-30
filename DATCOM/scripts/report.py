@@ -25,7 +25,7 @@ from datcom_spec import (
     FOR022_NAME, GEOMETRY_CARD_HINT, GEOMETRY_CN_NAMES, GEOMETRY_PNG_NAME,
     GEOMETRY_TXT_NAME, M_TO_IN, REQUIRED_GEOMETRY_KEYS, archived_filename,
 )
-from missile_spec import resolve_nose_shape
+from missile_spec import FIN_SECTION, resolve_nose_shape
 
 # 报告头里写的脚本名：这份核对报告总是由 01_batch_datcom.py 触发生成的。
 REPORT_SOURCE_SCRIPT = "01_batch_datcom.py"
@@ -427,7 +427,7 @@ def render_geometry_report(case_name, meta, for005_text, checks, baseline=None):
     add("  · 弹体 = 头锥 + 等直径圆柱段；每道舵按 NPANEL = "
         f"{d['panels_per_fin_set']} 片建在弹体表面（根部回转半径 = D/2）。")
     add(f"  · 鼻锥头型 {_nose_shape_text(d)}")
-    add(f"  · 舵面翼型 {d['fin_section_text']}")
+    # 舵面翼型不进核对报告：它只来自 missile_spec.py，属固定配置（暂不写入产物）。
     add("")
     add("一、输入的 11 个主尺寸（README 参数，单位 m）")
     for key in REQUIRED_GEOMETRY_KEYS:
@@ -745,7 +745,8 @@ def print_geometry_brief(meta):
           f"SREF = {ref['sref_m2']:.6f} m², LREF = {ref['lref_m']:.3f} m, "
           f"XCG = {ref['xcg_m']:.3f} m")
     print(f"    头型: {_nose_shape_text(d)}")
-    print(f"    翼型: {d['fin_section_text']}")
+    # 翼型不在 meta 里（不进产物），控制台直接取当前配置打印，方便核对本次用的是哪套截面。
+    print(f"    翼型: {FIN_SECTION.describe()}（missile_spec.SECTION_TYPE，点云共用）")
     for fin in d["fins"]:
         print(f"    {fin['name']}: XLE = {fin['root_le_m']:.3f} m, "
               f"根弦 {fin['root_chord_m']:.3f} m, 梢弦 {fin['tip_chord_m']:.3f} m, "

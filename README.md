@@ -216,7 +216,7 @@ python DATCOM/scripts/01_batch_datcom.py
 | `{geometry_id}_for005.dat` | 输入卡片 |
 | `{geometry_id}_for006.dat` | 原始输出 |
 | `{geometry_id}_for022.dat` | 外形 |
-| `{geometry_id}_aero_coefficients.csv` | 该几何唯一的系数表：工况编号、来流、11 个主尺寸、舵面翼型（NACA 编号与三个参数）和系数，各高度都合并在这一张表里 |
+| `{geometry_id}_aero_coefficients.csv` | 该几何唯一的系数表：工况编号、来流、11 个主尺寸和系数，各高度都合并在这一张表里（不写舵面翼型，见 DATCOM 说明「四、3」） |
 | `{geometry_id}_geometry_check.txt` | 几何核对 |
 | `{geometry_id}_geometry_check.png` | 几何核对图 |
 | `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
