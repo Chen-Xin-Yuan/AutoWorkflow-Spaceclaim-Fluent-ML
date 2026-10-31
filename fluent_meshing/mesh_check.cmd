@@ -6,16 +6,29 @@ rem  The exported file is checked by a separate interpreter whose h5py/numpy liv
 rem  in .mesh_inspect_deps_313, so the PyFluent environment in ._deps stays
 rem  isolated. The interpreter is recorded in .mesh-inspect-python (git-ignored)
 rem  or supplied through MESH_INSPECT_PYTHON.
+rem
+rem  This file must stay pure ASCII. cmd.exe parses a batch file with the active
+rem  console code page, so non-ASCII comment text can swallow the following line
+rem  and leave HERE empty; keep every comment in ASCII.
 rem ---------------------------------------------------------------------------
 setlocal
-rem 输入 / 输出 / 参数配置：路径相对本启动器；%* 原样转发网格位置参数。
-rem 解释器优先 MESH_INSPECT_PYTHON，其次本地配置；与 PyFluent 的 _deps 隔离。
-rem 网格文件为必填位置参数；只打印 JSON，启动器不写输出报告。
+rem Inputs / outputs / parameters: paths are relative to this launcher;
+rem %* forwards the positional mesh path unchanged. The interpreter comes from
+rem MESH_INSPECT_PYTHON first, then the local config file; it stays isolated from
+rem the PyFluent ._deps environment. The mesh file is a required positional
+rem argument; this launcher only prints JSON and writes no report of its own.
 set "HERE=%~dp0"
 set "PYTHON_CONFIG_FILE=%HERE%.mesh-inspect-python"
 set "INSPECT_DEPS_DIR=%HERE%.mesh_inspect_deps_313"
 set "ENTRY_SCRIPT=%HERE%tools\inspect_mesh_file.py"
 set "PY=%MESH_INSPECT_PYTHON%"
+
+if not exist "%ENTRY_SCRIPT%" (
+  echo [mesh_check] entry script not found: "%ENTRY_SCRIPT%" 1>&2
+  echo [mesh_check] launcher dir resolved to "%HERE%" 1>&2
+  exit /b 3
+)
+
 if not defined PY if exist "%PYTHON_CONFIG_FILE%" set /p "PY="<"%PYTHON_CONFIG_FILE%"
 if defined PY if not exist "%PY%" set "PY="
 if not defined PY (

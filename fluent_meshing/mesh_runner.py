@@ -20,7 +20,13 @@ from mesh_validation import report_mesh, verify_export
 # workspace_runtime.py 管理；路径仍在每次运行时解析。
 # 下列日志、request.json 和工作流文件名属于既有产物约定，修改时需同步
 # 消费这些文件的脚本/工具；run.json 协议名由 workspace_runtime.py 定义。
-DEFAULT_PROCESSORS = 16
+# Fluent 计算进程数。这是 `-t`，不是线程数：一个进程一个物理核。
+# 本机是 i7-14650HX，16 个物理核 = 8 个 P 核（带超线程，16 线程）+ 8 个 E 核，
+# 共 24 个逻辑处理器。取 12 是给 Windows、Fluent 主进程、许可证服务和 SpaceClaim
+# 留出余量；16 会铺满全部物理核，且 MPI 以最慢的分区为准，落到 E 核的分区会拖平提速。
+# 另外画网格的多数步骤是串行的，只有面网格与体网格真正吃并行。
+# 单次覆盖：`-n 8`。改这里不影响 dispatch（它不传 -n，按本默认值走）。
+DEFAULT_PROCESSORS = 12
 DEFAULT_START_TIMEOUT = 300
 DEFAULT_TIMEOUT = 900
 DEFAULT_DRAW_SIZE_CONTROL = 'true'
@@ -43,6 +49,8 @@ def options(module):
     parser.add_argument('-n', '--processors', type=int, default=DEFAULT_PROCESSORS)
     parser.add_argument('--geometry', required=True, help='Imported .scdoc geometry; there is no default model')
     parser.add_argument('--run-dir', help='Unique working directory; must not already exist')
+    parser.add_argument('--run-id', help='Run id from the database (<geometry_id>__<condition_id>__<timestamp>); '
+                                         'defaults to a generated run-<timestamp>-<short> id')
     parser.add_argument('--out', help='Mesh output file; must not already exist')
     parser.add_argument('--start-timeout', type=int, default=DEFAULT_START_TIMEOUT)
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
@@ -172,9 +180,19 @@ def main(module):
         opts.out = str(Path(opts.out).resolve())
     if opts.worker:
         return worker(module, opts)
+    # 目录优先级：显式 --run-dir（续跑/受控重入）> 数据库给的 --run-id（三段式）>
+    # 手工运行时自生成 run-<时间戳>-<短码>。旧实现第一次构造没传 run_id，
+    # 于是数据库派发永远落在自生成目录，review 按 <run_id> 找不到运行目录。
+    if opts.run_dir:
+        target = {'run_dir': opts.run_dir}
+    elif opts.run_id:
+        target = {'run_id': opts.run_id}
+    else:
+        target = {}
     try:
-        run = RunRecord(module.PROJECT_DIR, opts.profile, opts.geometry, run_dir=opts.run_dir)
+        run = RunRecord(module.PROJECT_DIR, opts.profile, opts.geometry, **target)
     except Exception as exc:
+        # 失败也要留一份可读记录：退回自生成目录写 FAILED，不吞掉原始异常。
         run = RunRecord(module.PROJECT_DIR, opts.profile, opts.geometry)
         run.finish('FAILED', error={'type': type(exc).__name__, 'message': str(exc)})
         print(json.dumps({'status': 'FAILED', 'runDir': relative(run.root, run.directory), 'error': run.record['error']}))

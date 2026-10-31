@@ -22,7 +22,7 @@ test("every geometry parameter can be overridden on its own", () => {
 });
 
 test("every convention parameter can be overridden on its own", () => {
-  const overrides = { fin_phase: "x", root_overlap: 0.008, le_mode: "trailing_aligned", fin_section: "hexagon", hex_flat_start: 0.15, hex_flat_end: 0.75, fillet_location: "cone_cylinder", cruciform_count: 6, scdm_api_version: "V241", output_dir: "C:/tmp", file_name: "x.scdoc" };
+  const overrides = { fin_phase: "x", root_overlap: 0.008, le_mode: "trailing_aligned", fin_section: "hexagon", flat_percent: 40, nose_shape: "cone", fillet_location: "cone_cylinder", cruciform_count: 6, scdm_api_version: "V241", output_dir: "C:/tmp", file_name: "x.scdoc" };
   for (const param of ALL_PARAMS) {
     if (!(param.field in overrides)) continue;
     const merged = mergeParams({ [param.field]: overrides[param.field] });
@@ -67,12 +67,17 @@ test("numeric strings are coerced and junk is rejected", () => {
   assert.match(nonInteger.errors.join("\n"), /cruciform_count 必须是整数/);
 });
 
-test("thickness_percent rounds to the NACA card hundredth", () => {
-  const request = buildModelRequest({ explicit: { thickness_percent: 4.484 } });
+test("thickness_percent rounds to the NACA card hundredth only for NACA", () => {
+  const request = buildModelRequest({ explicit: { fin_section: "naca", thickness_percent: 4.484 } });
   assert.equal(request.ok, true, request.errors.join(" | "));
   assert.equal(request.params.thickness_percent, 4.48);
   assert.equal(request.corrections[0].field, "thickness_percent");
   assert.equal(request.corrections[0].to, 4.48);
+  // 六边形没有写卡格点这一步：数据库里的 6 位小数必须原样进模型，否则参数快照与库内参数不一致。
+  const hex = buildModelRequest({ explicit: { fin_section: "hexagon", thickness_percent: 4.462 } });
+  assert.equal(hex.ok, true, hex.errors.join(" | "));
+  assert.equal(hex.params.thickness_percent, 4.462);
+  assert.deepEqual(hex.corrections, []);
 });
 
 test("the baseline parameter set validates cleanly", () => {
@@ -107,9 +112,9 @@ test("hard errors reject geometrically impossible sets", () => {
     [{ fin_phase: "y" }, /fin_phase 'y' 暂不支持/],
     [{ le_mode: "leading_aligned" }, /le_mode 'leading_aligned' 暂不支持/],
     [{ fin_section: "diamond" }, /fin_section 'diamond' 暂不支持/],
-    [{ hex_flat_start: 0 }, /六边形等厚段需要/],
-    [{ hex_flat_start: 0.9, hex_flat_end: 0.8 }, /六边形等厚段需要/],
-    [{ hex_flat_end: 1 }, /六边形等厚段需要/],
+    [{ nose_shape: "ogive" }, /nose_shape 'ogive' 暂不支持/],
+    [{ flat_percent: 0 }, /flat_percent 必须在 \(0, 100\) 内/],
+    [{ flat_percent: 100 }, /flat_percent 必须在 \(0, 100\) 内/],
     [{ root_overlap: 0 }, /root_overlap 必须大于 0/],
     [{ root_overlap: 0.25 }, /必须小于最小展长/],
     [{ cruciform_count: 3 }, /cruciform_count 必须是大于等于 2 的偶数/],

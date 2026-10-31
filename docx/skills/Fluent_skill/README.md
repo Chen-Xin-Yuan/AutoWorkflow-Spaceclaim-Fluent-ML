@@ -77,3 +77,21 @@ That execution layer is intentionally separate from this repository so this skil
 ## Stars
 
 ![Local star history chart](assets/star-history.svg)
+
+---
+
+## 本工作区的目录注记
+
+本目录是**完整保留的独立 skill 项目**（自带 Git），README 正文保留上游原文。工作区补充下列
+说明，只用于目录核对：
+
+| 下级 | 用途 |
+| --- | --- |
+| `agents/` | skill 的智能体定义。 |
+| `assets/` | skill 的配图与素材。 |
+| `references/` | 参考资料。 |
+| `SKILL.md` | skill 主定义。 |
+| `PROMPTS.md` / `PROMPTS.zh-CN.md` | 提示词（英文 / 中文）。 |
+| `README.md` / `README.zh-CN.md` | 说明（英文 / 中文）。 |
+| `LICENSE` | 上游许可证。 |
+| `.gitignore` | 本 skill 自己的忽略规则。 |

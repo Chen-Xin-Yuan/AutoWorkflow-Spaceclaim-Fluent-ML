@@ -21,6 +21,7 @@ import { readFile } from "node:fs/promises";
 const DEFAULT_OPTIONS = {
   preset: "",
   outputDir: "",
+  runId: "",
   fileName: "missile.scdoc",
   execute: true,
   timeoutMs: 300000,
@@ -44,7 +45,8 @@ function usage() {
     "",
     "选项:",
     "  --preset <file.json>   预设参数文件，优先级低于命令行开关",
-    "  --out <dir>            产物目录（工作区内默认 data_lib/runs/high/<run-id>/spaceclaim）",
+    "  --out <dir>            产物根目录；最终目录是 <dir>/<run-id>（默认 data_lib/runs/high/spaceclaim/<run-id>）",
+    "  --run-id <id>          运行 ID，一般由数据库给出，形如 <geometry_id>__<condition_id>__<时间戳>",
     "  --name <file.scdoc>    模型文件名",
     "  --generate-only        只生成 params.json 与 model.py，不启动 SpaceClaim",
     `  --timeout <ms>         SpaceClaim 执行超时（默认 ${DEFAULT_OPTIONS.timeoutMs}）`,
@@ -72,6 +74,7 @@ function parseArgs(argv) {
     index += 1;
     if (name === "preset") { options.preset = value; continue; }
     if (name === "out") { options.outputDir = value; continue; }
+    if (name === "run-id") { options.runId = value; continue; }
     if (name === "name") { options.fileName = value; continue; }
     if (name === "timeout") { options.timeoutMs = Number(value); continue; }
     if (!MODEL_FIELDS.includes(name)) throw new Error(`未知参数 '--${name}'。字段必须在 lib/missile-schema.mjs 中声明。`);
@@ -99,6 +102,7 @@ async function main() {
     explicit,
     preset,
     outputDir: options.outputDir,
+    runId: options.runId,
     fileName: options.fileName,
     execute: options.execute,
     timeoutMs: options.timeoutMs,

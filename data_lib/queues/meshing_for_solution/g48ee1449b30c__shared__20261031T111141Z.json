@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "queue": "meshing_for_solution",
+  "run_id": "g48ee1449b30c__shared__20261031T111141Z",
+  "geometry_id": "g48ee1449b30c",
+  "condition_id": "shared",
+  "artifact": {
+    "rel_path": "data_lib/runs/high/fluent_meshing/g48ee1449b30c__shared__20261031T111141Z/missile_mesh.msh.h5",
+    "size": 795410970,
+    "sha256": "87efed346931f4d28407c12361e340536751b9481fbc1e6c8225fbc13eebeb2f"
+  },
+  "review_id": "r0895e0185daf",
+  "approved_at": "2026-10-31T11:25:29Z"
+}

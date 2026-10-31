@@ -3,9 +3,11 @@
 给所有 AI 编码代理（Claude Code / DSH / Codex等）修改本项目代码时的行为准则，动代码前先通读。
 
 ## 布局速览
-- `scripts/`：Python 代码。几何参数一共 14 个：`data_lib/inputs/cases.csv` 里的 11 个主尺寸，加上前舵和后舵共用的 3 个翼型参数，翼型可以选择naca或者六边形，通过一个对象（包括一个类别和三个参数）来进行切换。`01_batch_datcom.py` 读取总表，同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM。`04_pointnet_demo.py` 用 `--geometry-id` 或 `--params` 读取 11 个主尺寸，翼型与批量计算共用这一份，并写点云。
-- 不进输入总表的外形数据（鼻锥头型 `NOSE_SHAPE = "ogive" / "cone"` 即 DATCOM 的 `TNOSE`、锥顶倒角、舵面翼型 `SECTION_TYPE = "HEX" / "NACA"` 与两套三个参数、舵面布局 `LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`、基准几何）以及鼻锥母线 / 舵面翼型的外形方程，全部在 `scripts/missile_spec.py`：前部是唯一配置区，后面是解析式。`01` 与 `04` 共用这一份，改一处两边同时生效；不要再拆出第二个参数文件（原来的 `fin_section.py` 已并入）。这些数据目前**也不写进产物**（系数表、`case_params.json`、`geometry_check.txt`、点云 `*_meta.json` 都不记翼型），只在运行时打到控制台；要加回产物先跟用户确认。`datcom_spec.py` 只管 DATCOM 协议与参数校验，不要往里塞外形数据。
+- `scripts/`：Python 代码。几何身份是 **16 个参数**：11 个主尺寸、翼型种类（`hex` / `naca`）、按种类二选一的三个翼型参数、鼻锥头型（`cone` / `ogive`）。数据库 `data_lib/datasets/SQLite/missile.db` 是唯一真相源；`db.py export --format cases-csv` 会导出成 DATCOM 认识的 25 列表，用 `01_batch_datcom.py --input <csv>` 喂进去。同一个 `geometry_id` 加同一个 `altitude_m` 调用一次 DATCOM，**一次调用里可以有六边形和 NACA 两种截面、圆锥和卵形两种头型混跑**。`04_pointnet_demo.py` 用 `--geometry-id` **从库里读全部 16 个参数**（11 个主尺寸 + 翼型种类与三项参数 + 头型，见 `main_dimensions_from_db()`），翼型与头型不再取 `missile_spec.py` 的默认值；不再有独立的 `fin_section.py`。`--params` 只给 11 个主尺寸时，翼型与头型才回落到该模块的默认值。点云 `*_meta.json` 仍只记录主尺寸与头型，不记翼型参数。
+- `missile_spec.py` 是**默认值与解析式**的来源，不再是唯一配置区：前部配置区仍然集中头型、翼型两套参数、舵面布局与基准几何，`make_fin_section()` / `resolve_nose_shape()` 让调用方按行覆盖；`01` 与 `04` 共用这一份。不要再拆出第二个参数文件（原来的 `fin_section.py` 已并入）。
+- 翼型与头型的**一手记录在 `run.json`**（每批一份，`../data_lib/runs/low/<geometry_id>/<run_id>/run.json`，含 `shape.fin_section` 与 `shape.nose_shape`），审核据此比对库内参数。系数表、`case_params.json`、`geometry_check.txt`、点云 `*_meta.json` **仍不记翼型**——要加回这四个既有产物，先跟用户确认。`datcom_spec.py` 只管 DATCOM 协议、列名与参数校验（含可选的 `SHAPE_COLUMNS`），不要往里塞外形数据。
 - `datcom_bin/`（datcom.exe、for005.dat 模板）**不入 git**；DATCOM 算例结果写在项目外的 `../data_lib/runs/low/<geometry_id>/`（位置由脚本顶部 `RESULT_ROOT` 决定），点云默认写到 `../data_lib/datasets/point_clouds/<geometry_id>/`（一个几何一个子目录，目录名就是几何标识；不带标识的演示点云不建子目录，直接落在根目录下）。项目目录里不再保留旧结果目录。
+- **参数以代码为准**：README 里的参数值永远服从当前代码（本仓库脚本前部的配置区 / schema 默认值 / 数据库里的行），不是反过来。文档与代码不一致时一律改文档，只有用户明确要求时才改参数值。优先级：数据库行 > 脚本配置区 / schema 默认值 > 文档文字。参数表由 `../scripts/docs.py --write` 生成，提交前 `--check` 必须通过；历史运行记录不回填。
 - 版本管理：当前 `DATCOM/` 目录没有独立 Git 仓库；需要提交时，先返回上一级目录，使用上一级 Git 仓库。源码/配置改动按上一级仓库的跟踪范围提交；产物目录不提交。
 
 ## 路径约定：禁止写死绝对路径（项目文件夹可整体移动）

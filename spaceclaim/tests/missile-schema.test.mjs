@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import {
@@ -38,7 +38,7 @@ test("defaults reproduce the agreed baseline", () => {
   assert.equal(values.C_RF, 0.38);
   assert.equal(values.C_TF, 0.19);
   assert.equal(values.B_F, 0.22);
-  assert.equal(values.thickness_percent, 4.48);
+  assert.equal(values.thickness_percent, 4.462);
   assert.equal(values.le_radius_index, 6);
   assert.equal(values.max_thickness_tenths, 3);
   assert.equal(values.k_nose, 0.005);
@@ -66,21 +66,23 @@ test("optimisation pool is derived from data and covers the agreed ranges", () =
 });
 
 test("convention parameters expose their implemented value set", () => {
-  assert.deepEqual(CONVENTION_FIELDS, ["fin_phase", "root_overlap", "le_mode", "fin_section", "hex_flat_start", "hex_flat_end", "fillet_location", "cruciform_count", "scdm_api_version"]);
+  assert.deepEqual(CONVENTION_FIELDS, ["fin_phase", "root_overlap", "le_mode", "fin_section", "flat_percent", "nose_shape", "fillet_location", "cruciform_count", "scdm_api_version"]);
   assert.deepEqual(schemaEntry("fin_phase").options, ["+", "x"]);
   assert.deepEqual(schemaEntry("fin_section").options, ["naca", "hexagon"]);
   assert.deepEqual(schemaEntry("fin_section").implemented, ["naca", "hexagon"]);
-  assert.equal(schemaEntry("fin_section").default, "naca");
-  assert.equal(schemaEntry("hex_flat_start").default, 0.2);
-  // The flat end decides whether the forward fin-root seam can hold the full 3 mm junction round.
-  // At 0.8 the round is clamped to 1.5 mm and the un-rounded band leaves 24 sub-square-millimetre
-  // slivers on the merged body. With the thickness left at its original 4.48 the knee sits between
-  // 0.8220 (8 slivers) and 0.8221 (0 slivers), so 0.823 keeps about one step of margin and is
-  // +2.875% of the chord. Sweeps at 4.50 / 4.52 / 4.54 / 4.55 with the flat end held at 0.816 all
-  // still left 8 slivers, so raising the thickness buys nothing and is not used.
-  assert.equal(schemaEntry("hex_flat_end").default, 0.823);
-  // Unchanged: the fin cross-section is aerodynamic input, not a lever for the sliver defect.
-  assert.equal(schemaEntry("thickness_percent").default, 4.48);
+  // 数据库是 16 参数的唯一真相源，它的默认翼型是 hex，因此这里也默认 hexagon。
+  assert.equal(schemaEntry("fin_section").default, "hexagon");
+  // 六边形等厚段只有一个可配量，起止由它推导（1 - p/100) / 2 与 (1 + p/100) / 2。
+  // 64.6 → 0.177..0.823：平顶终点必须 ≥ 0.822，否则前舵根部 3 mm 圆角压到 1.5 mm 并留 24 个碎面。
+  assert.equal(schemaEntry("flat_percent").default, 64.6);
+  assert.equal(schemaEntry("hex_flat_start"), null);
+  assert.equal(schemaEntry("hex_flat_end"), null);
+  // 头型只实现直线圆锥；ogive 必须显式报错，不能静默建成圆锥。
+  assert.deepEqual(schemaEntry("nose_shape").options, ["cone", "ogive"]);
+  assert.deepEqual(schemaEntry("nose_shape").implemented, ["cone"]);
+  assert.equal(schemaEntry("nose_shape").default, "cone");
+  // 设计厚度 4.462：与数据库 geometry 行、DATCOM 的 HEX_THICKNESS_PERCENT 是同一个数。
+  assert.equal(schemaEntry("thickness_percent").default, 4.462);
   assert.deepEqual(schemaEntry("le_mode").implemented, ["trailing_aligned"]);
   assert.deepEqual(schemaEntry("fillet_location").options, ["cone_cylinder", "nose_tip", "both"]);
   assert.deepEqual(schemaEntry("fillet_location").implemented, ["cone_cylinder", "nose_tip", "both"]);

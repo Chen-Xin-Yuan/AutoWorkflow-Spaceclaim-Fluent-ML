@@ -132,3 +132,23 @@ If you find our work useful, please consider citing us!
 ## Acknowledgement
 
 This repo benefits from [MetaOpenFOAM]([Terry-cyx/MetaOpenFOAM: MetaOpenFOAM: an LLM-based multi-agent framework for CFD](https://github.com/Terry-cyx/MetaOpenFOAM)) and [MetaGPT]([geekan/MetaGPT: 🌟 The Multi-Agent Framework: First AI Software Company, Towards Natural Language Programming](https://github.com/geekan/MetaGPT)). Thanks for their wonderful works.
+
+---
+
+## 本工作区的目录注记
+
+本目录是**保留的独立研究项目**，README 正文来自上游论文仓库，未改写。工作区只在本目录
+补充下列说明，用于目录核对：
+
+| 下级 | 用途 |
+| --- | --- |
+| `assets/` | README 引用的插图（`multi-agent.png`、`data-pipeline.png` 等）。 |
+| `Benchmark/` | 论文的基准算例与结果。 |
+| `src/` | 源码。 |
+| `run.sh` | 上游的启动脚本（Linux shell）。 |
+| `LICENSE` | 上游许可证。 |
+| `.vscode/` | 本机编辑器配置，不纳入版本控制。 |
+| `README.md` | 上游 README 加本节注记。 |
+
+`experiments/autoCFD` 是保留的研究代码，**未被验证为本工作区的求解器**；
+当前求解阶段仍只有 `fluent_solution` 骨架（见 `myplan.md` §10 P5）。

@@ -1,6 +1,7 @@
 # 导弹参数化建模 → SCDoc 生成方案
 
 > **状态：Task 0–3 已实现并在本机 SCDM 2024 R1 上真机验收通过（见第十一节）。** Task 4（批量扫参）尚未实现。
+> **参数值以代码为准**：本方案写于 2026-09-17，其中的参数表已按当前默认值更新（`flat_percent` = 64.6、`thickness_percent` = 4.462）；若与本文件的记述再有出入，以 `lib/missile-schema.mjs` 的默认值与数据库 `geometry` 行为准，见 [README](../../../README.md)。
 > **For agentic workers:** 按任务清单逐项实现，每项完成后回填 `- [x]`，并保持证据标签一致。
 
 **Goal:** 让使用者输入一组几何参数（13 个，**每一个都可改**），即可自动生成一个导弹几何的 `.scdoc` 文件，并给出可核查的验收证据。
@@ -162,13 +163,17 @@
 | `fin_phase` | 十字舵相位 | `"+"`（0/90/180/270） | `"+"` / `"x"`（45° 起） |
 | `root_overlap` | 舵根沿展向嵌入弹体的重叠量 δ | 0.005 m | 任意 `> 0`（必须小于 `B_*`） |
 | `le_mode` | 梯形舵第四约束 | `"trailing_aligned"`（后缘齐平） | 当前仅支持此值，见下 |
-| `fin_section` | 舵面横截面 | `"naca"` | `"naca"` / `"hexagon"` |
-| `hex_flat_start` | 六边形等厚段起点，占当地弦长 | 0.2 | 仅 `hexagon` 使用，且 `0 < hex_flat_start < hex_flat_end < 1` |
-| `hex_flat_end` | 六边形等厚段终点，占当地弦长 | 0.8 | 仅 `hexagon` 使用 |
+| `fin_section` | 舵面横截面 | `"hexagon"` | `"naca"` / `"hexagon"` |
+| `flat_percent` | 六边形等厚段长度，占当地弦长百分数 | 64.6 | 仅 `hexagon` 使用，须在 `(0, 100)` 内 |
+| `nose_shape` | 鼻锥头型 | `"cone"`（直线圆锥） | 仅 `"cone"` 已实现；`"ogive"` 会明确报错 |
 | `fillet_location` | 倒圆位置 | `"both"`（交接处 + 弹尖） | `cone_cylinder` / `nose_tip` / `both` |
 | `cruciform_count` | 每级舵面片数 | 4 | 正偶数 |
 | `scdm_api_version` | 目标脚本 API 版本 | 由所选 `AWP_ROOT<number>` 解析 | 版本字符串 |
 | `output_dir` / `file_name` | 产物目录与文件名 | 由调用方给 | 路径 / 文件名 |
+
+**六边形等厚段只有一个入口 `flat_percent`。** 等厚段在弦上居中，起止由它推导（`lib/missile-params.mjs` 的 `hexFlatFromPercent`）：`hex_flat_start = (1 - flat_percent/100) / 2`、`hex_flat_end = (1 + flat_percent/100) / 2`，与 DATCOM 卡片的 `LMAXU` / `LFLATU` 是同一个量。这两个键不再作为 schema 字段存在，因此既不能从命令行传入，也不会出现"数据库一套、模型另一套"；它们仍会以派生值写进 `params.json`，供审核核对。
+
+**`nose_shape` 只实现 `cone`。** 本模块的鼻锥母线是一条直线（圆锥），`ogive` 没有实现，传入时会按"不得静默降级"的规则报错，而不是偷偷建成圆锥。高保真数据因此目前只有圆锥头型一种。
 
 **未实现的枚举值必须显式报错，不得静默降级。** 例如 `le_mode` 传入 `"leading_aligned"` 时返回明确的"暂不支持"错误，而不是悄悄按后缘齐平建模——静默降级会产出看起来正常但几何错误的模型。
 

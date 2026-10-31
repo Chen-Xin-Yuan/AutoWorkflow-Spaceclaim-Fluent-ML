@@ -88,7 +88,7 @@ def relative(root, file):
 
 
 class RunRecord:
-    def __init__(self, project_dir, profile, geometry, run_dir=None, reopen=False):
+    def __init__(self, project_dir, profile, geometry, run_dir=None, reopen=False, run_id=None):
         self.root, self.config = workspace(project_dir)
         if reopen:
             self.directory = Path(run_dir).resolve()
@@ -96,8 +96,11 @@ class RunRecord:
             if self.record['stage'] != 'fluent_meshing':
                 raise ValueError('Unexpected run owner')
             return
-        run_id = RUN_ID_PREFIX + datetime.now(timezone.utc).strftime(RUN_ID_TIME_FORMAT) + '-' + uuid.uuid4().hex[:8]
-        self.directory = Path(run_dir).resolve() if run_dir else checked(self.root, Path(self.config['dataRoot']) / RUNS_SUBDIR / HIGH_FIDELITY_SUBDIR / run_id / 'fluent_meshing')
+        # run_id 由调用方（数据库）给出时就用它：三段式 <geometry_id>__<condition_id>__<时间戳>；
+        # 没给（手工运行）才退回旧的自生成形式。
+        run_id = run_id or RUN_ID_PREFIX + datetime.now(timezone.utc).strftime(RUN_ID_TIME_FORMAT) + '-' + uuid.uuid4().hex[:8]
+        # 目录顺序是 <阶段>/<run_id>/，与 SpaceClaim 侧一致（旧版是 <run_id>/<阶段>/）。
+        self.directory = Path(run_dir).resolve() if run_dir else checked(self.root, Path(self.config['dataRoot']) / RUNS_SUBDIR / HIGH_FIDELITY_SUBDIR / 'fluent_meshing' / run_id)
         protected = self.root / 'DATCOM'
         if self.directory == protected or protected in self.directory.parents:
             raise ValueError('Protected output path')

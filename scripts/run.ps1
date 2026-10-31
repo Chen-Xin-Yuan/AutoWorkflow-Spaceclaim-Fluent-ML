@@ -1,14 +1,32 @@
 param(
     [Parameter(Position=0)]
-    [ValidateSet('spaceclaim','fluent_meshing','verify-spaceclaim','verify-meshing','spaceclaim-mcp','index')]
+    [ValidateSet('spaceclaim','fluent_meshing','verify-spaceclaim','verify-meshing','spaceclaim-mcp','index','db','watch','control','dispatch','review','train','docs')]
     [string]$Mode='index',
     [string]$Geometry,
-    [string[]]$WorkflowArgs=@()
+    [string[]]$WorkflowArgs=@(),
+    # Remaining positional arguments are merged into WorkflowArgs, so
+    # `run.ps1 db check` equals `run.ps1 db -WorkflowArgs @('check')`.
+    # Keep this file ASCII: Windows PowerShell 5.1 reads .ps1 without BOM as ANSI.
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$RemainingArgs=@()
 )
+if ($RemainingArgs.Count) { $WorkflowArgs = @($WorkflowArgs) + @($RemainingArgs) }
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $node=(Get-Command node.exe -ErrorAction Stop).Source
+$python=$null
+function Get-Python {
+    if (-not $script:python) { $script:python=(Get-Command python.exe -ErrorAction Stop).Source }
+    return $script:python
+}
 switch($Mode) {
+    'db' { & (Get-Python) (Join-Path $PSScriptRoot 'db.py') @WorkflowArgs }
+    'watch' { & (Get-Python) (Join-Path $PSScriptRoot 'watch.py') @WorkflowArgs }
+    'control' { & (Get-Python) (Join-Path $PSScriptRoot 'control.py') @WorkflowArgs }
+    'dispatch' { & (Get-Python) (Join-Path $PSScriptRoot 'dispatch.py') @WorkflowArgs }
+    'review' { & (Get-Python) (Join-Path $PSScriptRoot 'review.py') @WorkflowArgs }
+    'train' { & (Get-Python) (Join-Path $PSScriptRoot 'train.py') @WorkflowArgs }
+    'docs' { & (Get-Python) (Join-Path $PSScriptRoot 'docs.py') @WorkflowArgs }
     'spaceclaim' { & $node (Join-Path $root 'spaceclaim\scripts\missile.mjs') @WorkflowArgs }
     'spaceclaim-mcp' {
         # No banners, captures or PowerShell object formatting on JSON-RPC stdout.
@@ -46,10 +64,8 @@ public static class WorkspaceMcpRelay {
         $resolved=(Resolve-Path -LiteralPath $Geometry -ErrorAction Stop).Path
         & (Join-Path $root 'fluent_meshing\run_meshing.cmd') --geometry $resolved @WorkflowArgs
     }
-    'index' { & $node (Join-Path $PSScriptRoot 'index.mjs') }
+    # index is now a read-only DB view; index.mjs was retired (it scanned the disk
+    # and had drifted: 14 of 24 entries pointed at deleted directories).
+    'index' { & (Get-Python) (Join-Path $PSScriptRoot 'db.py') export --format index }
 }
-$resultCode=$LASTEXITCODE
-if ($Mode -ne 'spaceclaim-mcp' -and $Mode -ne 'index') {
-    & $node (Join-Path $PSScriptRoot 'index.mjs') | Out-Null
-}
-exit $resultCode
+exit $LASTEXITCODE

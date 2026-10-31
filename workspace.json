@@ -1,7 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "dataRoot": "data_lib",
   "feedbackRoot": "feedback",
   "legacyRoot": "data_lib/legacy",
-  "inputRoot": "data_lib/inputs"
+  "inputRoot": "data_lib/inputs",
+  "database": "data_lib/datasets/SQLite/missile.db",
+  "queues": {
+    "scdoc_for_fluent": "data_lib/queues/scdoc_for_fluent",
+    "meshing_for_solution": "data_lib/queues/meshing_for_solution"
+  }
 }

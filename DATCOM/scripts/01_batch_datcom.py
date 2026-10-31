@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -73,19 +74,19 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
 from datcom_spec import (
     CSV_NAME, DATCOM_LOG_NAME, FIN_DISPLAY_NAME, FOR005_NAME, FOR006_NAME,
     FOR022_NAME, GEOMETRY_CN_NAMES, INPUT_REDIRECT, M_TO_FT,
-    M_TO_IN, PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, WORK_SUBDIR, archived_filename,
-    normalize_geometry,
+    M_TO_IN, PARAMS_NAME, REQUIRED_GEOMETRY_KEYS, SHAPE_COLUMNS, WORK_SUBDIR,
+    archived_filename, normalize_geometry,
 )
 from missile_spec import (
     BASELINE_GEOMETRY, CRUCIFORM_COUNT, FIN_PHASE, FIN_SECTION, LE_MODE,
-    XCG_M, fin_roll_angles, resolve_nose_shape,
+    XCG_M, fin_roll_angles, make_fin_section, resolve_nose_shape,
 )
 from report import (
     append_coefficient_check, append_tecplot_geometry_check, check_tecplot_geometry,
@@ -120,6 +121,15 @@ MASTER_TABLE_COLUMNS = (
     "L_F", "C_RF", "C_TF", "B_F",
     "Ma", "alpha_deg", "altitude_m",
 )
+# 完整表头 = 必填列 + 可选的翼型/头型列（缺了就用 missile_spec.py 的默认值）
+TABLE_COLUMNS = MASTER_TABLE_COLUMNS + SHAPE_COLUMNS
+
+# 每批运行写一份运行记录，位置是 <结果根>/<geometry_id>/<run_id>/run.json。
+# run_id 三段式：<geometry_id>__<condition_id>__<时间戳>；DATCOM 一个批次覆盖多个工况，
+# 所以中段写 shared。数据库的 datcom_task.run_id 用的就是这同一个值。
+RUN_MANIFEST_NAME = "run.json"
+RUN_ID_SEPARATOR = "__"
+SHARED_CONDITION_ID = "shared"
 
 
 # 单算例超时（秒）。一次 30 个工况通常几秒到几十秒。
@@ -258,14 +268,31 @@ def _fin_sweep_card_deg(chord_root, chord_tip, span, le_mode):
     return math.degrees(math.atan2(desired - base_offset, span))
 
 
+def _section_params(section):
+    """把截面对象摊成 {种类, 参数}，写进 run.json 与几何核对报告。
+
+    注意 DATCOM 卡片只保留 0.01% 的格点（`HexSection` / `NacaSection` 都会四舍五入），
+    所以这里记的是**实际写进卡片的值**，可能与数据库里的 6 位小数差 0.01 以内。
+    """
+    params = {"thickness_percent": float(section.thickness_percent)}
+    if hasattr(section, "flat_percent"):
+        params["flat_percent"] = float(section.flat_percent)
+        params["le_radius"] = float(section.le_radius)
+        return "hex", params
+    params["le_radius_index"] = int(section.le_radius_index)
+    params["max_thickness_tenths"] = int(section.max_thickness_tenths)
+    return "naca", params
+
+
 def build_for005(geometry, mach_list, alpha_list, altitude_m,
                  xcg_m=None, le_mode=LE_MODE, fin_phase=FIN_PHASE,
-                 cruciform_count=CRUCIFORM_COUNT):
+                 cruciform_count=CRUCIFORM_COUNT, section=None, nose=None):
     """
     按几何参数与来流条件生成完整的 for005.dat 文本。
 
-    翼型与鼻锥头型不在这里传：它们只来自 scripts/missile_spec.py 前部的配置区
-    （``FIN_SECTION`` / ``NOSE_SHAPE``），改那里两边同时生效，算例不能按个例覆盖。
+    翼型与鼻锥头型可以按算例覆盖（数据库是唯一真相源）：`section` 是
+    `missile_spec.make_fin_section(...)` 的返回值，`nose` 是 `resolve_nose_shape(...)`
+    的返回值；不传时用 `missile_spec.py` 配置区的默认值。
 
     Parameters
     ----------
@@ -277,6 +304,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
         飞行高度（m），DATCOM 的 ALT 卡片按英尺写入。
     xcg_m : float | None
         力矩参考点（m），None 取 L/2。
+    section, nose :
+        舵面截面对象与头型对象，None 取 `missile_spec.py` 的默认值。
 
     Returns
     -------
@@ -287,8 +316,8 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     if not alpha_list:
         raise ValueError("攻角列表不能为空。")
 
-    section = FIN_SECTION
-    nose = resolve_nose_shape()
+    section = FIN_SECTION if section is None else section
+    nose = resolve_nose_shape() if nose is None else nose
 
     g = geometry
     radius = g["D"] / 2.0
@@ -403,6 +432,7 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
     lines += section.control_cards()
     text = "\n".join(lines) + "\n"
 
+    fin_kind, fin_params = _section_params(section)
     meta = {
         "geometry_m": dict(g),
         "flow": {
@@ -431,8 +461,13 @@ def build_for005(geometry, mach_list, alpha_list, altitude_m,
                 "datcom_token": nose.datcom_token,
                 "label": nose.label(),
             },
-            # 舵面翼型不进 meta：它只来自 missile_spec.py，暂不写进任何产物
-            # （系数表、case_params.json、核对报告都不记翼型参数）。
+            # 舵面翼型：哪一套截面（hex / naca）与三个参数。01 按它写卡，审核按它比对，
+            # 所以必须写进 run.json —— 否则"这批系数用的哪种翼型"就没有一手记录。
+            "fin_section": {
+                "kind": fin_kind,
+                "params": fin_params,
+                "describe": section.describe(),
+            },
             "fins": [front_fin, rear_fin],
         },
     }
@@ -744,29 +779,92 @@ def clear_dir(path):
         os.makedirs(path, exist_ok=True)
 
 
-def run_one_case(case, work_dir):
+def _utc_stamp():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _utc_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def make_run_id(geometry_id, stamp=None):
+    """`<geometry_id>__shared__<时间戳>`：一次 DATCOM 批次覆盖多个工况，中段写 shared。"""
+    return RUN_ID_SEPARATOR.join((geometry_id, SHARED_CONDITION_ID, stamp or _utc_stamp()))
+
+
+def _workspace_rel(path):
+    return os.path.relpath(os.path.abspath(path), WORKSPACE_ROOT).replace("\\", "/")
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_records(paths):
+    records = []
+    for path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        records.append({
+            "path": _workspace_rel(path),
+            "size": os.path.getsize(path),
+            "sha256": _sha256(path),
+        })
+    return records
+
+
+def _float_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def write_run_manifest(out_dir, run_id, payload):
+    """把本批运行记录写到 `<结果根>/<geometry_id>/<run_id>/run.json`。"""
+    manifest_dir = os.path.join(out_dir, run_id)
+    os.makedirs(manifest_dir, exist_ok=True)
+    path = os.path.join(manifest_dir, RUN_MANIFEST_NAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    return path
+
+
+def run_one_case(case, work_dir, run_id=None):
     """
     渲染一个算例输入 → 在 work_dir 运行 datcom → 收集产物并解析。
+
+    翼型与头型按算例（= 输入表里该 geometry_id 的那几行）取，不再读配置区。
 
     Returns
     -------
     dict
-        含 name / n_records / csv_path / out_dir 等信息；失败时抛出异常。
+        含 name / n_records / csv_path / out_dir / run_id / manifest_path 等信息；
+        失败时抛出异常。
     """
     name = case["name"]
     geometry = case["geometry"]
     mach_list = case["mach"]
     alpha_list = case["alpha"]
     altitude_m = case["alt"]
+    run_id = run_id or make_run_id(name)
+    started_at = _utc_iso()
 
     # 1) 生成 for005 文本（11 个主尺寸 + 来流条件 → DATCOM 卡片）
-    #    翼型与头型不按算例覆盖，直接取 missile_spec.py 的当前配置。
+    #    翼型与头型来自算例（输入表每一行），缺列时才回落到 missile_spec.py 的默认值。
     for005_text, meta = build_for005(
         geometry, mach_list, alpha_list, altitude_m,
         xcg_m=case.get("xcg", XCG_M),
         le_mode=case.get("le_mode", LE_MODE),
         fin_phase=case.get("fin_phase", FIN_PHASE),
         cruciform_count=case.get("cruciform_count", CRUCIFORM_COUNT),
+        section=case.get("section"),
+        nose=case.get("nose"),
     )
 
     # 2) 几何核对产物先落盘：即使后面 DATCOM 跑失败，也能据此确认几何建对没有
@@ -787,7 +885,7 @@ def run_one_case(case, work_dir):
     with open(for005_path, "w", encoding="utf-8") as f:
         f.write(for005_text)
     write_input_redirect(work_dir, input_name=FOR005_NAME)
-    _completed, stdout_text, stderr_text = run_datcom(
+    completed, stdout_text, stderr_text = run_datcom(
         DATCOM_EXE, work_dir, case.get("timeout", TIMEOUT_SECONDS))
     log_path = os.path.join(out_dir, archived_filename(name, DATCOM_LOG_NAME))
     with open(log_path, "w", encoding="utf-8") as log_file:
@@ -880,11 +978,67 @@ def run_one_case(case, work_dir):
     with open(os.path.join(out_dir, archived_filename(name, PARAMS_NAME)), "w", encoding="utf-8") as f:
         json.dump(params, f, ensure_ascii=False, indent=2)
 
+    # 8) 本批运行记录：run_id、每工况的系数、几何自检结论、进程退出码与产物指纹。
+    #    数据库那边按它回填 datcom_task，审核按它逐条比对。
+    condition_records = []
+    if not df.empty:
+        for record in table.to_dict("records"):
+            coefficients = {
+                datcom_name: _float_or_none(record.get(cn_name))
+                for datcom_name, cn_name in OUTPUT_COEFFICIENTS
+            }
+            condition_records.append({
+                "condition_id": str(record.get("condition_id") or ""),
+                "mach": _float_or_none(record.get(CSV_FLOW_NAMES["mach"])),
+                "alpha_deg": _float_or_none(record.get(CSV_FLOW_NAMES["alpha"])),
+                "altitude_m": _float_or_none(record.get(CSV_FLOW_NAMES["alt"])),
+                **coefficients,
+            })
+    manifest = {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "stage": "datcom",
+        "status": "PASSED" if (csv_written and len(df) == expected and not bad) else "FAILED",
+        "geometry_id": name,
+        "altitude_m": altitude_m,
+        "startedAt": started_at,
+        "finishedAt": _utc_iso(),
+        "datcom": {
+            "executable": os.path.basename(DATCOM_EXE),
+            "returncode": getattr(completed, "returncode", None),
+            "expectedConditions": expected,
+            "parsedConditions": len(df),
+        },
+        "shape": {
+            "fin_section": meta["derived"]["fin_section"],
+            "nose_shape": meta["derived"]["nose_shape"],
+        },
+        "geometryChecks": {"total": len(checks), "failed": len(bad), "messages": bad},
+        "conditions": condition_records,
+        "artifacts": _artifact_records([
+            os.path.join(out_dir, archived_input),
+            os.path.join(out_dir, archived_raw),
+            csv_path if csv_written else None,
+            geom_txt,
+            geom_png,
+            log_path,
+            tecplot_path,
+            os.path.join(out_dir, archived_filename(name, PARAMS_NAME)),
+        ]),
+        "error": None,
+    }
+    manifest_path = write_run_manifest(out_dir, run_id, manifest)
+    print(f"    运行记录: {_workspace_rel(manifest_path)}（{len(condition_records)} 个工况）")
+
     return {
         "name": name,
         "n_records": len(df),
         "expected": expected,
         "out_dir": out_dir,
+        "run_id": run_id,
+        "manifest_path": manifest_path,
+        "status": manifest["status"],
+        "conditions": condition_records,
         "csv_path": csv_path if csv_written else None,
         "geometry_txt": geom_txt,
         "geometry_png": geom_png,
@@ -930,6 +1084,59 @@ def _case_name_from_geometry_id(geometry_id, row_number):
     return name
 
 
+def _shape_from_row(row, row_number):
+    """读一行里的翼型与头型；缺列或空单元格回落到 `missile_spec.py` 的默认值。
+
+    返回 `(section, nose, identity)`。`identity` 用来检查"同一个 geometry_id 的各行
+    翼型/头型必须一致"——翼型是几何身份的一部分，同一几何不可能有两种舵面截面。
+    """
+    raw_kind = (row.get("fin_section_type") or "").strip().lower()
+    aliases = {"hex": "HEX", "hexagon": "HEX", "naca": "NACA"}
+    if raw_kind and raw_kind not in aliases:
+        raise ValueError(
+            f"输入表第 {row_number} 行的 fin_section_type = {raw_kind!r} 不合法，"
+            "只能是 hex / naca。")
+    kind = aliases.get(raw_kind)          # None = 用配置区的默认种类
+
+    def number(name):
+        text = (row.get(name) or "").strip()
+        if text == "":
+            return None
+        try:
+            return float(text)
+        except ValueError as exc:
+            raise ValueError(
+                f"输入表第 {row_number} 行的 {name} 不是数字：{text}") from exc
+
+    def integer(name):
+        value = number(name)
+        if value is None:
+            return None
+        if abs(value - round(value)) > 1e-9:
+            raise ValueError(f"输入表第 {row_number} 行的 {name} 必须是整数，收到 {value}。")
+        return int(round(value))
+
+    effective_kind = kind or _section_params(FIN_SECTION)[0].upper()
+    if effective_kind == "NACA":
+        section = make_fin_section(
+            "NACA",
+            thickness_percent=number("thickness_percent"),
+            le_radius_index=integer("le_radius_index"),
+            max_thickness_tenths=integer("max_thickness_tenths"),
+        )
+    else:
+        section = make_fin_section(
+            "HEX",
+            thickness_percent=number("thickness_percent"),
+            flat_percent=number("flat_percent"),
+            le_radius=number("le_radius"),
+        )
+    nose_text = (row.get("nose_shape") or "").strip().lower()
+    nose = resolve_nose_shape(nose_text or None)
+    identity = (effective_kind, section.describe(), nose.key)
+    return section, nose, identity
+
+
 def load_cases_from_master_table(path):
     """
     从输入总表生成算例。
@@ -952,8 +1159,13 @@ def load_cases_from_master_table(path):
         if missing:
             raise ValueError(
                 "输入总表缺少列：" + ", ".join(missing)
-                + "。需要的表头是：" + ",".join(MASTER_TABLE_COLUMNS)
+                + "。需要的必填列是：" + ",".join(MASTER_TABLE_COLUMNS)
+                + "；可选的翼型/头型列：" + ",".join(SHAPE_COLUMNS)
             )
+        absent = [column for column in SHAPE_COLUMNS if column not in header]
+        if absent:
+            print("[INFO] 输入表没有这些列，按 missile_spec.py 的默认值处理："
+                  + ", ".join(absent))
         raw_rows = list(reader)
 
     if not raw_rows:
@@ -977,6 +1189,7 @@ def load_cases_from_master_table(path):
             key: _parse_table_float(row.get(key), index, key)
             for key in REQUIRED_GEOMETRY_KEYS
         }
+        section, nose, shape_identity = _shape_from_row(row, index)
         mach = _parse_table_float(row.get("Ma"), index, "Ma")
         alpha = _parse_table_float(row.get("alpha_deg"), index, "alpha_deg")
         if mach <= 0:
@@ -993,12 +1206,19 @@ def load_cases_from_master_table(path):
 
         bucket = grouped.get(geometry_id)
         if bucket is None:
-            bucket = {"geometry": geometry, "row": index, "altitudes": {}}
+            bucket = {"geometry": geometry, "row": index, "altitudes": {},
+                      "section": section, "nose": nose, "shape": shape_identity}
             grouped[geometry_id] = bucket
             order.append(geometry_id)
         elif any(abs(bucket["geometry"][key] - geometry[key]) > 1e-9 for key in REQUIRED_GEOMETRY_KEYS):
             raise ValueError(
                 f"geometry_id {geometry_id} 在第 {bucket['row']} 行和第 {index} 行的几何尺寸不一致。"
+            )
+        elif bucket["shape"] != shape_identity:
+            raise ValueError(
+                f"geometry_id {geometry_id} 在第 {bucket['row']} 行和第 {index} 行的翼型/头型不一致："
+                f"{bucket['shape']} vs {shape_identity}。翼型是几何身份的一部分，"
+                "同一个 geometry_id 只能有一种舵面截面与一种头型。"
             )
         altitude_bucket = bucket["altitudes"].get(altitude_text)
         if altitude_bucket is None:
@@ -1057,6 +1277,8 @@ def load_cases_from_master_table(path):
                 "alt": altitude_bucket["alt"],
                 "altitude_text": altitude_text,
                 "conditions": conditions,
+                "section": bucket["section"],
+                "nose": bucket["nose"],
             })
     return cases
 
@@ -1072,11 +1294,11 @@ def build_cases(args):
         conditions        总表这一格的全部 (mach, alpha) 行，CSV 合并时按它对齐
         le_mode / fin_phase / cruciform_count / xcg / timeout
                           可选覆盖，缺项走 missile_spec.py 的默认值
+        section / nose    这一几何的舵面截面与头型对象，来自输入表的
+                          fin_section_type 等列（缺列时是 missile_spec.py 的默认值）
 
-    翼型与鼻锥头型不在算例里：它们只来自 scripts/missile_spec.py，算例无法覆盖。
-
-    正式运行只读输入总表。--demo 的整套演示算例在 scripts/demo_cases.py，
-    这里懒导入，正式路径不会加载它。
+    正式运行只读输入表（`--input`，默认 cases.csv）。--demo 的整套演示算例在
+    scripts/demo_cases.py，这里懒导入，正式路径不会加载它。
     """
     if args.demo:
         import demo_cases
@@ -1097,10 +1319,15 @@ def build_cases(args):
     if demo_switches:
         raise ValueError(
             "、".join(demo_switches) + " 只在 --demo 下有效。"
-            "正式运行请把几何和来流写进输入总表：" + INPUT_TABLE
+            "正式运行请把几何和来流写进输入表：" + (args.input or INPUT_TABLE)
         )
 
-    cases = load_cases_from_master_table(INPUT_TABLE)
+    input_path = args.input or INPUT_TABLE
+    if not os.path.isabs(input_path):
+        input_path = os.path.join(WORKSPACE_ROOT, input_path)
+    cases = load_cases_from_master_table(input_path)
+    if args.run_id and len(cases) > 1:
+        raise ValueError("--run-id 只能用于单个算例；多算例请让脚本自己生成 run_id。")
     for case in cases:
         case.setdefault("timeout", args.timeout)
     return cases
@@ -1129,6 +1356,12 @@ def parse_args(argv=None):
                         help="仅 --demo：覆盖攻角列表（度，默认见 demo_cases.DEMO_ALPHA）。")
     parser.add_argument("--alt", type=float,
                         help="仅 --demo：覆盖飞行高度（m，默认见 demo_cases.DEMO_ALTITUDE）。")
+    parser.add_argument("--input", default=INPUT_TABLE, metavar="CSV",
+                        help="输入表路径（默认 data_lib/inputs/cases.csv；相对路径以工作区根为准）。"
+                             "数据库导出的表可以带翼型/头型列，缺列时回落 missile_spec.py 的默认值。")
+    parser.add_argument("--run-id", default=None,
+                        help="本次批次的 run_id（默认 <geometry_id>__shared__<时间戳>）；"
+                             "只在单个算例时允许指定。")
     parser.add_argument("--dry-run", action="store_true",
                         help="只生成输入卡片到 data_lib/runs/low/<算例名>/，不调用 datcom。")
     parser.add_argument("--list", action="store_true", help="列出算例与工况组合后退出。")
@@ -1152,9 +1385,10 @@ def describe_cases(cases):
         print(f"    高度  : {alt_label} m")
         geometry = case["geometry"]
         print("    几何  : " + ", ".join(f"{k}={v:g}" for k, v in geometry.items()))
-        nose = resolve_nose_shape()
-        print(f"    头型  : {nose.label()}（missile_spec.NOSE_SHAPE，点云共用）")
-        print(f"    翼型  : {FIN_SECTION.describe()}")
+        nose = case.get("nose") or resolve_nose_shape()
+        section = case.get("section") or FIN_SECTION
+        print(f"    头型  : {nose.label()}（来自输入表 {nose.key} 列，缺列时用配置区默认值）")
+        print(f"    翼型  : {section.describe()}")
 
 
 def main(argv=None):
@@ -1176,7 +1410,10 @@ def main(argv=None):
         return 1
 
     print(f"[INFO] 项目根目录 : {PROJECT_ROOT}")
-    print(f"[INFO] 输入总表   : {INPUT_TABLE}")
+    input_path = args.input or INPUT_TABLE
+    if not os.path.isabs(input_path):
+        input_path = os.path.join(WORKSPACE_ROOT, input_path)
+    print(f"[INFO] 输入总表   : {input_path}")
     if args.demo:
         print("[INFO] 输入来源   : 演示参数（--demo），未读取输入总表")
     print(f"[INFO] DATCOM     : {DATCOM_EXE}")
@@ -1225,15 +1462,32 @@ def main(argv=None):
         print(f"\n{'─' * 70}")
         print(f"[{idx}/{len(cases)}] 算例: {name}")
         print(f"{'─' * 70}")
+        run_id = args.run_id or make_run_id(name)
         try:
-            info = run_one_case(case, work_dir)
+            info = run_one_case(case, work_dir, run_id=run_id)
             print(f"[OK] {name}: {info['n_records']} 条气动系数记录 → {info['out_dir']}")
             summary.append((name, info["n_records"], info["expected"],
-                            info["raw_result"], bool(info.get("csv_path"))))
+                            info["raw_result"], bool(info.get("csv_path")), run_id))
         except Exception as exc:  # noqa: BLE001 —— 单算例失败不中断批量
             print(f"[ERROR] 算例 '{name}' 运行失败: {exc}")
+            # 失败也要留一份运行记录：派发器与审核都靠它定位原因
+            try:
+                write_run_manifest(os.path.join(RESULT_ROOT, name), run_id, {
+                    "schemaVersion": 1,
+                    "runId": run_id,
+                    "stage": "datcom",
+                    "status": "FAILED",
+                    "geometry_id": name,
+                    "altitude_m": case["alt"],
+                    "finishedAt": _utc_iso(),
+                    "conditions": [],
+                    "artifacts": [],
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                })
+            except OSError as write_exc:
+                print(f"[WARN] 写失败运行记录失败: {write_exc}")
             summary.append((name, None, len(case["mach"]) * len(case["alpha"]),
-                            "FAILED", False))
+                            "FAILED", False, run_id))
 
     # 清理临时工作目录
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -1242,17 +1496,17 @@ def main(argv=None):
     print("批量运行汇总:")
     print("=" * 70)
     failed = 0
-    for name, n_records, expected, raw, csv_ok in summary:
+    for name, n_records, expected, raw, csv_ok, run_id in summary:
         if n_records is None:
             failed += 1
-            print(f"  [FAIL] {name:<24s} {'-':>6s} 条  原始输出: {raw}")
+            print(f"  [FAIL] {name:<24s} {'-':>6s} 条  运行记录: {run_id}/run.json")
             continue
         ok = n_records == expected
         failed += 0 if ok else 1
         state = "OK  " if ok else "WARN"
         note = "" if csv_ok else f"  ← {archived_filename(name, CSV_NAME)} 未更新（文件被其它程序占用？）"
         print(f"  [{state}] {name:<24s} {n_records:>6d} 条（预期 {expected}）"
-              f"  原始输出: {raw}{note}")
+              f"  运行记录: {run_id}/run.json{note}")
     print(f"\n[INFO] 结果目录: {RESULT_ROOT}")
     print(f"[INFO] 每个算例一个子目录：{archived_filename('<geometry_id>', FOR005_NAME)}（实际输入）"
           f" + {archived_filename('<geometry_id>', FOR006_NAME)}（原始输出）"

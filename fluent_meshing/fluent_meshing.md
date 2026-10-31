@@ -20,22 +20,22 @@
 `mesh_runner.py`，运行记录与独立核验路径位于 `workspace_runtime.py`，校验报告名与原有阈值位于
 `mesh_validation.py`。本次没有改变下面记录的参数数值、必填模型输入或动态运行目录规则。
 
-以下命令在本仓库目录中使用 PowerShell 执行，`run-xxxx` 替换为实际几何生成记录目录：
+以下命令在本仓库目录中使用 PowerShell 执行，`<run_id>` / `<geometry_id>` 替换为实际的运行号与几何标识：
 
 ```powershell
-.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc -n 16
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\spaceclaim\<run_id>\<geometry_id>_spaceclaim.scdoc -n 16
 ```
 
 | 项目 | 当前行为 |
 | --- | --- |
-| 输入几何 | `--geometry` 必填，没有默认模型；导入时设置 `LengthUnit=mm`、`MaxFacetLength=0`，部件数量由输入决定 |
+| 输入几何 | `--geometry` 必填，没有默认模型；导入时设置 `LengthUnit=mm`、`MaxFacetLength=0`，部件数量由输入决定。**文件名主干必须是 `missile`**：Fluent 用「主干 + 部件名」生成 face zone label，而必需标签 `missile-boi` 只在这个主干下成立 |
 | 参数基线 | 按下文的尺寸、面网格、共享拓扑、区域更新、边界层和体网格设置执行；历史底层字段不一定由脚本显式设置 |
 | 必需标签 | `missile_body`、`missile_nose`、`missile_nose_tip`、`missile_fin`、`missile-boi`；标签查询可用时检查是否存在，查询不可用时记录警告 |
 | 区域名称 | 优先读取任务的 `RegionNameList`，其次 `OldRegionNameList`；两者为空时尝试历史参考名 `zone----enclosure----`，之后核对实际生成的流体区域 |
 | 边界层范围 | `BLRegionList` 使用区域更新结果，`RegionScope` 保留 `missile`；Fluent 返回 `CompleteBLZoneList` 时逐项匹配配置的面区域，缺失或多义报错；未返回时保留配置并在导出阶段检查边界组 |
 | 体网格范围 | 尺寸列表保留 `missile` 的 25 mm 设置，将历史 enclosure 条目替换为区域更新结果的第一个区域名并使用 500 mm；生成后必须报告唯一非空流体区域，且与更新结果一致 |
-| 运行限制 | 默认 16 进程、启动超时 300 秒、工作进程时限 900 秒；独立文件核验另有 600 秒时限 |
-| 数据位置 | 读取父目录的 `workspace.json`；默认运行目录为 `data_lib/runs/high/<run-id>/fluent_meshing/`，失败记录及产物归 `feedback/fluent_meshing/<run-id>/`；路径均相对工作区根目录 |
+| 运行限制 | 默认 12 进程（`-t`；本机 16 物理核 = 8 P 核 + 8 E 核、24 逻辑处理器，留余量给系统与许可证）、启动超时 300 秒、工作进程时限 900 秒；独立文件核验另有 600 秒时限 |
+| 数据位置 | 读取父目录的 `workspace.json`；默认运行目录为 `data_lib/runs/high/fluent_meshing/<run-id>/`，失败记录及产物归 `feedback/fluent_meshing/<run-id>/`；路径均相对工作区根目录 |
 | 输出约束 | 默认网格为本次运行目录下的 `missile_mesh.msh.h5`；`--run-dir` 必须为新目录，`--out` 文件必须不存在；运行数据保存在代码仓库外 |
 | 环境隔离 | PyFluent 使用 `_deps/`；导出核验使用独立解释器与 `.mesh_inspect_deps_313/`；旧 `.mesh_inspect_deps/` 保留，三者不合并、不混用 Python/NumPy 环境 |
 

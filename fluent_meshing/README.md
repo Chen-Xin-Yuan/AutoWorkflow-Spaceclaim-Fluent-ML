@@ -1,5 +1,11 @@
 # Fluent Meshing 自动网格划分
 
+## 输出目录与阈值
+
+- 运行目录：`data_lib/runs/high/fluent_meshing/<run_id>/`（`--run-id` 由数据库给出，形如 `<geometry_id>__<condition_id>__<时间戳>`；不给时退回 `run-<时间戳>-<短随机串>`）。
+- 最小正交质量下限 `MINIMUM_ORTHOGONAL_QUALITY = 0.05`（原 0.01）。低于它的网格即使能算，结果也主要反映网格误差；`scripts/review.py --kind mesh` 用同一个数。
+- `quality.json` 现在带 `domainExtents` 与 `bboxM`（网格域轴向/横向/竖向尺寸，米）：从 `report mesh-size` 的三行 `x/y/z-coordinate: min (mm) = …, max (mm) = …` 解析，`mm→m` 在这个函数里一次换算完。单位认不出（既不是 mm 也不是 m）就不写 `bboxM`，让 `review.py --kind mesh` 的第 8 条判据如实报“缺少可比对的 bbox”，不猜单位。
+
 本仓库使用 **ANSYS Fluent Meshing 2024 R1 + PyFluent**，对显式提供的 `.scdoc`
 执行 Watertight Geometry 工作流。当前只支持从原 `missile.msh.h5` 记录中复现的专用
 `recorded` 流程；参数来源见 [fluent_meshing.md](fluent_meshing.md)。输入模型必须提供下文要求的标签和区域。
@@ -45,7 +51,7 @@
 
 | 位置 | 用途 |
 | --- | --- |
-| `data_lib/runs/high/<run-id>/fluent_meshing/` | 新运行记录、工作文件、日志和默认导出的 `missile_mesh.msh.h5` |
+| `data_lib/runs/high/fluent_meshing/<run-id>/` | 新运行记录、工作文件、日志和默认导出的 `missile_mesh.msh.h5` |
 | `feedback/fluent_meshing/<run-id>/` | 失败运行的记录、日志、参数和实际产生的失败产物 |
 | `data_lib/legacy/fluent_meshing/reference/` | 历史参考网格和工作流 |
 | `data_lib/legacy/fluent_meshing/generated/` | 历史生成网格和工作流 |
@@ -57,31 +63,34 @@
 ## 2. 运行环境
 
 - ANSYS Fluent 2024 R1 和可用许可证；通过 `AWP_ROOT241` 等受支持的环境配置发现安装，不在源码或文档中固定安装路径和许可连接信息。
+- `validation.trn` 里 `mesh_size` 的包围盒报告**不带单位括号**（`x-coordinate: min = ..., max = ...`），单位由导入时显式设的 `P_IMPORT["LengthUnit"]`（`mm`）确定；`quality.json` 的 `bboxM` 据此换算成米。解析不出单位时不写 `bboxM`，让审核如实报「缺少可比对的 bbox」。
+- 输入 `.scdoc` 的**文件名主干必须是 `missile`**（例如 `missile.scdoc`）。Fluent 导入后按「文件名主干 + 部件名」生成 face zone label（实测 `<主干>-missile`、`<主干>-boi`），而 `mesh_missile.py` 的 `REQUIRED_FACE_LABELS` 硬性要求 `missile-boi`；主干不是 `missile` 时局部尺寸会以 `RuntimeError: Unknown exception` 失败，`supervisor.log` 里能看到 Allowed / Provided 的标签对照。工作区的派发器因此把模型复制成 `data_lib/runtime/model_stage/<run_id>/missile.scdoc` 再喂进来。
 - 划分流程使用 Python 3.10 或 3.11，以及 `_deps/` 中的 PyFluent 0.19.2。
   `run_meshing.cmd` 优先使用 `FLUENT_MESH_PYTHON`，其次读取 `.python-path`，再查找本机 3.10/3.11 解释器；`PYTHONPATH` 由启动器按脚本所在目录设置。
 - 导出文件核验使用独立的 CPython 3.13 环境和 `.mesh_inspect_deps_313/`。
   解释器通过 `MESH_INSPECT_PYTHON` 或 `.mesh-inspect-python` 配置。
+- `run_meshing.cmd` 与 `mesh_check.cmd` **必须保持纯 ASCII 加 CRLF 行尾**。cmd.exe 按当前控制台代码页逐行解析批处理，非 ASCII 注释会吃掉下一行：带 UTF-8 中文注释时 `set "HERE=%~dp0"` 被吞，`HERE` 变空、入口脚本退化成相对路径，最终只报 `can't open file '<工作区>\mesh_missile.py'`。两个启动器都已在找不到入口脚本时打印解析出的目录并以 3 退出。
 - `_deps/`、`.mesh_inspect_deps/` 和 `.mesh_inspect_deps_313/` 的 Python/NumPy 环境保持隔离，保留原有版本，不合并依赖目录。
 
 ## 3. 使用方法与验收
 
-以下示例在本仓库目录中用 PowerShell 执行，`run-xxxx` 应替换为实际的几何生成记录目录。必须显式提供新生成的 `.scdoc`，没有默认输入模型。
+以下示例在本仓库目录中用 PowerShell 执行，`<run_id>` 是从数据库领取的三段式运行号（`<geometry_id>__<condition_id>__<时间戳>`），`<geometry_id>` 是几何标识。必须显式提供新生成的 `.scdoc`，没有默认输入模型。
 
 ```powershell
 # 工作区统一入口
-..\scripts\run.ps1 verify-meshing -Geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc
+..\scripts\run.ps1 verify-meshing -Geometry ..\data_lib\runs\high\spaceclaim\<run_id>\<geometry_id>_spaceclaim.scdoc
 
 # 也可直接使用本仓库启动器
-.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc -n 8
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\spaceclaim\<run_id>\<geometry_id>_spaceclaim.scdoc -n 8
 
 # 调试：只执行到局部尺寸设置完成
-.\run_meshing.cmd --geometry ..\data_lib\runs\high\run-xxxx\spaceclaim\missile.scdoc --stop-after sizing
+.\run_meshing.cmd --geometry ..\data_lib\runs\high\spaceclaim\<run_id>\<geometry_id>_spaceclaim.scdoc --stop-after sizing
 ```
 
 | 选项 | 说明 |
 | --- | --- |
 | `--geometry` | 必填，输入 `.scdoc` 路径 |
-| `-n` / `--processors` | Fluent 进程数，默认 16，必须为正数 |
+| `-n` / `--processors` | Fluent 计算进程数（`-t`），默认 **12**，必须为正数。本机 i7-14650HX 是 8 个 P 核 + 8 个 E 核共 16 物理核 / 24 逻辑处理器；12 留出余量给系统与许可证，16 会铺满全部物理核且 E 核分区会拖平 MPI 提速 |
 | `--run-dir` | 指定新的运行目录，目录须不存在；应放在 `data_lib/runs/high/` 下 |
 | `--out` | 指定新的网格文件路径，文件须不存在；应放在仓库外的运行数据目录中 |
 | `--start-timeout` | Fluent 启动超时秒数，默认 300，必须为正数 |
@@ -106,7 +115,7 @@
 也可单独查看导出文件的结构信息；这条命令不代替完整流程中的质量检查和边界组交叉核验：
 
 ```powershell
-.\mesh_check.cmd ..\data_lib\runs\high\run-xxxx\fluent_meshing\missile_mesh.msh.h5
+.\mesh_check.cmd ..\data_lib\runs\high\fluent_meshing\<run_id>\missile_mesh.msh.h5
 ```
 
 ## 4. 脚本执行的步骤与参数（与 `fluent_meshing.md` 一致）
@@ -132,7 +141,7 @@
 
 以下数据保留自迁移前的记录，本次 README 更新未重新运行 Fluent，也未重新验证这些产物。
 历史参考及生成文件位于 `data_lib/legacy/fluent_meshing/`；这些数值不代表新模型的验收结果。
-历史记录中，16 进程整流程约 7.5 分钟（体网格约 5.4 分钟），实际耗时随模型和环境变化。
+历史记录中，16 进程整流程约 7.5 分钟（体网格约 5.4 分钟）——那是改默认值之前跑出来的，按当前默认 12 进程不能直接引用为预期时长；实际耗时随模型和环境变化。
 
 **(a) 网格规模、质量与区域拓扑（历史生成 vs 原 `missile.msh.h5`）**
 
@@ -178,7 +187,7 @@ python tools\compare_with_reference.py
 比较新的运行须显式指定文件，例如：
 
 ```powershell
-python tools\compare_with_reference.py ..\data_lib\runs\high\run-xxxx\fluent_meshing\completed_workflow.wft
+python tools\compare_with_reference.py ..\data_lib\runs\high\fluent_meshing\<run_id>\completed_workflow.wft
 ```
 
 第二个位置参数可指定参考 `.wft`；省略时仍使用历史参考。当前工具只忽略明确列出的任务记录字段，

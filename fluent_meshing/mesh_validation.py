@@ -18,7 +18,10 @@ import time
 VALIDATION_TRANSCRIPT_NAME = 'validation.trn'
 NATIVE_QUALITY_NAME = 'quality-native.json'
 QUALITY_REPORT_NAME = 'quality.json'
-MINIMUM_ORTHOGONAL_QUALITY = 0.01
+# 最小正交质量下限。0.01 是 Fluent 的"可用但不建议"线，本工作区把门槛提到 0.05：
+# 低于它的网格即使能算，结果也主要反映网格误差。审核判据（scripts/review.py --kind mesh）
+# 用的是同一个数，改这里要同步 review.py 的 ORTHOGONAL_QUALITY_MIN。
+MINIMUM_ORTHOGONAL_QUALITY = 0.05
 TRANSCRIPT_WAIT_ATTEMPTS = 20
 TRANSCRIPT_WAIT_SECONDS = 0.1
 EXPORT_MTIME_TOLERANCE_SECONDS = 2
@@ -80,6 +83,67 @@ def parse_report(text, native_quality=None):
     }
 
 
+def parse_domain_extents(text, default_units=None):
+    """从 mesh_size 报告里读网格域包围盒。
+
+    真机 Fluent 2024 R1 的输出**不带单位括号**：
+
+        Domain extents.
+          x-coordinate: min = -3.689946e+03, max = 2.014000e+04.
+
+    旧正则要求 `min (mm) = ...`，所以一直解析不出来、`bboxM` 从未写入，
+    `scripts/review.py --kind mesh` 的第 8 条判据只能报"缺少可比对的 bbox"。
+    现在两种写法都接受：带括号就用括号里的字面量；没有括号就用 `default_units`
+    （由调用方按**导入时显式设的** `P_IMPORT["LengthUnit"]` 传入，不是猜的）。
+    两处都拿不到单位时仍然返回 None——宁可没有 bbox，也不写一个单位错的数。
+
+    `bboxM` 的米制换算在这里一次做完：`mm → m`（÷1000）、`m → m`（原样）；
+    其它单位一律不写。
+    """
+    pattern = (r'([xyz])-coordinate\s*:\s*min\s*(?:\(\s*([^)]*?)\s*\))?\s*=\s*(' + NUMBER + r')'
+               r'\s*,?\s*max\s*(?:\(\s*([^)]*?)\s*\))?\s*=\s*(' + NUMBER + r')')
+    found = {}
+    for axis, unit_min, low, unit_max, high in re.findall(pattern, text, re.I):
+        unit = (unit_min or unit_max or default_units or '').strip().lower()
+        found[axis.lower()] = (unit, float(low), float(high))
+    if set(found) != {'x', 'y', 'z'}:
+        return None
+    units = {item[0] for item in found.values()}
+    if len(units) != 1:
+        return None
+    unit = units.pop()
+    if unit in ('mm', 'millimeter', 'millimetre', 'millimeters', 'millimetres'):
+        scale = 1e-3
+    elif unit in ('m', 'meter', 'metre', 'meters', 'metres'):
+        scale = 1.0
+    else:
+        return None
+    return {
+        'units': unit,
+        'min': [found[axis][1] for axis in 'xyz'],
+        'max': [found[axis][2] for axis in 'xyz'],
+        'bboxM': {
+            'axial': (found['x'][2] - found['x'][1]) * scale,
+            'lateral': (found['y'][2] - found['y'][1]) * scale,
+            'vertical': (found['z'][2] - found['z'][1]) * scale,
+        },
+    }
+
+
+def import_length_unit():
+    """本次会话导入几何时用的长度单位（`mesh_missile.P_IMPORT["LengthUnit"]`）。
+
+    `mesh_size` 报告省略单位，只有这个值能确定包围盒的数值口径。惰性导入是为了
+    避免 mesh_validation ↔ mesh_missile 的循环依赖；取不到就返回 None，
+    让 `parse_domain_extents` 如实放弃。
+    """
+    try:
+        import mesh_missile
+        return (mesh_missile.P_IMPORT or {}).get('LengthUnit')
+    except (ImportError, AttributeError):
+        return None
+
+
 def report_mesh(meshing, run_dir):
     transcript = Path(run_dir) / VALIDATION_TRANSCRIPT_NAME
     if transcript.exists():
@@ -104,6 +168,12 @@ def report_mesh(meshing, run_dir):
     result = parse_report(text, native_quality)
     result['qualityMethod'] = 'tgapi-util-get-cell-quality-limits: Orthogonal Quality'
     result['transcript'] = transcript.name
+    # 网格域包围盒：审核判据 8 拿它和 SpaceClaim 的 extentsM 对比（相差 ≤ 10%）。
+    # 解析不出来就不写 bboxM，让判据如实报"缺少可比对的 bbox"，不猜单位。
+    extents = parse_domain_extents(text, default_units=import_length_unit())
+    if extents is not None:
+        result['domainExtents'] = extents
+        result['bboxM'] = extents['bboxM']
     (Path(run_dir) / QUALITY_REPORT_NAME).write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     return result
 

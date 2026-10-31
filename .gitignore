@@ -30,6 +30,10 @@
 /data_lib/runtime/
 # 由 scripts/run.ps1 index 生成，可随时重建
 /data_lib/index.json
+# SQLite 库入库（唯一真相源），但 WAL 附属文件是运行期临时物，不入库
+/data_lib/datasets/SQLite/*-wal
+/data_lib/datasets/SQLite/*-shm
+/data_lib/datasets/SQLite/*-journal
 # 失败产物异常包（约 10 MB）；只保留说明文件，索引仍可查到磁盘上的包
 /feedback/*
 !/feedback/README.md

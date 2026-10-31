@@ -1,38 +1,57 @@
-# 阶段队列
+# 阶段队列（只读视图）
 
-主智能体按 `data_lib/inputs/cases.csv` 维护这些文件。总表里已有 4 行试算，`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07。标识符编码仍待定，这 4 行还没有写入队列。参数值以总表该行为准，队列保存几何标识、工况编号和高度。
+**这些目录不是第二份真相。** 数据库 `data_lib/datasets/SQLite/missile.db` 是唯一真相源；
+队列目录里的文件是 `db.py` 从库里导出的**指针文件**，可以整目录删掉重建。
+
+```powershell
+python scripts/db.py export --format queue --queue scdoc_for_fluent
+python scripts/db.py export --format queue --queue meshing_for_solution
+```
+
+`record_review` 在建模 / 网格审核通过时会自动重写对应的队列目录，所以正常情况下不需要手工执行。
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `spaceclaim.json` | 文件 | SpaceClaim 队列，`stage` 为 `spaceclaim` |
-| `fluent_meshing.json` | 文件 | Fluent Meshing 队列，`stage` 为 `fluent_meshing` |
-| `fluent_solution.json` | 文件 | Fluent Solution 队列，`stage` 为 `fluent_solution`。求解流程仍待定 |
-| `datcom.json` | 文件 | DATCOM 队列，`stage` 为 `datcom` |
-| `ml.json` | 文件 | 训练轮次，`stage` 为 `ml`。按轮记录，不按工况拆行 |
+| `scdoc_for_fluent/` | 生成 | 已通过审核的模型（`.scdoc`）指针，下游是 `fluent_meshing` |
+| `meshing_for_solution/` | 生成 | 已通过审核的网格（`.msh.h5`）指针，下游是 `fluent_solution` |
 | `README.md` | 文件 | 本文件 |
 
-四份阶段队列的形状：
+## 指针文件
+
+一个通过审核的产物一个文件，文件名就是 `run_id`：
+
+```text
+data_lib/queues/scdoc_for_fluent/<run_id>.json
+```
 
 ```json
 {
   "schemaVersion": 1,
-  "stage": "spaceclaim",
-  "records": []
+  "queue": "scdoc_for_fluent",
+  "run_id": "g692bcb5d5e50__shared__20261101T101500Z",
+  "geometry_id": "g692bcb5d5e50",
+  "condition_id": "shared",
+  "artifact": {
+    "rel_path": "data_lib/runs/high/spaceclaim/<run_id>/g692bcb5d5e50_spaceclaim.scdoc",
+    "size": 4488574,
+    "sha256": "…"
+  },
+  "review_id": "r0a9f2c81d3be",
+  "approved_at": "2026-11-01T10:15:00Z"
 }
 ```
 
-`records` 以后的每一条包含 `geometry_id`、`condition_id`、`altitude_m`、`status`、`artifact`、`log`、`execution_dir`、`updated_at`。`altitude_m` 是字符串，与总表单元格相同。未完成时，路径和时间写空字符串。查找记录时对照这三个标识字段。
+- `condition_id` 恒为 `shared`：模型和网格是按几何做的，不分工况。
+- `artifact.rel_path` 是工作区相对路径，换机器、整体挪目录都不失效。
+- 指针里不放产物本体；产物在 `data_lib/runs/high/<stage>/<run_id>/`。
+- 产物文件不在了（被 `gc` 删过）就不写指针——指向不存在文件的指针比没有指针更坏。
 
-`ml.json` 的形状：
+## 旧的五份 JSON 队列已删除
 
-```json
-{
-  "schemaVersion": 1,
-  "stage": "ml",
-  "rounds": []
-}
+`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`
+记录的是"按工况逐行维护状态"的那套做法，已由数据库的状态机取代（见
+`data_lib/datasets/SQLite/README.md`），不再恢复。任务状态查库：
+
+```powershell
+python scripts/control.py status
 ```
-
-每一轮以后包含 `status`、`log`、`data_version`、`artifact`、`cases`、`updated_at`。`cases` 的每一项只有 `geometry_id`、`condition_id`、`altitude_m`。
-
-`status` 只用这四个词：未开始、进行中、已完成、失败待上报。同一阶段同时处于进行中的任务数，以及瞬时故障重试次数，写在 `myplan.md`，不写入这些 JSON。

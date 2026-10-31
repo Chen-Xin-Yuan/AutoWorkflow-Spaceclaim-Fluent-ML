@@ -436,11 +436,12 @@ export async function runSpaceClaim({ scriptPath, paramsPath, executablePath, ti
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (process.platform === "win32") {
-        const terminator = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-        terminator.once("error", () => { child.kill(); finish({ timedOut: true, code: null }); });
-        terminator.once("close", () => finish({ timedOut: true, code: null }));
-      } else { child.kill(); finish({ timedOut: true, code: null }); }
+      // Terminate with the Node built-in instead of spawning `taskkill /T /F`: taskkill is denied
+      // in restricted sandboxes (it returns "Access denied" even for the caller's own child), so
+      // the old code could leave a headless SpaceClaim running past its timeout. `child.kill()`
+      // maps to TerminateProcess on Windows and does not need an external process.
+      try { child.kill("SIGKILL"); } catch { child.kill(); }
+      finish({ timedOut: true, code: null });
     }, timeoutMs);
     child.once("error", (error) => finish({ error: error.message, code: null }));
     child.once("close", (code) => finish({ code, timedOut }));
@@ -572,8 +573,9 @@ export async function buildMissile(options = {}) {
   const projectDir = fileURLToPath(new URL("..", import.meta.url));
   const env = options.env || process.env;
   const run = await beginRun("spaceclaim", projectDir, {
+    runId: options.runId || "",
     outputDir: options.outputDir || env.SCDM_MISSILE_OUTPUT || "",
-    parameters: { explicit: options.explicit || {}, preset: options.preset || {}, execute: options.execute ?? DEFAULT_EXECUTE, fileName: options.fileName || DEFAULT_MODEL_FILENAME },
+    parameters: { runId: options.runId || "", explicit: options.explicit || {}, preset: options.preset || {}, execute: options.execute ?? DEFAULT_EXECUTE, fileName: options.fileName || DEFAULT_MODEL_FILENAME },
     fixture: "recorded", env,
   });
   try {

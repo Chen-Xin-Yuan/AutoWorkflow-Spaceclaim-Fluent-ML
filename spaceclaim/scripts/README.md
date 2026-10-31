@@ -1,4 +1,4 @@
-﻿# 脚本与本机检查
+# 脚本与本机检查
 
 本目录没有直接子目录。以下命令从仓库根目录运行；需要 Node.js 18+，真实 CHM 与 SpaceClaim 检查面向 Windows。默认运行根目录相对项目和工作区配置解析；显式传入的相对 `--out` 和 `--preset` 路径则相对调用者当前目录解析。
 
@@ -48,16 +48,17 @@ npm run missile -- --list
 npm run missile -- --help
 npm run missile -- --preset params-preset.json --generate-only --json
 npm run missile -- --k_nose 0.006 --thickness_percent 5 --le_radius_index 6 --max_thickness_tenths 3 --timeout 300000 --json
-npm run missile -- --fin_section hexagon --hex_flat_start 0.2 --hex_flat_end 0.8 --timeout 300000 --json
+npm run missile -- --fin_section hexagon --flat_percent 64.6 --timeout 300000 --json
 ```
 
-`fin_section=hexagon` 的肩部和后缘各画一条 0.001 m 相切圆弧，前缘是 0.0018 m，都不是弦或折线。过短的肩圆先放大绘制，再缩回真实半径。前舵与后舵都保持径向、两者共面，不斜置。舵梢部保持设计梯形的尖角，不做平面圆弧也不切角。后舵与弹体的交接是 3 mm 等半径圆角。前舵先试 3 mm；默认 `hex_flat_end = 0.823` 与 `thickness_percent = 4.48` 时接缝直接接受完整 3 mm（48 条边、8 个实测圆柱面），若拒绝则在不小于 1.5 mm（`HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M`）的范围内取最大可执行半径，并写入 `params.json`。`hex_flat_end` 不要单独改回 0.8：那样前舵圆角会被压到 1.5 mm，舵根随后出现 24 个无法删除的碎面。每个站位把整圈接缝一次倒圆，包含肩部圆弧那几段短边，不做逐边回退；只留长边会在切向接点留下自由端，内核连 0.2 mm 以上都拒绝。它不增加命令行参数；弦长和弹尖到前缘的距离仍由原来的尺寸参数决定。合并后模板会自动修复舵根：非精确边用 `FixInexactEdges` 全部清除（该默认下剩 20 处），小面用 `FixSmallFaces.FixSpecific` 逐个试修（已无候选），体积与表面积变化超过 0.5% 即判失败，且低于 1 mm² 的非圆角面必须为零。
+`fin_section=hexagon` 的肩部和后缘各画一条 0.001 m 相切圆弧，前缘是 0.0018 m，都不是弦或折线。过短的肩圆先放大绘制，再缩回真实半径。前舵与后舵都保持径向、两者共面，不斜置。舵梢部保持设计梯形的尖角，不做平面圆弧也不切角。后舵与弹体的交接是 3 mm 等半径圆角。前舵先试 3 mm，默认 `flat_percent = 64.6`（等厚段终点 0.823）时径向接缝接受完整 3 mm；若拒绝，则在不小于 1.5 mm（`HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M`）的范围内取最大可执行半径，并写入 `params.json`。等厚段终点是这条接缝的关键量：实测 0.805（`flat_percent = 60.995`）会把前舵圆角压到 1.5 mm 下限，并在根部留下 24 个非圆角碎面，终点低于约 0.822 就可能重现。因此完工后仍要查 `result.json` 的 `diagnostics.repair` 与 `diagnostics.finalGeometry`，`belowFloor` 必须为 0。每个站位把整圈接缝一次倒圆，包含肩部圆弧那几段短边，不做逐边回退；只留长边会在切向接点留下自由端，内核连 0.2 mm 以上都拒绝。它不增加命令行参数；弦长和弹尖到前缘的距离仍由原来的尺寸参数决定。合并后模板会自动修复舵根：非精确边用 `FixInexactEdges` 全部清除（该默认下剩 20 处），小面用 `FixSmallFaces.FixSpecific` 逐个试修（已无候选），体积与表面积变化超过 0.5% 即判失败，且低于 1 mm² 的非圆角面必须为零。
 
 | 选项 | 含义 |
 | --- | --- |
 | `--<field> <value>` | 覆盖 [`missile-schema.mjs`](../lib/missile-schema.mjs) 中声明的模型参数；字段名区分大小写。运行级输出字段使用下面的 `--out` 与 `--name`。 |
 | `--preset <file.json>` | 读取参数对象，也接受此前 `params.json` 的 `params` 对象；显式开关优先于预设，预设优先于默认值。 |
-| `--out <directory>` | 选择仓库外输出根目录，在其中创建唯一运行子目录。未指定时使用工作区配置的数据目录。 |
+| `--out <directory>` | 选择输出根目录；最终运行目录是 `<directory>/<run-id>`。未指定时用工作区 `data_lib/runs/high/spaceclaim/<run-id>`。 |
+| `--run-id <id>` | 运行 ID，一般由数据库给出，形如 `<geometry_id>__<condition_id>__<时间戳>`；不给时退回 `run-<时间戳>-<随机短串>`。 |
 | `--name <file.scdoc>` | 模型文件名，默认 `missile.scdoc`；必须为不带目录的文件名。 |
 | `--generate-only` | 生成 `params.json` 和 `model.py`，不启动 SpaceClaim；没有 ANSYS 安装也可使用。 |
 | `--timeout <milliseconds>` | SpaceClaim 超时，默认 300000。 |
@@ -67,4 +68,4 @@ npm run missile -- --fin_section hexagon --hex_flat_start 0.2 --hex_flat_end 0.8
 
 几何尺寸以米为单位，参数的完整默认值与允许值由 schema 和 `--list` 给出。目标脚本 API 版本从所选安装解析。CLI 没有批量扫参命令。
 
-默认每次运行写入工作区 `data_lib/runs/high/<run-id>/spaceclaim/`。执行期间会有 `request.json`、`run.json`、`result.json`、诊断和可选预览，验收在内存中完成并打印到控制台。成功目录留下 `params.json`、`model.py`、模型文件，以及 `run.json`、`result.json`（脚本报错时还有 `diagnostic.txt`），用于事后追溯本次建模。失败时尝试将整份运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动。仅生成脚本的结果为 `script-generated`，目录仍留 `run.json` 且状态为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。
+默认每次运行写入工作区 `data_lib/runs/high/spaceclaim/<run-id>/`。执行期间会有 `request.json`、`run.json`、`result.json`、诊断和可选预览，验收在内存中完成并打印到控制台。成功目录留下 `params.json`、`model.py`、模型文件，以及 `run.json`、`result.json`（脚本报错时还有 `diagnostic.txt`），用于事后追溯本次建模。失败时尝试将整份运行移至 `feedback/spaceclaim/<run-id>/`，文件系统或权限错误可能中断移动。仅生成脚本的结果为 `script-generated`，目录仍留 `run.json` 且状态为 `GENERATED`，不是 `runtime-verified`；模型执行需要新产物通过验收。历史文件不能代替本次验收。

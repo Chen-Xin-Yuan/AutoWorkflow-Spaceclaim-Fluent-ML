@@ -66,6 +66,8 @@ import argparse
 import csv
 import json
 import math
+import os
+import sqlite3
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -75,7 +77,7 @@ import numpy as np
 from missile_spec import (
     BASELINE_GEOMETRY, FIN_AZIMUTH_DEG, FIN_SECTION, LE_MODE, NOSE_SEGMENTS,
     NOSE_SHAPE, NOSE_TIP_FILLET_RADIUS, NOSE_TIP_FILLET_RATIO, FinSection, NoseProfile,
-    NoseShape, resolve_nose_shape,
+    NoseShape, make_fin_section, resolve_nose_shape,
 )
 
 # --------------------------------------------------------------------------- #
@@ -88,6 +90,10 @@ from missile_spec import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 CASES_CSV = WORKSPACE_ROOT / "data_lib" / "inputs" / "cases.csv"
+# `--geometry-id` 的首选来源：数据库（16 个参数的唯一真相源）。
+# 数据库不存在或查不到该几何时，才回落到 CASES_CSV（老体系，只有 11 个主尺寸）。
+DATABASE = WORKSPACE_ROOT / "data_lib" / "datasets" / "SQLite" / "missile.db"
+DATABASE_ENV = "MISSILE_DB"
 # --outdir 覆盖输出根目录；相对路径仍相对启动时的当前工作目录。
 OUTPUT_DIR = WORKSPACE_ROOT / "data_lib" / "datasets" / "point_clouds"
 # 带几何标识时的子目录名模板（拼在输出根目录后面）：一个几何一个文件夹，名字就是几何标识。
@@ -1711,8 +1717,13 @@ def render_nose_profile(g: MissileGeometry, path: Path) -> bool:
 # --------------------------------------------------------------------------- #
 # 六、入口
 # --------------------------------------------------------------------------- #
-def missile_from_main_dimensions(values: dict) -> MissileGeometry:
-    """用总表的 11 个主尺寸构造外形。D 是直径，内部半径取 D/2。"""
+def missile_from_main_dimensions(values: dict, *, section=None,
+                                 nose_shape=None) -> MissileGeometry:
+    """用总表的 11 个主尺寸构造外形。D 是直径，内部半径取 D/2。
+
+    `section` / `nose_shape` 给出时按它们构造（来自数据库的按几何参数）；
+    不给就沿用 `missile_spec.py` 配置区的默认值。
+    """
     missing = [key for key in MAIN_DIMENSIONS if key not in values]
     if missing:
         raise ValueError("缺少主尺寸：" + ", ".join(missing))
@@ -1731,7 +1742,46 @@ def missile_from_main_dimensions(values: dict) -> MissileGeometry:
         aft_c_root=float(values["C_RF"]),
         aft_c_tip=float(values["C_TF"]),
         aft_span=float(values["B_F"]),
+        **({"section": section} if section is not None else {}),
+        **({"nose_shape": nose_shape} if nose_shape is not None else {}),
     )
+
+
+def main_dimensions_from_db(geometry_id: str, database=None):
+    """从数据库读该几何的 16 个参数，返回 `(11 主尺寸, 截面对象, 头型对象)`。
+
+    数据库是唯一真相源：翼型与头型也按库里的值构造，点云才和 DATCOM、SpaceClaim
+    是同一个外形。返回 `None` 表示数据库不存在或没有这个几何，调用方回落到
+    `cases.csv`（老体系，只有 11 个主尺寸）。
+    """
+    path = Path(os.environ.get(DATABASE_ENV) or database or DATABASE)
+    if not path.is_file():
+        return None
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM geometry WHERE geometry_id=?", (geometry_id,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    values = {key: float(row[key]) for key in MAIN_DIMENSIONS}
+    if row["fin_section_type"] == "hex":
+        section = make_fin_section(
+            "HEX",
+            thickness_percent=row["thickness_percent"],
+            flat_percent=row["flat_percent"],
+            le_radius=row["le_radius"],
+        )
+    else:
+        section = make_fin_section(
+            "NACA",
+            thickness_percent=row["thickness_percent"],
+            le_radius_index=row["le_radius_index"],
+            max_thickness_tenths=row["max_thickness_tenths"],
+        )
+    return values, section, resolve_nose_shape(row["nose_shape"])
 
 
 def main_dimensions_from_cases(geometry_id: str) -> dict:
@@ -1779,7 +1829,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--outdir", type=Path, default=None,
                     help="输出根目录，默认 data_lib/datasets/point_clouds；带几何标识时再建 <geometry_id>/ 子目录")
     ap.add_argument("--tag", type=str, default=None, help="文件名标签。给出几何标识时默认 <geometry_id>_pointcloud")
-    ap.add_argument("--geometry-id", default=None, help="从 data_lib/inputs/cases.csv 读取该几何的 11 个主尺寸")
+    ap.add_argument("--geometry-id", default=None,
+                    help="从数据库读该几何的 16 个参数（含翼型与头型）；库里没有时回落到 cases.csv")
+    ap.add_argument("--database", type=Path, default=None,
+                    help=f"库文件路径（默认取环境变量 {DATABASE_ENV} 或 {DATABASE}）")
     ap.add_argument("--params", type=Path, default=None, help="含 11 个主尺寸的 JSON，字段名与总表相同")
     ap.add_argument("--no-mesh", action="store_true", help="不导出参考网格 obj")
     ap.add_argument("--preview", action="store_true", help="渲染三视图 PNG")
@@ -1792,6 +1845,8 @@ def main() -> int:
     args = parse_args()
     geometry_id = (args.geometry_id or "").strip()
     main_dimensions = None
+    section = None
+    nose_shape = None
     try:
         if args.params and geometry_id:
             raise ValueError("--params 和 --geometry-id 只能选一个。")
@@ -1799,16 +1854,25 @@ def main() -> int:
             main_dimensions = main_dimensions_from_params(args.params)
             geometry_id = geometry_id or args.params.stem
         elif geometry_id:
-            main_dimensions = main_dimensions_from_cases(geometry_id)
+            # 首选数据库：16 个参数（含翼型与头型）才是这个几何的真实外形
+            from_db = main_dimensions_from_db(geometry_id, args.database)
+            if from_db is not None:
+                main_dimensions, section, nose_shape = from_db
+                print(f"[INFO] 几何参数来自数据库：{geometry_id}")
+            else:
+                print("[INFO] 数据库里没有这个几何，回落到 cases.csv（只有 11 个主尺寸，"
+                      "翼型/头型取 missile_spec.py 默认值）")
+                main_dimensions = main_dimensions_from_cases(geometry_id)
         # 几何标识会直接变成子目录名，不能带路径分隔符
         if geometry_id and (
             geometry_id in {".", ".."} or any(sep in geometry_id for sep in ("/", "\\"))
         ):
             raise ValueError(f"几何标识不能是 {geometry_id!r}：它会作为输出子目录名。")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, sqlite3.Error) as exc:
         print(f"[ERROR] {exc}")
         return 1
-    g = missile_from_main_dimensions(main_dimensions) if main_dimensions else MissileGeometry()
+    g = (missile_from_main_dimensions(main_dimensions, section=section, nose_shape=nose_shape)
+         if main_dimensions else MissileGeometry())
     plans = fin_planforms(g)
     if args.tag:
         tag = args.tag

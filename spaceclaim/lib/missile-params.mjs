@@ -20,6 +20,20 @@ export function roundThicknessPercent(value) {
   return Math.round((value + 1e-12) * 100) / 100;
 }
 
+/**
+ * 六边形等厚段起止，由 `flat_percent` 推导。
+ *
+ * 与 DATCOM 卡片是同一个量：`LFLATU = flat_percent / 100`（等厚段长度）、
+ * `LMAXU = (1 - LFLATU) / 2`（前缘斜坡终点 = 等厚段起点），所以
+ * `hex_flat_start = LMAXU`、`hex_flat_end = LMAXU + LFLATU = (1 + LFLATU) / 2`。
+ * 起止只由这一个百分数决定，不再提供单独开关：否则数据库里的 16 参数就和模型对不上，
+ * 同一份参数能画出两种舵面。
+ */
+export function hexFlatFromPercent(percent) {
+  const fraction = Number(percent) / 100;
+  return { start: (1 - fraction) / 2, end: (1 + fraction) / 2 };
+}
+
 function kindOf(param) {
   if (param.kind) return param.kind;
   return typeof param.default === "number" ? "number" : "string";
@@ -98,10 +112,14 @@ export function validateMissileParams(values) {
   const rawThickness = num("thickness_percent");
   need(Number.isFinite(rawThickness), "thickness_percent 必须是大于 0、小于 40 的有限数。");
   if (Number.isFinite(rawThickness)) {
-    const rounded = roundThicknessPercent(rawThickness);
-    if (rounded !== rawThickness) {
-      corrections.push({ field: "thickness_percent", from: rawThickness, to: rounded, reason: "翼型厚度按 NACA 写卡规则四舍五入到 0.01。" });
-      values.thickness_percent = rounded;
+    // 只有 NACA 卡片把厚度写到 0.01% 的整数格点上；六边形没有这一步，原值就是外形，
+    // 所以必须保留数据库里的 6 位小数，否则审核会看到"参数快照 ≠ 库内参数"。
+    if (num("fin_section") === "naca") {
+      const rounded = roundThicknessPercent(rawThickness);
+      if (rounded !== rawThickness) {
+        corrections.push({ field: "thickness_percent", from: rawThickness, to: rounded, reason: "翼型厚度按 NACA 写卡规则四舍五入到 0.01。" });
+        values.thickness_percent = rounded;
+      }
     }
     need(num("thickness_percent") > 0 && num("thickness_percent") < 40, "thickness_percent 必须是大于 0、小于 40 的有限数。");
   }
@@ -152,9 +170,15 @@ export function validateMissileParams(values) {
   need(leMode.implemented.includes(num("le_mode")), `le_mode '${num("le_mode")}' 暂不支持，仅支持 ${leMode.implemented.join(" / ")}（不会静默回退）。`);
   const finSection = schemaEntry("fin_section");
   need(finSection.implemented.includes(num("fin_section")), `fin_section '${num("fin_section")}' 暂不支持，仅支持 ${finSection.implemented.join(" / ")}。`);
+  const noseShape = schemaEntry("nose_shape");
+  need(noseShape.implemented.includes(num("nose_shape")), `nose_shape '${num("nose_shape")}' 暂不支持，仅支持 ${noseShape.implemented.join(" / ")}（不会静默回退成本模块支持的圆锥）。`);
+  // 等厚段起止由 flat_percent 推导（见 hexFlatFromPercent）。这里只校验源头那一个数，
+  // 再顺手确认推导结果落在开区间内，防止以后有人改公式把它悄悄推出边界。
+  const flatPercent = num("flat_percent");
+  need(Number.isFinite(flatPercent) && flatPercent > 0 && flatPercent < 100, "flat_percent 必须在 (0, 100) 内：0 会让六边形退化成菱形，100 会让它退化成矩形。");
   const flatStart = num("hex_flat_start");
   const flatEnd = num("hex_flat_end");
-  need(Number.isFinite(flatStart) && Number.isFinite(flatEnd) && flatStart > 0 && flatEnd < 1 && flatStart < flatEnd, "六边形等厚段需要 0 < hex_flat_start < hex_flat_end < 1。");
+  need(Number.isFinite(flatStart) && Number.isFinite(flatEnd) && flatStart > 0 && flatEnd < 1 && flatStart < flatEnd, `六边形等厚段推导结果不合法：flat_percent = ${flatPercent} 推出 [${flatStart}, ${flatEnd}]，需要 0 < start < end < 1。`);
   const filletLocation = schemaEntry("fillet_location");
   need(filletLocation.implemented.includes(num("fillet_location")), `fillet_location '${num("fillet_location")}' 暂不支持，仅支持 ${filletLocation.implemented.join(" / ")}（不会静默回退）。`);
   need(num("root_overlap") > 0, "root_overlap 必须大于 0，否则舵根会脱离弹体。");
@@ -221,14 +245,35 @@ export function buildModelRequest({ explicit = {}, preset = {}, output = {}, out
   const errors = merged.unknown.map((field) => `未知参数 '${field}'，字段必须在 lib/missile-schema.mjs 中声明。`);
   const coerced = coerceParams(merged.values);
   errors.push(...coerced.errors);
+  // 六边形等厚段：唯一来源是 flat_percent，起止在这里推导后注入，几何层与模板照旧读
+  // hex_flat_start / hex_flat_end。它们不再是 schema 字段，所以既不能从命令行传入，
+  // 也不会在 params.json 里出现"另一份可改的起止值"。
+  const flat = hexFlatFromPercent(coerced.values.flat_percent);
+  coerced.values.hex_flat_start = flat.start;
+  coerced.values.hex_flat_end = flat.end;
+  merged.sources.hex_flat_start = "derived:flat_percent";
+  merged.sources.hex_flat_end = "derived:flat_percent";
   const report = validateMissileParams(coerced.values);
   errors.push(...report.errors);
   const ok = errors.length === 0;
   // `model_placement` is resolved from the schema-level rule into a plain axial station inside the
   // geometry layer; this is the same call, reported so the artifacts state where the model went.
   const placement = resolveModelPlacement(coerced.values);
-  const geometry = ok ? deriveGeometry(coerced.values) : null;
-  const regions = geometry ? deriveRegions(coerced.values, geometry) : null;
+  // 几何层在极薄/极短的截面上会抛错（六边形圆角是绝对半径，厚度不够时相切圆弧不存在）。
+  // 把这种"参数合法但建不出来"的情况收成一条 errors 记录，保持 `ok === false` 的契约，
+  // 而不是让调用方收到一个未捕获异常。
+  let geometry = null;
+  let regions = null;
+  if (ok) {
+    try {
+      geometry = deriveGeometry(coerced.values);
+      regions = deriveRegions(coerced.values, geometry);
+    } catch (error) {
+      errors.push(error.message || String(error));
+      geometry = null;
+      regions = null;
+    }
+  }
   // The Enclosure command takes a cushion, not a radius: a radius that does not clear the model's
   // bounding-box corner would come out as a negative cushion and grow the wrong way.
   if (regions && !(regions.enclosure.cushion.radius > 0)) {

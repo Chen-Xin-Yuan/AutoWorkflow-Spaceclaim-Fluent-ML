@@ -6,23 +6,27 @@
 
 ### 几何参数定义与范围
 
-外形用 14 个几何参数描述：下面 11 个主尺寸，以及随后 3 个舵面翼型参数。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，与鼻锥头型、舵面布局、基准几何一起写在 `DATCOM/scripts/missile_spec.py` 前部的配置区（该文件是唯一需要改参数的地方，DATCOM 批量计算与点云脚本共用同一份）。
+外形用 **16 个几何参数**描述：下面 11 个主尺寸、翼型种类（`hex` / `naca`）、按种类二选一的三个翼型参数、以及鼻锥头型（`cone` / `ogive`）。数据库是唯一真相源，16 个参数全部进库、参与身份哈希。11 个主尺寸的长度单位是米（m），参数名与建模输入 JSON 的字段一致，也是 `data_lib/inputs/cases.csv` 里的几何列。3 个翼型参数前舵和后舵共用，与鼻锥头型、舵面布局、基准几何一起写在 `DATCOM/scripts/missile_spec.py` 前部的配置区（该文件是唯一需要改参数的地方，DATCOM 批量计算与点云脚本共用同一份）。
 
 **不在这 14 个参数里**的外形数据（不进总表，属设计固定项）也在同一个文件的配置区：鼻锥头型（`NOSE_SHAPE = "ogive"` 切线卵形 / `"cone"` 直线圆锥，对应 DATCOM 的 `TNOSE`）、锥顶倒角（只有点云用）、舵面布局（`LE_MODE` / `FIN_PHASE` / `CRUCIFORM_COUNT`）和基准几何。
 
+<!-- AUTO-PARAMS:begin name=geometry -->
 | 设计变量 | 定义 | 下限 / m | 上限 / m | 基准 / m |
 |---|---|---|---|---|
 | `L_N` | 鼻锥长度 | — | — | 0.49 |
-| `L` | 轴向长度 | — | — | 3.69 |
-| `D` | 机身直径 | — | — | 0.18 |
-| `L_W` | 前十字舵轴向位置 | 1.2 | 1.8 | 1.72 |
-| `C_RW` | 前十字舵根弦长 | 0.1 | 0.4 | 0.23 |
-| `C_TW` | 前十字舵梢弦长 | 0 | 0.09 | 0.06 |
-| `B_W` | 前十字舵展长 | 0.1 | 0.3 | 0.23 |
-| `L_F` | 后十字舵轴向位置 | 3.0 | 3.2 | 3.2 |
-| `C_RF` | 后十字舵根弦长 | 0.1 | 0.4 | 0.38 |
-| `C_TF` | 后十字舵梢弦长 | 0 | 0.25 | 0.19 |
-| `B_F` | 后十字舵展长 | 0.1 | 0.3 | 0.22 |
+| `L` | 弹身总长度 | — | — | 3.69 |
+| `D` | 机身最大直径 | — | — | 0.18 |
+| `L_W` | 前十字舵轴向位置（舵面可见前缘到弹尖） | 1.2 | 1.8 | 1.72 |
+| `C_RW` | 前舵根弦长 | 0.1 | 0.4 | 0.23 |
+| `C_TW` | 前舵梢弦长 | 0 | 0.09 | 0.06 |
+| `B_W` | 前舵展长 | 0.1 | 0.3 | 0.23 |
+| `L_F` | 后十字舵轴向位置（舵面可见前缘到弹尖） | 3 | 3.2 | 3.2 |
+| `C_RF` | 后舵根弦长 | 0.1 | 0.4 | 0.38 |
+| `C_TF` | 后舵梢弦长 | 0 | 0.25 | 0.19 |
+| `B_F` | 后舵展长 | 0.1 | 0.3 | 0.22 |
+
+表里 `—` 表示没有给设计范围；基准值来自 `spaceclaim/lib/missile-schema.mjs`，与 `DATCOM/scripts/missile_spec.py` 的 `BASELINE_GEOMETRY` 必须一致。
+<!-- AUTO-PARAMS:end -->
 
 `—` 表示原图未给出上下限；图中对 `L_N`、`L`、`D` 仅列出基准值，对其余 8 项给出设计范围。`L_W`、`L_F` 在当前建模程序中均指从弹尖到弹体表面处舵面可见前缘的轴向距离。
 
@@ -32,16 +36,22 @@
 
 鼻锥头型不属于这 14 个参数：在同一个 `DATCOM/scripts/missile_spec.py` 配置区用 `NOSE_SHAPE` 选切线卵形（`TNOSE = OGIVE`，也是 DATCOM 不写 `TNOSE` 时的默认头型）或直线圆锥（`TNOSE = CONE`）。同一外形下两种头型的系数不同（Ma 0.8、α 4°：CL 2.229 / CD 0.430 / CM −5.712 对 CL 2.210 / CD 0.431 / CM −5.893），历史结果只在头型相同时可比。详见 [DATCOM 说明](DATCOM/README.md) 的「五、鼻锥头型」。
 
+<!-- AUTO-PARAMS:begin name=fin-section -->
 | 截面 | 设计变量 | 定义 | 允许值 | 基准 |
 |---|---|---|---|---|
-| 六边形（默认） | `thickness_percent` | 最大厚度，占弦长的百分数 | 大于 0、小于 40 | 4.46 |
-| | `flat_percent` | 平顶段长度，占弦长的百分数；对称时最厚处从 `(1−flat)/2` 开始 | 大于等于 0、小于 100 | 61.0 |
-| | `le_radius` | DATCOM 的 LER 卡片值（前缘圆角参数），只进 DATCOM，点云按尖前缘画 | 大于等于 0；0.5 起饱和 | 0.5 |
-| NACA（可切回） | `thickness_percent` | 最大厚度，占弦长的百分数 | 大于 0、小于 40 | 4.48 |
-| | `le_radius_index` | 前缘半径指数，6 是标准圆前缘 | 整数 0–9 | 6 |
-| | `max_thickness_tenths` | 最大厚度距前缘的弦向位置，单位 1/10 弦长 | 2、3、4、5、6 | 3 |
+| 六边形（默认） | `thickness_percent` | 最大厚度，占弦长的百分数 | 0 < 值 < 40 | 4.46 |
+|  | `flat_percent` | 平顶段长度，占弦长的百分数 | 0 ≤ 值 < 100 | 64.6 |
+|  | `le_radius` | DATCOM 的 LER 卡片值（前缘圆角参数），只进 DATCOM | ≥ 0 | 0.05 |
+| NACA（可切回） | `thickness_percent` | 最大厚度，占弦长的百分数 | 0 < 值 < 40 | 4.48 |
+|  | `le_radius_index` | 前缘半径指数（0 尖前缘，6 标准圆前缘） | 整数 0–9 | 6 |
+|  | `max_thickness_tenths` | 最大厚度位置（1/10 弦长） | 2 / 3 / 4 / 5 / 6 | 3 |
 
-SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样，平面形状仍由根弦、梢弦和展长决定，并另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/missile_spec.py` 第 4 节相同。`fin_section=hexagon` 时改为尖前缘、尖后缘的对称六边形，厚度仍用 `thickness_percent`，等厚段由 `hex_flat_start`、`hex_flat_end` 决定；这一选择只存在于 SpaceClaim 建模，不改变上表的 14 个几何参数。**注意**：DATCOM/点云默认已是六边形，SpaceClaim 默认仍是 NACA，要让两边同源，需把 SpaceClaim 的 `fin_section` 设成 `hexagon` 并把三处数值对齐。
+基准值来自 `DATCOM/scripts/missile_spec.py` 前部 1.2 配置区；两个截面的 `thickness_percent` 是同一个量（前后舵共用）。
+<!-- AUTO-PARAMS:end -->
+
+六边形那一组是 `fin_section=hexagon`（对应库里的 `hex`），也是 SpaceClaim 的 schema 默认，因此 DATCOM、点云与 SpaceClaim 三边默认同源。平面形状仍由根弦、梢弦和展长决定，另外使用头部倒圆 `k_nose`、`k_tip`。翼型方程与 `DATCOM/scripts/missile_spec.py` 第 4 节相同。等厚段由**单个** `flat_percent` 决定：它在 `spaceclaim/lib/missile-params.mjs` 里推导出 `hex_flat_start = (1 - p/100)/2`、`hex_flat_end = (1 + p/100)/2`，与 DATCOM 卡片的 `LFLATU` / `LMAXU` 是同一个量，起止不再是输入字段。
+
+**参数以代码为准**：本表由 `python scripts/docs.py --write` 从代码生成，不手改。派发时用的是数据库 `data_lib/datasets/SQLite/missile.db` 里 `geometry` 表的行（`db.py` 显式传给各脚本），其次是各脚本前部配置区 / schema 默认值，README 文字只描述这两层当时是什么，不构成约束。发现文档与代码不一致时改文档。
 
 ### 来流参数与工况组合
 
@@ -82,7 +92,7 @@ SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样
 | scripts | 统一启动、验收、索引和回退入口 |
 | archive | 完整备份及迁移清单，保留用于回退 |
 
-统一配置位于 `workspace.json`，只记录相对数据路径。安装选择仍使用 ANSYS 环境变量或 SpaceClaim 的 `npm run setup`。
+统一配置位于 `workspace.json`（`schemaVersion` 2），只记录相对数据路径：数据根、反馈根、历史根、输入根，以及 SQLite 库文件与两个队列目录。安装选择仍使用 ANSYS 环境变量或 SpaceClaim 的 `npm run setup`。
 
 ## 目录组成
 
@@ -108,7 +118,7 @@ SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样
 | `.github/` | 目录 | GitHub Actions CI 工作流 |
 | `node_modules/` | 依赖 | npm 安装产物 |
 | `package.json`、`package-lock.json` | 文件 | 依赖声明与锁定版本 |
-| `README.md`、`README.en.md`、`README.bilingual.md` | 文件 | 中文、英文、双语说明 |
+| `README.md` | 文件 | 唯一的主说明（中文）。英文版与双语速览已按用户要求删除；参数表由 `scripts/docs.py` 从代码生成 |
 | `AGENTS.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore` | 文件 | 协作、安全、变更、许可与忽略规则 |
 
 ### `fluent_meshing/` — Fluent 网格生成与校验
@@ -134,8 +144,13 @@ SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `run.ps1` | 文件 | 唯一入口：`spaceclaim`、`fluent_meshing`、`verify-spaceclaim`、`verify-meshing`、`spaceclaim-mcp`、`index` |
-| `index.mjs` | 文件 | 扫描运行与反馈记录，生成 `data_lib/index.json` |
+| `run.ps1` | 文件 | 唯一入口：`spaceclaim`、`fluent_meshing`、`verify-spaceclaim`、`verify-meshing`、`spaceclaim-mcp`、`index`、`db`、`watch`、`control`、`dispatch`、`review` |
+| `db.py` | 文件 | 唯一允许写 SQLite 库的程序：建表、参数规范化与身份生成、导入导出、审核入库、上报单、启停开关 |
+| `watch.py` | 文件 | watcher：`pending → queued`、僵死回收、被删产物复活；不启动任何进程 |
+| `dispatch.py` | 文件 | 派发：领 `queued` 任务、拉起本阶段脚本、推进状态；不做审核 |
+| `review.py` | 文件 | 确定性审核判据；`--record` 时经 `db.py` 入库（唯一入库闸门） |
+| `train.py` | 文件 | 训练闭环：读 `passed` 的高保真样本、训最近邻代理、把不确定的工况写回 `cfd_task`（`pending`） |
+| `control.py` | 文件 | 启停：`start` / `pause` / `stop` / `status`，`stop` 终止整棵进程树 |
 | `snapshot.ps1` | 文件 | 新建完整快照（含未跟踪文件、本地配置与依赖）并写出 SHA-256 清单 |
 | `rollback.ps1` | 文件 | 从指定快照恢复旧布局，保留新数据与反馈 |
 | `migrate.ps1` | 文件 | 目录布局迁移 |
@@ -148,14 +163,13 @@ SpaceClaim 默认使用 NACA 那一组（`fin_section=naca`）给前后舵放样
 
 | 下级 | 类型 | 作用 |
 |---|---|---|
-| `inputs/` | 目录 | 参数与原始输入：目前只有 `cases.csv`，几何列是 11 个主尺寸（当前 4 行试算，`geometry_id` 暂为 `1`），末列 `origin` 记录来源（当前都是 `human`），DATCOM 脚本不读取这一列。翼型三项在 `DATCOM/scripts/missile_spec.py` 前部配置区，几何参数共 14 个。示例参数 JSON 不随仓库保存，避免与总表、配置区形成第三份参数 |
-| `queues/` | 目录 | 阶段队列与训练轮次：`spaceclaim.json`、`fluent_meshing.json`、`fluent_solution.json`、`datcom.json`、`ml.json`。记录仍为空 |
-| `datasets/` | 目录 | 数据集。直接下级 `point_clouds/` 接收 `04_pointnet_demo.py` 的点云，按 `geometry_id` 建同名子目录存放；外形由 14 个几何参数决定，点数和最终格式仍待定 |
-| `runs/` | 目录 | 高保真 `high/<run-id>/<阶段>/`，低保真 `low/<geometry_id>/`。运行产物不入库，说明文件入库 |
-| `datcom_data/` | 生成 | 早先 DATCOM 算例结果，保留作历史记录，不入库 |
+| `inputs/` | 目录 | 参数与原始输入：`high_fidelity.csv` 与 `low_fidelity.csv` 各 23 列（11 主尺寸 ＋ 6 个翼型列 ＋ 头型 ＋ 3 工况参数 ＋ `origin` ＋ `label`），**不含 ID**，几何与工况身份由参数算出。两份表只在初始化导入时读（`python scripts/db.py import`），之后只改库。`cases.csv` 是旧输入总表，保留作历史记录；`geometry_id` 暂为 `1` 那批不算新体系产物 |
+| `queues/` | 目录 | 两个**只读视图**目录：`scdoc_for_fluent/`（已通过审核的模型指针）与 `meshing_for_solution/`（已通过审核的网格指针）。指针由 `db.py` 从库里导出，可整目录删掉重建；任务状态的真身在数据库。见 `queues/README.md` |
+| `datasets/` | 目录 | 数据集。`SQLite/` 存唯一真相源 `missile.db`（几何、工况、任务状态、审核凭证），建库用 `python scripts/db.py init`；`point_clouds/` 接收 `04_pointnet_demo.py` 的点云，按 `geometry_id` 建同名子目录存放，外形由 14 个几何参数决定，点数和最终格式仍待定 |
+| `runs/` | 目录 | 高保真 `high/<stage>/<run_id>/`，低保真 `low/<geometry_id>/`。`run_id` 是 `<geometry_id>__<condition_id>__<时间戳>`。运行产物不入库，说明文件入库 |
 | `legacy/` | 目录 | 迁移前的历史产物（`spaceclaim/`、`fluent_meshing/`）与 `migration-manifest.json` 迁移清单 |
 | `runtime/` | 目录 | 运行期支撑数据（`test-support/`，当前为空） |
-| `index.json` | 生成 | 由 `scripts/run.ps1 index` 更新的统一索引 |
+| `index.json` | 生成 | 只读索引视图：`python scripts/db.py export --format index`（`run.ps1 index` 是它的别名）。内容全部来自数据库，随时可重建 |
 | `README.md` | 文件 | 数据仓库约定 |
 
 ### `feedback/` — 异常反馈与失败产物
@@ -269,6 +283,7 @@ python DATCOM/scripts/01_batch_datcom.py
 |---|---|---|
 | `workspace.json` | 文件 | 统一配置，只记录相对数据路径 |
 | `AGENTS.md` | 文件 | 本工作区的规则与边界 |
+| `myplan.md` | 文件 | 单库 + 七态状态机 + 审核闸门的实施计划与验收判据（§1 七条验收、§10.1 实施状态） |
 | `.gitignore` | 文件 | 根仓库的忽略规则：运行产物、依赖、备份与大体积数据不入库 |
 | `README.md` | 文件 | 本文件 |
 
@@ -318,7 +333,7 @@ node .\spaceclaim\scripts\missile.mjs --preset .\my.json --generate-only
 
 建模和网格每次运行生成独立 `<run-id>` 和 `run.json`。真实验证通过的记录标记 `PASSED`；失败为 `FAILED`，主动分步停止为 `STOPPED`；仅生成脚本为 `GENERATED`。文件存在或进程退出成功不能单独作为验收依据。
 
-历史文件保持原内容，旧路径由 `data_lib/legacy/migration-manifest.json` 和备份中的迁移清单解释。可从 `data_lib/index.json` 查找来源、验证状态和反馈。
+历史文件保持原内容，旧路径由 `data_lib/legacy/migration-manifest.json` 和备份中的迁移清单解释。当前状态（几何、任务七态、审核记录、未解决上报）查数据库或 `data_lib/index.json` 这个只读视图。
 
 需要恢复原布局时，将备份目录的绝对路径传给 `scripts/rollback.ps1 -Snapshot`。脚本先验证备份，再保留当前目录并恢复旧目录；新数据和反馈不会被删除。备份不自动清理。
 

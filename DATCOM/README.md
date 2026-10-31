@@ -87,21 +87,30 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 
 ### 1. 气动计算工作流
 
-`01_batch_datcom.py` 的入口参数就是工作区 README「参数化方式与来流条件」里的 14 个几何参数和来流条件：
+`01_batch_datcom.py` 的入口是工作区数据库导出的输入表：**16 个几何参数**（11 个主尺寸 ＋ 翼型种类 ＋ 三个翼型参数 ＋ 鼻锥头型）加来流条件。
 
-1. 正式输入是工作区的 `data_lib/inputs/cases.csv`。每一行是一个工况，列依次为
-   `geometry_id`、`condition_id`、11 个主尺寸、`Ma`、`alpha_deg`、`altitude_m`；末列还有 `origin`
-   记录来源（当前都是 `human`），脚本不读取这一列。
-   同一个 `geometry_id` 的 11 个主尺寸必须相同。
-   同一个 `geometry_id` 和同一个 `altitude_m` 单元格的来流必须是这些马赫数和攻角的完整组合。
-   不进总表的外形数据（翼型截面类型与三个参数、鼻锥头型、锥顶倒角、舵面布局、基准几何）
-   全部在 `scripts/missile_spec.py` 前部的配置区。
-2. 直接运行 `python scripts/01_batch_datcom.py` 就会读取这张表。脚本顶部的
+1. 输入表由 `python scripts/db.py export --format cases-csv --out <csv>` 从
+   `data_lib/datasets/SQLite/missile.db` 导出，用 `--input <csv>` 指定（默认仍是
+   `data_lib/inputs/cases.csv`，相对路径以工作区根为准）。每一行是一个工况，列依次为
+   `geometry_id`、11 个主尺寸、`fin_section_type`、`thickness_percent`、`flat_percent`、
+   `le_radius`、`le_radius_index`、`max_thickness_tenths`、`nose_shape`、
+   `Ma`、`alpha_deg`、`altitude_m`、`condition_id`、`label`。
+   同一个 `geometry_id` 的 11 个主尺寸**和翼型/头型**必须相同（翼型是几何身份的一部分）。
+   同一个 `geometry_id` 和同一个 `altitude_m` 的来流必须是这些马赫数和攻角的完整组合。
+   翼型与头型列**可以缺**：缺列或空单元格时回落到 `scripts/missile_spec.py` 配置区的默认值，
+   所以老的 `cases.csv` 仍然能跑。
+2. 一次调用里可以混跑两种翼型与两种头型：`fin_section_type` 是 `hex` 或 `naca`，
+   `nose_shape` 是 `cone` 或 `ogive`，每行独立成卡（`SECTYP` / 末端 `NACA-…` 控制卡 / `TNOSE`）。
+3. 直接运行 `python scripts/01_batch_datcom.py` 就会读取默认表。脚本顶部的
    演示几何、来流和算例列表在 `scripts/demo_cases.py`（`DEMO_GEOMETRY` 取 `missile_spec.BASELINE_GEOMETRY`），只在 `--demo` 时使用。
-3. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
-4. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
+4. 飞行高度来自每一行的 `altitude_m`。不同高度分次调用。
+5. 运行后把结果写到 `../data_lib/runs/low/<geometry_id>/`。归档名以 `geometry_id` 开头；
    同一个 `geometry_id` 的气动系数只保留 `<geometry_id>_aero_coefficients.csv` 一张表，
    各高度、各工况都在同一张表里，不再按工况拆成单行 CSV。
+6. 每批另写一份运行记录 `../data_lib/runs/low/<geometry_id>/<run_id>/run.json`：
+   `run_id`、每工况的 `CL/CD/CM`、卡片里实际用的翼型/头型参数、几何自检结论、datcom 退出码
+   与产物 sha256。`run_id` 由派发器给出（`<geometry_id>__shared__<时间戳>`），
+   手工运行时脚本自己生成。**这是"这批系数用的哪种翼型"的唯一一手记录**。
 
 几条实测到的模型约定（改输入卡片前务必知道）：
 
@@ -116,10 +125,11 @@ VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置
 常用命令：
 
 ```powershell
-python scripts/01_batch_datcom.py --list          # 只看输入总表里的算例与工况
-python scripts/01_batch_datcom.py --dry-run       # 按总表生成 for005.dat 与几何核对图，不调用 DATCOM
-python scripts/01_batch_datcom.py                 # 读取 data_lib/inputs/cases.csv 并计算
-python scripts/01_batch_datcom.py --demo          # 用 demo_cases.py 的演示几何和来流，不读总表
+python scripts/01_batch_datcom.py --list          # 只看输入表里的算例与工况
+python scripts/01_batch_datcom.py --dry-run       # 按输入表生成 for005.dat 与几何核对图，不调用 DATCOM
+python scripts/01_batch_datcom.py --input ../data_lib/runtime/batch.csv   # 指定输入表（相对路径以工作区根为准）
+python scripts/01_batch_datcom.py                 # 读取默认的 data_lib/inputs/cases.csv 并计算
+python scripts/01_batch_datcom.py --demo          # 用 demo_cases.py 的演示几何和来流，不读输入表
 python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 5000
 ```
 
@@ -145,7 +155,7 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 
 ## 四、舵面翼型
 
-14 个几何参数里的翼型三项，就是 `scripts/missile_spec.py` 前部 1.2 配置区里的三个默认值（外形方程在第 4 节）。改翼型只改那里。点云和 DATCOM 都读这一份，根部和梢部是同一副截面，按当地弦长等比缩放（等 t/c），弯度固定为 0，中弧与弦线重合，上下对称。
+16 个几何参数里的翼型种类与三项参数，`01_batch_datcom.py` 按输入表的 `fin_section_type` 等列逐行传入（`missile_spec.make_fin_section()`）；`scripts/missile_spec.py` 前部 1.2 配置区只提供**缺列时的默认值**，外形方程在第 4 节。点云用 `--geometry-id` 时读的是数据库里的那 16 个参数（`main_dimensions_from_db()`），只有 `--params` 或不带标识的演示运行才回落到这份默认值。根部和梢部是同一副截面，按当地弦长等比缩放（等 t/c），弯度固定为 0，中弧与弦线重合，上下对称。
 
 默认是**对称六边形**（DATCOM `SECTYP = HEX`）。配置区的 `SECTION_TYPE` 写 `"HEX"` 用六边形、写 `"NACA"` 用对称四位数翼型；两种截面各有一组三个默认值，切换只改这个开关，其余代码不用动。
 

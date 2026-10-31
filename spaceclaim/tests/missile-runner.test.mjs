@@ -99,7 +99,7 @@ function grade(request, result, options = {}) {
 }
 
 test("the acceptance gate passes a correct run", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const graded = grade(request, passingResult(request));
   assert.equal(graded.ok, true, JSON.stringify(graded.checks.filter((check) => !check.ok)));
   const names = graded.checks.map((check) => check.name);
@@ -140,7 +140,7 @@ test("the acceptance gate passes a correct run", () => {
 });
 
 test("the gate rejects an enclosure that was not produced by the Enclosure command", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const byRevolve = passingResult(request);
   byRevolve.regions.enclosure.componentCount = 0;
   assert.equal(grade(request, byRevolve).ok, false);
@@ -162,7 +162,7 @@ test("a non-ASCII enclosure name is graded by comparison, not by read-back", () 
   // which is why every read-back degrades to <unreadable>. The name is still settable, and the
   // String.Equals comparison in the script is what proves it landed, so an unreadable component list
   // must not fail the run. This is the path the parameter keeps open.
-  const request = buildModelRequest({ explicit: { enclosure_name: "外壳", boi_name: "加密区 BOI" } });
+  const request = buildModelRequest({ explicit: { fin_section: "naca", enclosure_name: "外壳", boi_name: "加密区 BOI" } });
   assert.equal(request.ok, true, request.errors.join(" | "));
   const result = passingResult(request);
   result.diagnostics.componentNames = ["<unreadable>"];
@@ -178,7 +178,7 @@ test("a non-ASCII enclosure name is graded by comparison, not by read-back", () 
 });
 
 test("the gate rejects a region that is missing, wrongly sized, or has the wrong body count", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const missing = passingResult(request);
   delete missing.regions.boi;
   assert.equal(grade(request, missing).ok, false);
@@ -198,7 +198,7 @@ test("the gate rejects a region that is missing, wrongly sized, or has the wrong
 });
 
 test("the gate rejects a model that drifted off its placement station", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   // Five millimetres of drift: far below the 2e-3 relative tolerance the per-region checks use
   // (16 mm on this midpoint), so only the dedicated placement check can see it.
   const slid = passingResult(request);
@@ -210,7 +210,7 @@ test("the gate rejects a model that drifted off its placement station", () => {
 });
 
 test("the gate rejects fins that do not sit at the station the parameters ask for", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   // A fin slid along a constant cylinder changes nothing the size checks can see: only the mass
   // centre catches it, so the gate must reject it.
   const slid = passingResult(request);
@@ -236,7 +236,7 @@ test("the gate rejects fins that do not sit at the station the parameters ask fo
 });
 
 test("the gate rejects named selections that drop or double-count a face", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
 
   // Every missile group present but one face left out: the area sum no longer matches the body.
   const dropped = passingResult(request);
@@ -259,7 +259,7 @@ test("the gate rejects named selections that drop or double-count a face", () =>
 });
 
 test("the gate rejects a physics keep set that is wrong or a failed suppression", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
 
   // The BOI must not be suppressed: it is one of the three objects that matter.
   const droppedBoi = passingResult(request);
@@ -278,7 +278,7 @@ test("the gate rejects a physics keep set that is wrong or a failed suppression"
 });
 
 test("the gate refuses to delete a component that still holds a body", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
 
   // A non-empty component deleted by mistake would take geometry with it.
   const populated = passingResult(request);
@@ -301,7 +301,7 @@ test("the gate refuses to delete a component that still holds a body", () => {
 });
 
 test("the gate rejects a wrong body count, status, or a missing artifact", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const wrongBody = passingResult(request);
   wrongBody.bodyCount = 2;
   assert.equal(grade(request, wrongBody).ok, false);
@@ -316,7 +316,7 @@ test("the gate rejects a wrong body count, status, or a missing artifact", () =>
 });
 
 test("the gate rejects dimensions that drifted from the parameters", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const shortAxial = passingResult(request);
   shortAxial.measurements.extentsM.axial = 3.6;
   assert.equal(grade(request, shortAxial).ok, false);
@@ -330,22 +330,22 @@ test("the gate rejects dimensions that drifted from the parameters", () => {
 test("the extent expectation follows the cruciform phase and count", () => {
   // A rotated or higher-count cruciform has a smaller bounding box than D + 2·max(B); the gate must
   // expect the real box, otherwise a correct model would be rejected.
-  const rotated = buildModelRequest({ explicit: { fin_phase: "x" } });
-  assert.ok(Math.abs(rotated.geometry.expectedExtents.lateral - 0.4544486655) < 1e-9);
+  const rotated = buildModelRequest({ explicit: { fin_section: "naca", fin_phase: "x" } });
+  assert.ok(Math.abs(rotated.geometry.expectedExtents.lateral - 0.4544401819384363) < 1e-9);
   assert.equal(grade(rotated, passingResult(rotated)).ok, true);
   const naive = passingResult(rotated);
   naive.measurements.extentsM.lateral = rotated.geometry.tip_to_tip;
   naive.measurements.extentsM.vertical = rotated.geometry.tip_to_tip;
   assert.equal(grade(rotated, naive).ok, false);
 
-  const six = buildModelRequest({ explicit: { cruciform_count: 6 } });
+  const six = buildModelRequest({ explicit: { fin_section: "naca", cruciform_count: 6 } });
   assert.ok(Math.abs(six.geometry.expectedExtents.lateral - 0.64) < 1e-9);
-  assert.ok(Math.abs(six.geometry.expectedExtents.vertical - 0.5555999915) < 1e-9);
+  assert.ok(Math.abs(six.geometry.expectedExtents.vertical - 0.5555939927143574) < 1e-9);
   assert.equal(grade(six, passingResult(six)).ok, true);
 });
 
 test("the gate rejects a missing or wrong-sized rounded face", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const noTip = passingResult(request);
   noTip.diagnostics.revolveFaces = noTip.diagnostics.revolveFaces.slice(1);
   const graded = grade(request, noTip);
@@ -363,14 +363,14 @@ test("the gate rejects a missing or wrong-sized rounded face", () => {
 });
 
 test("the gate rejects a stale result.json", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const staleDate = Date.now() - 600000;
   const graded = grade(request, passingResult(request), { stat: { mtimeMs: staleDate } });
   assert.equal(graded.ok, false);
 });
 
 test("a sharp nose is graded against the untrimmed cone", () => {
-  const request = buildModelRequest({ explicit: { k_nose: 0, fillet_location: "cone_cylinder" } });
+  const request = buildModelRequest({ explicit: { fin_section: "naca", k_nose: 0, fillet_location: "cone_cylinder" } });
   assert.equal(request.geometry.body.fillet.enabled, false);
   assert.equal(request.geometry.body.tip.enabled, false);
   assert.deepEqual(request.geometry.expectedAreas.faces.map((face) => face.kind), ["cone", "cylinder", "base"]);
@@ -380,23 +380,23 @@ test("a sharp nose is graded against the untrimmed cone", () => {
 });
 
 test("the nose treatment follows fillet_location", () => {
-  const tipOnly = buildModelRequest({ explicit: { fillet_location: "nose_tip" } });
+  const tipOnly = buildModelRequest({ explicit: { fin_section: "naca", fillet_location: "nose_tip" } });
   assert.equal(tipOnly.geometry.body.tip.enabled, true);
   assert.equal(tipOnly.geometry.body.fillet.enabled, false);
   assert.deepEqual(tipOnly.geometry.expectedAreas.faces.map((face) => face.kind), ["tip", "cone", "cylinder", "base"]);
   assert.equal(grade(tipOnly, passingResult(tipOnly)).ok, true);
 
-  const shoulderOnly = buildModelRequest({ explicit: { fillet_location: "cone_cylinder" } });
+  const shoulderOnly = buildModelRequest({ explicit: { fin_section: "naca", fillet_location: "cone_cylinder" } });
   assert.equal(shoulderOnly.geometry.body.tip.enabled, false);
   assert.equal(shoulderOnly.geometry.body.fillet.enabled, true);
   assert.deepEqual(shoulderOnly.geometry.expectedAreas.faces.map((face) => face.kind), ["cone", "shoulder", "cylinder", "base"]);
 
-  const both = buildModelRequest({});
+  const both = buildModelRequest({ explicit: { fin_section: "naca" } });
   assert.deepEqual(both.geometry.expectedAreas.faces.map((face) => face.kind), ["tip", "cone", "shoulder", "cylinder", "base"]);
 });
 
 test("the acceptance gate never trusts the exit code", () => {
-  const request = buildModelRequest({});
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
   const graded = grade(request, null);
   assert.equal(graded.ok, false);
   assert.equal(graded.checks.some((check) => /exit|code/i.test(check.name)), false);
@@ -460,7 +460,7 @@ test("a preset carries only the eleven primary dimensions and defaults fill the 
   for (const field of Object.keys(eleven)) assert.equal(request.sources[field], "preset");
   assert.equal(request.sources.k_nose, "default");
   assert.equal(request.sources.enclosure_name, "default");
-  assert.equal(request.params.thickness_percent, 4.48);
+  assert.equal(request.params.thickness_percent, 4.462);
   assert.equal(request.sources.thickness_percent, "default");
   assert.equal(request.params.model_offset, -4.0);
 });

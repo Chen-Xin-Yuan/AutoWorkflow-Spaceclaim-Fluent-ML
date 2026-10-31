@@ -1,0 +1,5 @@
+L_N,L,D,L_W,C_RW,C_TW,B_W,L_F,C_RF,C_TF,B_F,fin_section_type,thickness_percent,flat_percent,le_radius,le_radius_index,max_thickness_tenths,nose_shape,mach,alpha_deg,altitude_m,origin,label
+0.49,3.69,0.18,1.72,0.23,0.06,0.23,3.2,0.38,0.19,0.22,hex,4.462,64.6,0.05,,,cone,0.8,3,0,human,C01
+0.49,3.69,0.18,1.72,0.23,0.06,0.23,3.2,0.38,0.19,0.22,hex,4.462,64.6,0.05,,,cone,0.8,4,0,human,C02
+0.49,3.69,0.18,1.72,0.23,0.06,0.23,3.2,0.38,0.19,0.22,hex,4.462,64.6,0.05,,,cone,0.8,5,0,human,C06
+0.49,3.69,0.18,1.72,0.23,0.06,0.23,3.2,0.38,0.19,0.22,hex,4.462,64.6,0.05,,,cone,0.8,6,0,human,C07

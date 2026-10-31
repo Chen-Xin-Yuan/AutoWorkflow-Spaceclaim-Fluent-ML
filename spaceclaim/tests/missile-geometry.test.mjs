@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AIRFOIL_SAMPLES_PER_SIDE,
@@ -179,22 +179,24 @@ test("the fin span is measured from the body surface, not from the embedded root
 });
 
 test("expected extents match the measured boxes for rotated and higher-count cruciforms", () => {
-  const baselineExtents = deriveGeometry(buildModelRequest({}).params).expectedExtents;
+  const naca = { fin_section: "naca" };
+  const baselineExtents = deriveGeometry(buildModelRequest({ explicit: naca }).params).expectedExtents;
   assert.ok(Math.abs(baselineExtents.axial - 3.69) < 1e-12);
   assert.ok(Math.abs(baselineExtents.lateral - 0.64) < 1e-12);
   assert.ok(Math.abs(baselineExtents.vertical - 0.64) < 1e-12);
 
   // Analytic envelope of the NACA polyline. The + cruciform is still set by the fin tips;
   // the rotated and six-fin boxes include the airfoil thickness.
-  const rotated = deriveGeometry(buildModelRequest({ explicit: { fin_phase: "x" } }).params).expectedExtents;
+  const rotated = deriveGeometry(buildModelRequest({ explicit: { ...naca, fin_phase: "x" } }).params).expectedExtents;
   assert.ok(rotated.lateral < baselineExtents.lateral, "an x cruciform fits in a smaller square than the + cruciform");
   assert.ok(Math.abs(rotated.lateral - rotated.vertical) < 1e-12);
-  assert.ok(Math.abs(rotated.lateral - 0.4544486655) < 1e-9, `rotated lateral ${rotated.lateral}`);
+  // 基线随设计厚度 4.462 重新取；residual 断言（rotated < baseline、six.vertical < six.lateral）不变。
+  assert.ok(Math.abs(rotated.lateral - 0.4544401819384363) < 1e-9, `rotated lateral ${rotated.lateral}`);
 
-  const six = deriveGeometry(buildModelRequest({ explicit: { cruciform_count: 6 } }).params).expectedExtents;
+  const six = deriveGeometry(buildModelRequest({ explicit: { ...naca, cruciform_count: 6 } }).params).expectedExtents;
   assert.ok(Math.abs(six.lateral - 0.64) < 1e-12);
   assert.ok(six.vertical < six.lateral);
-  assert.ok(Math.abs(six.vertical - 0.5555999915) < 1e-9, `six-fin vertical ${six.vertical}`);
+  assert.ok(Math.abs(six.vertical - 0.5555939927143574) < 1e-9, `six-fin vertical ${six.vertical}`);
 });
 
 test("fin planforms keep the trailing edges aligned", () => {
@@ -360,7 +362,7 @@ test("the body centre of mass pins the model to its absolute axial placement", (
 });
 
 test("the seed fin centroid is the NACA solid centroid the gate measures", () => {
-  const geometry = deriveGeometry(buildModelRequest({}).params);
+  const geometry = deriveGeometry(buildModelRequest({ explicit: { fin_section: "naca" } }).params);
   for (const fin of geometry.fins) {
     const planform = polygonCentroid(fin.points);
     assert.ok(fin.centroid[0] > fin.buried_le && fin.centroid[0] < fin.te, `${fin.name} centroid must sit inside the chord`);
@@ -466,13 +468,16 @@ test("regions wrap the model with the agreed margins", () => {
   assert.ok(Math.abs((enclosure.xBack - tail) - (params.enclosure_back - noseTip)) < 1e-12);
 });
 
-test("default geometry uses an aligned cruciform with four fins per station", () => {
-  const geometry = deriveGeometry(buildModelRequest({}).params);
+test("an aligned cruciform with four fins per station, in both sections", () => {
+  // 数据库的默认翼型是 hex；NACA 仍可用，只是要显式点名。
+  assert.equal(buildModelRequest({}).geometry.airfoil.kind, "hexagon");
+  const geometry = deriveGeometry(buildModelRequest({ explicit: { fin_section: "naca" } }).params);
   assert.equal(geometry.cruciform_count, 4);
   assert.equal(geometry.fin_phase_deg, 0);
   assert.deepEqual(geometry.fins.map((fin) => fin.name), ["front", "rear"]);
   assert.equal(geometry.airfoil.kind, "naca");
-  assert.equal(geometry.airfoil.thickness_percent, 4.48);
+  // NACA 写卡时把厚度四舍五入到两位小数，所以 4.462 的默认值在这里读作 4.46。
+    assert.equal(geometry.airfoil.thickness_percent, 4.46);
   assert.equal(geometry.airfoil.le_radius_index, 6);
   assert.equal(geometry.airfoil.max_thickness_tenths, 3);
   assert.equal(geometry.fins[0].sections.length, 2);
@@ -481,7 +486,7 @@ test("default geometry uses an aligned cruciform with four fins per station", ()
 
 test("the default NACA section matches the shared thickness equation", () => {
   const coefficients = nacaReferenceCoefficients(6, 3);
-  const ratio = 4.48 / 100;
+  const ratio = 4.462 / 100;
   assert.ok(Math.abs(nacaHalfThicknessRatio(0.3, coefficients, ratio) - ratio / 2) < 1e-12);
   assert.ok(Math.abs(nacaHalfThicknessRatio(0, coefficients, ratio)) < 1e-15);
   assert.ok(Math.abs(nacaHalfThicknessRatio(1, coefficients, ratio) - 0.002 * ratio / 0.2) < 1e-12);
@@ -619,16 +624,20 @@ test("a hexagonal section keeps a 1 mm circular fillet without moving the chord 
     assert.ok(Math.abs(fin.leFromNoseTip - request.params[fin.name === "front" ? "L_W" : "L_F"]) < 1e-12);
   }
 
-  const moved = buildModelRequest({ explicit: { fin_section: "hexagon", hex_flat_start: 0.15, hex_flat_end: 0.7 } });
+  // 等厚段只有一个入口 `flat_percent`；40% 的等厚段居中落在 30%–70%，倒圆再往里收一点。
+  const moved = buildModelRequest({ explicit: { fin_section: "hexagon", flat_percent: 40 } });
+  assert.equal(moved.ok, true, moved.errors.join(" | "));
+  assert.ok(Math.abs(moved.params.hex_flat_start - 0.3) < 1e-12, `derived start ${moved.params.hex_flat_start}`);
+  assert.ok(Math.abs(moved.params.hex_flat_end - 0.7) < 1e-12, `derived end ${moved.params.hex_flat_end}`);
   const tip = moved.geometry.fins[0].sections[1];
-  const tipFlat = tip.points.filter((point) => point[1] > 0 && Math.abs(point[1] - tip.chord * 4.48 / 100 / 2) < 1e-12)
+  const tipFlat = tip.points.filter((point) => point[1] > 0 && Math.abs(point[1] - tip.chord * 4.462 / 100 / 2) < 1e-12)
     .map((point) => point[0]).sort((a, b) => a - b);
-  assert.ok(tipFlat[0] > tip.le + 0.15 * tip.chord);
+  assert.ok(tipFlat[0] > tip.le + 0.3 * tip.chord);
   assert.ok(tipFlat[tipFlat.length - 1] < tip.le + 0.7 * tip.chord);
   const sharpNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 0 } });
   const roundNose = buildModelRequest({ explicit: { fin_section: "hexagon", le_radius_index: 9 } });
   assert.deepEqual(sharpNose.geometry.fins[0].sections[0].points, roundNose.geometry.fins[0].sections[0].points);
-  assert.ok(request.geometry.fins[0].volume > buildModelRequest({}).geometry.fins[0].volume);
+  assert.ok(request.geometry.fins[0].volume > buildModelRequest({ explicit: { fin_section: "naca" } }).geometry.fins[0].volume);
   const naca = buildFinAirfoil({ thickness_percent: 4.48, le_radius_index: 6, max_thickness_tenths: 3 });
   assert.equal(naca.kind, "naca");
   assert.equal(naca.loop.length, 2 * AIRFOIL_SAMPLES_PER_SIDE + 1);
@@ -742,7 +751,7 @@ test("the hexagon root junction is a 3 mm round and the fin tip stays sharp", ()
     // Sharp tip corners: the tip chord is the whole tip chord, not shortened by an arc foot.
     assert.ok(Math.abs(tipTe[0] - tipLe[0] - (fin.te - fin.tip_le)) < 1e-12);
   }
-  const naca = buildModelRequest({});
+  const naca = buildModelRequest({ explicit: { fin_section: "naca" } });
   assert.equal(naca.geometry.rootJunctionFillet, undefined);
   assert.equal(naca.geometry.fins[0].tipCornerFillet, undefined);
 });
@@ -770,5 +779,5 @@ test("the repair budget travels with the geometry and stays a construction limit
   assert.ok(repair.maxVolumeChange > 1e-3 && repair.maxVolumeChange <= 1e-2);
   assert.ok(repair.maxSurfaceChange > 1e-3 && repair.maxSurfaceChange <= 1e-2);
   // NACA fins are built without these rounds, so they carry no repair spec either.
-  assert.equal(buildModelRequest({}).geometry.repair, undefined);
+  assert.equal(buildModelRequest({ explicit: { fin_section: "naca" } }).geometry.repair, undefined);
 });

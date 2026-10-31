@@ -41,11 +41,11 @@ import numpy as np
 # 头型："ogive" = 切线卵形（DATCOM TNOSE = OGIVE，也是不写 TNOSE 时的默认头型）
 #       "cone"  = 直线圆锥（DATCOM TNOSE = CONE）
 # DATCOM 只认 LNOSE / DNOSE，头型靠这条卡片；点云脚本用同一个头型建母线。
-NOSE_SHAPE = "ogive"
+NOSE_SHAPE = "cone"
 
-# 锥顶倒角球冠半径 = 比例 × 弹长（弹长的 0.4%，约 1.5 cm）。
+# 锥顶倒角球冠半径 = 比例 × 弹长
 # 只有点云 / CFD 用：DATCOM 的头锥是数学尖点，不建倒角。置 0 即退化成尖头。
-NOSE_TIP_FILLET_RATIO = 0.004
+NOSE_TIP_FILLET_RATIO = 0.002
 # 直接给倒角半径（m）时覆盖上面的比例；None = 用比例。
 NOSE_TIP_FILLET_RADIUS = None
 # 头锥母线离散段数（网格与折线用）。
@@ -61,11 +61,15 @@ SECTION_TYPE = "HEX"
 HEX_THICKNESS_PERCENT = 4.462
 # 平顶段长度，弦长百分数。LFLATU = flat_percent / 100，
 # 对称六边形的前缘斜坡终点 LMAXU = (1 - LFLATU) / 2。
-HEX_FLAT_PERCENT = 60.995
+# 64.6 → 平顶 0.177..0.823。这个值由 SpaceClaim 侧实测反推：前舵根部 3 mm 交接圆角
+# 要撑住，平顶终点必须 ≥ 0.822（拐点在 0.8220/0.8221 之间），60.995（终点 0.805）
+# 会被压到 1.5 mm 下限并留下 24 个非圆角碎面。DATCOM 的六边形本就对称，
+# 两边共用这一个值，否则同一个 geometry_id 在两侧表示不同的截面。
+HEX_FLAT_PERCENT = 64.6
 # DATCOM 的 LER 卡片值（前缘圆角参数），原样写入，只影响 DATCOM 的气动结果。
 # 口径（绝对英寸还是弦长分数）没能从 DATCOM 手册确认；实测它只改变阻力：
 # 0 -> CD 0.330，0.015 -> 0.349，0.05 -> 0.371，0.15 -> 0.451，0.5 以上饱和。
-HEX_LE_RADIUS = 0.5
+HEX_LE_RADIUS = 0.05
 
 # NACA 四位数参数（SECTION_TYPE = "NACA" 时生效）
 # 最大厚度，弦长的百分数，写卡时保留两位小数。
@@ -858,15 +862,34 @@ def _exact_int(name, value, low, high):
 # =============================================================================
 # 5. 由配置区派生的对象与解析入口（不用改）
 # =============================================================================
+def make_fin_section(section_type=None, *, thickness_percent=None, flat_percent=None,
+                     le_radius=None, le_radius_index=None,
+                     max_thickness_tenths=None) -> FinSection:
+    """按种类与参数构造舵面截面；缺的参数取配置区默认值。
+
+    `01_batch_datcom.py` 按输入表每一行的翼型种类调用它，所以同一批里可以六边形与
+    NACA 混跑。模块顶部的 `FIN_SECTION` 只是"没给参数时"的默认值，不再是唯一来源。
+    """
+    kind = str(SECTION_TYPE if section_type is None else section_type).strip().upper()
+    if kind == "HEX":
+        return HexSection(
+            HEX_THICKNESS_PERCENT if thickness_percent is None else thickness_percent,
+            HEX_FLAT_PERCENT if flat_percent is None else flat_percent,
+            HEX_LE_RADIUS if le_radius is None else le_radius,
+        )
+    if kind == "NACA":
+        return NacaSection(
+            NACA_THICKNESS_PERCENT if thickness_percent is None else thickness_percent,
+            NACA_LE_RADIUS_INDEX if le_radius_index is None else le_radius_index,
+            NACA_MAX_THICKNESS_TENTHS
+            if max_thickness_tenths is None else max_thickness_tenths,
+        )
+    raise ValueError(f"不支持的 SECTION_TYPE {kind!r}，仅支持 HEX / NACA。")
+
+
 def _build_fin_section() -> FinSection:
-    """按 SECTION_TYPE 选一套参数构造当前截面；01 与 04 共用这一份。"""
-    section_type = str(SECTION_TYPE).strip().upper()
-    if section_type == "HEX":
-        return HexSection(HEX_THICKNESS_PERCENT, HEX_FLAT_PERCENT, HEX_LE_RADIUS)
-    if section_type == "NACA":
-        return NacaSection(NACA_THICKNESS_PERCENT, NACA_LE_RADIUS_INDEX,
-                           NACA_MAX_THICKNESS_TENTHS)
-    raise ValueError(f"不支持的 SECTION_TYPE {SECTION_TYPE!r}，仅支持 HEX / NACA。")
+    """按配置区构造默认截面；01 与 04 共用这一份。"""
+    return make_fin_section()
 
 
 # 当前舵面截面（前舵后舵共用）。01 写进 $FINSET / 控制卡，04 按它建舵面外形。

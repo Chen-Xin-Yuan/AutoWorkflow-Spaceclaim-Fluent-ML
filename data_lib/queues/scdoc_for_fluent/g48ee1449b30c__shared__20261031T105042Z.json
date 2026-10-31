@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "queue": "scdoc_for_fluent",
+  "run_id": "g48ee1449b30c__shared__20261031T105042Z",
+  "geometry_id": "g48ee1449b30c",
+  "condition_id": "shared",
+  "artifact": {
+    "rel_path": "data_lib/runs/high/spaceclaim/g48ee1449b30c__shared__20261031T105042Z/g48ee1449b30c_spaceclaim.scdoc",
+    "size": 3400411,
+    "sha256": "2578a98d11cb65830787d6a40e5c05dc3bce16432099d5eb040b4d098d87eb40"
+  },
+  "review_id": "r248691fe7627",
+  "approved_at": "2026-10-31T11:06:11Z"
+}

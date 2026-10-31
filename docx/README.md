@@ -7,6 +7,7 @@
 - `task_note.md`：任务笔记。
 - `workspace_restructure_report.md`：工作区重构报告。
 - `汇报.pptx`：汇报材料（从原 `docs` 迁入）。
+- `参数化方式.png`：几何参数化方式的示意图（汇报配图）。
 - `README.md`：本文件。
 - [工作区启动与数据约定](../README.md)
 - [SpaceClaim 项目说明](../spaceclaim/README.md)

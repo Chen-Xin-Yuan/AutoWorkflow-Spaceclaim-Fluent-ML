@@ -1,6 +1,4 @@
-﻿# ansys-scdmdoc-mcp
-
-**中文** | [English](README.en.md) | [中英双语速览](README.bilingual.md)
+# ansys-scdmdoc-mcp
 
 ![ANSYS SpaceClaim MCP](docs/assets/circular-pattern-hero.png)
 
@@ -97,15 +95,19 @@ node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 | `L_N` / `L` / `D` | 鼻锥长度 / 总长 / 直径 | 0.49 / 3.69 / 0.18 m |
 | `L_W` / `C_RW` / `C_TW` / `B_W` | 前舵可见前缘站位 / 根弦 / 梢弦 / 展长 | 1.72 / 0.23 / 0.06 / 0.23 m |
 | `L_F` / `C_RF` / `C_TF` / `B_F` | 后舵可见前缘站位 / 根弦 / 梢弦 / 展长 | 3.2 / 0.38 / 0.19 / 0.22 m |
-| `thickness_percent` | 舵面最大厚度，占弦长的百分数；前后舵共用 | 4.48 |
+| `thickness_percent` | 舵面最大厚度，占弦长的百分数；前后舵共用 | 4.462 |
 | `le_radius_index` | 前缘半径指数。0 为尖前缘，6 为标准圆前缘 | 6 |
 | `max_thickness_tenths` | 最大厚度距前缘的位置，单位是 1/10 弦长 | 3 |
 | `k_nose` | 锥柱交接倒圆半径 / `L` | 0.005 |
 | `k_tip` | 弹尖球面钝化半径 / `L` | 0.002 |
 
-工作区几何参数一共 14 个：上表前 11 个主尺寸，加上前后舵共用的 3 个翼型参数 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`。允许值与 `DATCOM/scripts/missile_spec.py` 第 4 节 `NacaSection` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
+工作区几何参数一共 16 个：上表前 11 个主尺寸，加上翼型种类 `fin_section`（`hex` / `naca`）、三个翼型参数与鼻锥头型 `nose_shape`（`cone` / `ogive`）。三个翼型参数按种类二选一：`naca` 用 `thickness_percent`、`le_radius_index`、`max_thickness_tenths`，允许值与 `DATCOM/scripts/missile_spec.py` 第 4 节 `NacaSection` 相同：厚度大于 0 且小于 40，写卡时四舍五入到 0.01；前缘指数为整数 0–9，半径按 `(指数/6)²` 相对标准圆前缘缩放；最大厚度位置只允许 2、3、4、5、6。`hex` 用 `thickness_percent`、`flat_percent`、`le_radius`。基准值见工作区 [几何参数表](../README.md#几何参数定义与范围)。舵面平面形状仍由根弦、梢弦、展长和后缘对齐决定。本模块另外使用头部倒圆 `k_nose`、`k_tip`。
 
-横截面由 `fin_section` 选择，默认 `naca`。`naca` 是对称 NACA 四位数，按当地弦长缩放，在埋入根部与梢部之间直线放样；此时 `le_radius_index` 和 `max_thickness_tenths` 进入剖面。`hexagon` 是对称六边形：最大厚度仍是 `thickness_percent`，上下表面在 `hex_flat_start` 与 `hex_flat_end` 之间与弦线平行，默认从当地弦长的 20% 到 82.3%。六边形不使用前缘半径指数和最大厚度位置。肩部和后缘的圆弧倒角默认是几何模块中的 `HEX_FILLET_RADIUS_M = 0.001` m（1 mm）。前缘圆弧单独使用 `HEX_FILLET_LE_RADIUS_M = 0.0018` m（1.8 mm）。两者都是绝对长度，不是弦长比例，也不是 schema 里的设计参数。未缩小时验收带为 ±10%。前缘圆弧的最前点和后缘圆弧的最后点落在原来的尖点站位上，并与两侧直线相切，因此按最前点、最后点量得的弦长不变，弹尖到舵面前缘的距离也不变。肩部圆弧与等厚平直段和斜边相切，最大厚度不变。六个尖角各是一条连续圆弧，与相邻直线在接点相切，草图用 `SketchArc.CreateSweepArc` 画出这条圆弧，不是弦，也不是折线。梢部肩圆可能短到内核创建时不留下曲线；这时草图按 `sketchScale` 放大绘制，再用 `Scale.Execute` 绕原点缩回，半径和展向站位仍是真值。`sketchScale` 由 `HEX_FILLET_SKETCH_MIN_ARC_M`（0.0002 m）和 `HEX_FILLET_SKETCH_MIN_SAGITTA_M`（5e-6 m）决定，不是设计参数。六边形舵梢部保持设计梯形的尖角：梢弦与前缘、后缘在设计站位直接相交，不做平面圆弧，也不切角，因此梢弦就是完整的设计梢弦。前舵和后舵与弹体的交接各自做一圈 `ConstantRound`。后舵半径是 `HEX_ROOT_JUNCTION_RADIUS_M = 0.003` m。前舵先试同一半径；径向接缝在默认参数下直接接受 0.003 m，若拒绝则沿 `HEX_ROOT_JUNCTION_PROBE_RADII_M` 降到不低于 `HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M = 0.0015` m 的最大可执行半径，即 1.5–3 mm 之间的 1.5 mm，不收到 1.5 mm 以下。实际半径写入成功目录的 `params.json`。交接边按“中点落在弹体柱面上”选边（`HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M = 0.001` m），前后舵用同一条规则；贴着柱面的局部弹体面不影响判断。每个站位把整圈接缝一次倒圆，不按边长筛掉短边：短边正是肩部圆弧那几段，去掉后链在切向接点断开，试过的 0.2 mm 以上半径全部被内核拒绝；整圈一起倒则后舵 3 mm、前舵 1.5 mm 都能执行。没有逐边降半径的回退，也没有零点几毫米的替代值。设计弦长和弹尖到前缘的距离不变。NACA 不做这两处根部圆角。肩部和后缘保持 1 mm，前缘是 1.8 mm。顺时针标志与弹身倒圆相同。根梢各自按当地弦长建弧，放样后每个尖角沿展向是一张连续圆角面。草图必须新建剖面实体，不能把已有实体交回放样。当地半厚度、弦长或等厚段放不下请求的相切圆角时，该半径收到仍能相切且草图放得下的最大值，并在该剖面的 `filletClamped` 与 `filletClampNote` 中说明。默认前舵梢弦 0.06 m、厚度 4.48% 时半厚度约 1.37 mm，放不下 1.8 mm 前缘圆，只缩小这一处前缘半径；肩部和后缘仍是 1 mm。其余三个默认站位的前缘保持 1.8 mm。**前舵与后舵都保持径向，两者在同一平面内，不斜置。** 早期版本曾把前舵绕弦向轴转过六边形斜边半角（默认约 6.4°），理由是“根部截面与弹体切面平行、夹角为 0°，内核会拒绝该接缝的 `ConstantRound`”。V241 实测推翻了这一前提：径向前舵的接缝同样接受完整 3 mm `ConstantRound`（48 条边、8 个实测圆柱面），与后舵完全相同。斜置因此没有换来任何东西，反而在轴向后视图中让前后舵形成剪刀状双影，所以已彻底移除。`hexagonBevelAngle` 仍用于描述剖面自身的斜边坡度，但不再改变舵面朝向。NACA 剖面不涉及这些根部圆角。放样、圆周阵列和合并与 NACA 相同。
+**头型只实现 `cone`。** 本模块的鼻锥母线是一条直线（圆锥），`ogive` 没有实现；传入 `ogive` 会按"不得静默降级"的规则直接报错，不会偷偷建成圆锥。
+
+横截面由 `fin_section` 选择，默认 `hexagon`（工作区的默认翼型就是 `hex`）。`naca` 是对称 NACA 四位数，按当地弦长缩放，在埋入根部与梢部之间直线放样；此时 `le_radius_index` 和 `max_thickness_tenths` 进入剖面。`hexagon` 是对称六边形：最大厚度仍是 `thickness_percent`，上下表面在等厚段内与弦线平行。**等厚段只有一个入口 `flat_percent`**（占当地弦长的百分数，默认 64.6）：起止由它在 `lib/missile-params.mjs` 的 `hexFlatFromPercent` 里推导——`hex_flat_start = (1 - p/100) / 2`、`hex_flat_end = (1 + p/100) / 2`，默认即 17.7%–82.3%，与 DATCOM 卡片的 `LMAXU` / `LFLATU` 是同一个量。这两个键不再是 schema 字段，既不能从命令行传入，也不会出现"数据库一套、模型另一套"；它们仍以派生值写进 `params.json` 供审核核对。六边形不使用前缘半径指数和最大厚度位置。肩部和后缘的圆弧倒角默认是几何模块中的 `HEX_FILLET_RADIUS_M = 0.001` m（1 mm）。前缘圆弧单独使用 `HEX_FILLET_LE_RADIUS_M = 0.0018` m（1.8 mm）。两者都是绝对长度，不是弦长比例，也不是 schema 里的设计参数。未缩小时验收带为 ±10%。前缘圆弧的最前点和后缘圆弧的最后点落在原来的尖点站位上，并与两侧直线相切，因此按最前点、最后点量得的弦长不变，弹尖到舵面前缘的距离也不变。肩部圆弧与等厚平直段和斜边相切，最大厚度不变。六个尖角各是一条连续圆弧，与相邻直线在接点相切，草图用 `SketchArc.CreateSweepArc` 画出这条圆弧，不是弦，也不是折线。梢部肩圆可能短到内核创建时不留下曲线；这时草图按 `sketchScale` 放大绘制，再用 `Scale.Execute` 绕原点缩回，半径和展向站位仍是真值。`sketchScale` 由 `HEX_FILLET_SKETCH_MIN_ARC_M`（0.0002 m）和 `HEX_FILLET_SKETCH_MIN_SAGITTA_M`（5e-6 m）决定，不是设计参数。六边形舵梢部保持设计梯形的尖角：梢弦与前缘、后缘在设计站位直接相交，不做平面圆弧，也不切角，因此梢弦就是完整的设计梢弦。前舵和后舵与弹体的交接各自做一圈 `ConstantRound`。后舵半径是 `HEX_ROOT_JUNCTION_RADIUS_M = 0.003` m。前舵先试同一半径；径向接缝在默认参数下直接接受 0.003 m，若拒绝则沿 `HEX_ROOT_JUNCTION_PROBE_RADII_M` 降到不低于 `HEX_ROOT_JUNCTION_FORWARD_MIN_RADIUS_M = 0.0015` m 的最大可执行半径，即 1.5–3 mm 之间的 1.5 mm，不收到 1.5 mm 以下。实际半径写入成功目录的 `params.json`。交接边按“中点落在弹体柱面上”选边（`HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M = 0.001` m），前后舵用同一条规则；贴着柱面的局部弹体面不影响判断。每个站位把整圈接缝一次倒圆，不按边长筛掉短边：短边正是肩部圆弧那几段，去掉后链在切向接点断开，试过的 0.2 mm 以上半径全部被内核拒绝；整圈一起倒则后舵 3 mm、前舵 1.5 mm 都能执行。没有逐边降半径的回退，也没有零点几毫米的替代值。设计弦长和弹尖到前缘的距离不变。NACA 不做这两处根部圆角。肩部和后缘保持 1 mm，前缘是 1.8 mm。顺时针标志与弹身倒圆相同。根梢各自按当地弦长建弧，放样后每个尖角沿展向是一张连续圆角面。草图必须新建剖面实体，不能把已有实体交回放样。当地半厚度、弦长或等厚段放不下请求的相切圆角时，该半径收到仍能相切且草图放得下的最大值，并在该剖面的 `filletClamped` 与 `filletClampNote` 中说明。设计厚度 4.462% 在库里的几何行与 schema 默认值上是同一个数，所以手工裸跑和派发跑出同一个截面（NACA 写卡时仍四舍五入到两位小数，读作 4.46）；前舵梢弦 0.06 m、厚度 4.462% 时半厚度约 1.37 mm，放不下 1.8 mm 前缘圆，只缩小这一处前缘半径；肩部和后缘仍是 1 mm。其余三个默认站位的前缘保持 1.8 mm。**前舵与后舵都保持径向，两者在同一平面内，不斜置。** 早期版本曾把前舵绕弦向轴转过六边形斜边半角（默认约 6.4°），理由是“根部截面与弹体切面平行、夹角为 0°，内核会拒绝该接缝的 `ConstantRound`”。V241 实测推翻了这一前提：径向前舵的接缝同样接受完整 3 mm `ConstantRound`（48 条边、8 个实测圆柱面），与后舵完全相同。斜置因此没有换来任何东西，反而在轴向后视图中让前后舵形成剪刀状双影，所以已彻底移除。`hexagonBevelAngle` 仍用于描述剖面自身的斜边坡度，但不再改变舵面朝向。NACA 剖面不涉及这些根部圆角。放样、圆周阵列和合并与 NACA 相同。
+
+> **这一版把终点放回 82.3%。** 等厚段终点由 `flat_percent` 推导，默认 64.6 对应 0.177–0.823；早期 P0 统一参数时曾取 60.995（0.195–0.805），真机实测立即复现了下面记录的故障：前舵根部 3 mm 圆角被判不可执行、压到 1.5 mm 下限，合并后留下 24 个无法删除的非圆角碎面（证据：`feedback/spaceclaim/g692bcb5d5e50__shared__20261031T104432Z/run.json`，`clamped=true`、`belowFloor=24`、`roundFaces=24`）。改回 64.6 即回到已验证的 0.823 口径。注意 DATCOM 的六边形本身对称（`LMAXU=(1-LFLATU)/2`），两边必须共用同一个 `flat_percent`，所以终点取 0.823 时起点只能落在 0.177，不能保留旧版的 0.20。
 
 舵根碎面的真正成因不是修复不足，而是 `hex_flat_end` 太低：等厚段终点决定后肩圆弧，这段弧是舵体接缝最短的一段。0.80 时前舵接缝拒绝 3 mm，圆角被压到 1.5 mm 下限，未倒圆的残余带在合并后形成 24 个四边形碎面（0.18–0.98 mm²，长宽比约 119）。这些面删不掉：`FixSpecific` 报告成功却不动、逐个 `DeleteFaces` 每删一个反而多加一个面和三条边、`RepairAction.None` 能删干净但实体变成非流形（体积测量直接抛异常）。因此只改 `hex_flat_end`：0.80→0.823（+2.875% 弦），前舵接缝接受完整 3 mm 圆角、碎面归零。厚度保持原始 4.48% 不动——`thickness_percent` 是前后舵共用的翼型最大厚度，改它会改变翼型截面和气动结果，而实测它对碎面无效（平面终点 0.816 下把厚度提到 4.50 / 4.52 / 4.54 / 4.55 均仍剩 8 个碎面）。实测分界在 0.8220（8 个碎面）与 0.8221（0 个）之间，取 0.823 留约一个步长余量。代价：根弦等厚段终点外移约 5.4 mm，整体体积 +0.048%、湿面积 −0.036%，横向包围盒 −0.0003%、轴向不变。同一区间扫过 `root_overlap`（0.0025–0.010，完全无效）、`hex_flat_start`、`C_RW`、`C_TW`、`B_W`、`HEX_ROOT_JUNCTION_SEAM_TOLERANCE_M`（0.0006–0.004，体积零变化但碎面仍为 24），都不能清除碎面。
 
@@ -123,7 +125,7 @@ node scripts/missile.mjs --fin_section hexagon --timeout 300000 --json
 | `root_overlap` | 0.005 m；必须为正且小于最小展长。 |
 | `le_mode` | 当前只实现 `trailing_aligned`；其余声明的模式会被拒绝。 |
 | `fin_section` | `naca`；也支持 `hexagon`。六边形肩部和后缘是 0.001 m，前缘是 0.0018 m，见上文，不是单独的输入字段。 |
-| `hex_flat_start` / `hex_flat_end` | 0.2 / 0.823，占当地弦长。只在 `hexagon` 时决定等厚段；须满足 `0 < hex_flat_start < hex_flat_end < 1`。`hex_flat_end` 不能随意调回 0.8：它是前舵根部 3 mm 圆角能否成立的决定因素，低于约 0.823 时圆角被降到 1.5 mm 下限，舵根随之出现 24 个非圆角碎面（实测，见上文）。 |
+| `hex_flat_start` / `hex_flat_end` | **不再是输入字段**：由 `flat_percent` 推导（见上文），默认 64.6 → 0.177 / 0.823。要改等厚段就改 `flat_percent`，须在 `(0, 100)` 内。 |
 | `fillet_location` | `both`；也支持 `cone_cylinder`、`nose_tip`。 |
 | `cruciform_count` | 每级 4 片；接受大于等于 2 的偶数。 |
 | `scdm_api_version` | 默认空字符串；执行器自动检测目标 API 版本，生成脚本使用检测结果。 |
@@ -239,7 +241,21 @@ npm run verify:geometry -- --timeout 300000
 
 入口为 `server.mjs`，命令与依赖版本见 `package.json` / `package-lock.json`。工作区总览见 [../README.md](../README.md)；历史建模设计见 [计划目录](docs/superpowers/plans/README.md)。
 
-[AGENTS.md](AGENTS.md) 要求每次修改代码都在同一变更中同步更新相关 README；共同内容须保持中、英、双语一致，目录变动须同步更新父目录说明。依赖自身的 README 不属于本项目维护范围。
+根目录文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `server.mjs` | MCP stdio 服务入口，7 个工具的注册与输入定义。 |
+| `package.json` / `package-lock.json` | 依赖与脚本入口（`npm test` / `npm run smoke` / `npm run missile` / `npm run setup`）。 |
+| `AGENTS.md` | 本仓库给编码代理的规则、证据分级与验收契约。 |
+| `CHANGELOG.md` | 版本变更记录。 |
+| `CONTRIBUTING.md` | 贡献流程与提交规范。 |
+| `SECURITY.md` | 漏洞报告渠道与支持范围。 |
+| `LICENSE` | 开源许可证。 |
+| `.gitignore` | 忽略规则：依赖、缓存、生成模型与运行日志不入库。 |
+| `README.md` | 本文件。 |
+
+[AGENTS.md](AGENTS.md) 要求每次修改代码都在同一变更中同步更新相关 README；本仓库只维护一份中文 README（英文版与双语速览已删除），参数表的数值由 `../scripts/docs.py` 从代码生成。目录变动须同步更新父目录说明。依赖自身的 README 不属于本项目维护范围。
 
 ## 发布边界
 

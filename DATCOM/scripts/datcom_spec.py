@@ -57,6 +57,14 @@ REQUIRED_GEOMETRY_KEYS = (
     "L_F", "C_RF", "C_TF", "B_F",
 )
 
+# 输入表里描述外形"种类"的**可选**列：数据库导出的表一定有这 7 列，老的 cases.csv 没有。
+# 缺列或空单元格时回落到 `missile_spec.py` 的默认值，所以 `--input` 指向老表仍能跑。
+# 顺序与数据库 `geometry` 表的列顺序一致，便于直接对接。
+SHAPE_COLUMNS = (
+    "fin_section_type", "thickness_percent", "flat_percent", "le_radius",
+    "le_radius_index", "max_thickness_tenths", "nose_shape",
+)
+
 # 每项的中文表头（CSV 列名，带符号与单位）
 GEOMETRY_CN_NAMES = {
     "L_N": "鼻锥长度L_N(m)",
