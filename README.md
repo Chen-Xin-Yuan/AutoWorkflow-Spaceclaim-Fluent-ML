@@ -222,7 +222,7 @@ python DATCOM/scripts/01_batch_datcom.py
 | `{geometry_id}_case_params.json` | 参数快照，含冻结的舵面相位、后缘对齐和力矩参考点 |
 | `{geometry_id}_datcom.log` | 该次调用的标准输出和标准错误 |
 
-点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型三项与头型、锥顶倒角都取 `missile_spec.py` 前部配置区（与 DATCOM 共用）。这 14 个几何参数加头型一起决定外形。默认写到 `data_lib/datasets/point_clouds/<geometry_id>/`：一个几何一个文件夹，文件夹名就是几何标识，主文件是文件夹内的 `<geometry_id>_pointcloud.ply`。点数和最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
+点云由 `DATCOM/scripts/04_pointnet_demo.py` 生成。`--geometry-id` 从总表读取 11 个主尺寸，`--params` 读取一份同名字段的 JSON，翼型三项与头型、锥顶倒角都取 `missile_spec.py` 前部配置区（与 DATCOM 共用）。这 14 个几何参数加头型一起决定外形。默认写到 `data_lib/datasets/point_clouds/<geometry_id>/`：一个几何一个文件夹，文件夹名就是几何标识，主文件是文件夹内的 `<geometry_id>_pointcloud.ply`。点数默认 16384，默认值在脚本前部的 `DEFAULT_N_POINTS`，也可用 `-n / --n-points` 临时覆盖；最终格式仍待定。闭环训练放在 `ML_training/` 这一预留模块里。
 
 当前总表有 4 行试算：`geometry_id` 暂为 `1`，高度 `0`，工况 C01、C02、C06、C07，归档在 `data_lib/runs/low/1/`。早先写到 `data_lib/datcom_data/` 的结果保留作历史记录。
 

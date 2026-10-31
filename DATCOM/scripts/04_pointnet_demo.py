@@ -100,6 +100,7 @@ MAIN_DIMENSIONS = (
 # 头型、舵面翼型、舵面布局、基准几何全部来自 scripts/missile_spec.py 前部的配置区，
 # 与批量 DATCOM 共用同一份：改那一处，两边同时生效。这里不要再写第二份默认值。
 # 截面保持上下对称（FIN_SECTION / FinSection 由 missile_spec 提供）。
+# 点云总点数：默认值在这里改，命令行 -n / --n-points 可临时覆盖（点数、种子、噪声都不影响几何）。
 DEFAULT_N_POINTS = 16384
 DEFAULT_SEED = 0
 DEFAULT_GAUSS = 0.0
