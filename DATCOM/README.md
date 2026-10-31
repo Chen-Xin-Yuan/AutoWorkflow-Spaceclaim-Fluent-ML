@@ -12,6 +12,8 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 不要把算例结果放在这里。`01_batch_datcom.py` 把结果写到 `../data_lib/runs/low/<geometry_id>/`，运行中的协议文件放在 `../data_lib/runs/low/.work/`。
 
+`datcom.exe`、`for005.dat`、`1_for005.dat` 都**入库**（程序和模板属于本仓库要保留的内容，根 `.gitignore` 第十节整体放行 `DATCOM/`）；同目录的 macOS 元数据 `._*`（如 `._cache_datcom.exe`，它是 AppleDouble 附属文件，不是程序）不入库。
+
 ### `scripts/`
 
 所有 Python 源码（`.py` 文件全部放这里）。

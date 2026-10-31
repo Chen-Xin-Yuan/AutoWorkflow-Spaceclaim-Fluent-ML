@@ -125,6 +125,8 @@ desktop.ini
 *.bak
 *.orig
 *~
+# macOS 拷贝到 Windows/网络盘时留下的 AppleDouble 附属文件（如 ._datcom.exe），不是内容
+._*
 
 # ---------------------------------------------------------------
 # 十、DATCOM 入库
@@ -134,11 +136,13 @@ desktop.ini
 # ---------------------------------------------------------------
 !/DATCOM/
 !/DATCOM/**
-# 上面两行放行整个 DATCOM 子树，会把字节码缓存和本机编辑器配置一起放进来
-# （曾因此入库 8 个 .pyc 和两个含本机绝对路径的 .vscode/settings.json）。
+# 上面两行放行整个 DATCOM 子树，会把字节码缓存、本机编辑器配置和 macOS 元数据
+# 一起放进来（曾因此入库 8 个 .pyc、两个含本机绝对路径的 .vscode/settings.json
+# 和一个 1.9 MB 的 ._cache_datcom.exe）。
 # 下面几行按路径重新排除；顺序不能调整，必须留在上面两条 ! 之下才生效。
 /DATCOM/**/__pycache__/
 /DATCOM/**/__pycache__/**
 /DATCOM/**/*.py[cod]
 /DATCOM/**/.pytest_cache/
 /DATCOM/**/.vscode/settings.json
+/DATCOM/**/._*
