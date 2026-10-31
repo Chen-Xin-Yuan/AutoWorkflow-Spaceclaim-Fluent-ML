@@ -168,16 +168,6 @@ MIN_TIP_CHORD_M = 0.001          # 梢弦下限，与建模程序一致（0 会�
 # 顶部 1.2 节固定（HEX / NACA 与各自三个参数），同一个 geometry_id 的所有工况共用
 # 一副截面。暂时不在产物里记录翼型参数；要知道某批系数用的哪套截面，看运行时
 # 控制台打印的「翼型: ...」或当时的 missile_spec.py 配置。
-#
-# 下面这些列是早期版本写过、现在下线的翼型列：合并旧表时丢掉，新表不再带着空列。
-RETIRED_CSV_COLUMNS = (
-    "舵面翼型",
-    "翼型相对厚度(%)",
-    "翼型平顶长度(%)",
-    "翼型前缘LER",
-    "翼型前缘半径指数",
-    "翼型最大厚度位置(1/10弦长)",
-)
 
 
 # 解析结果的内部列顺序（CSV 只输出 OUTPUT_COEFFICIENTS 里列出的系数）
@@ -715,9 +705,8 @@ def attach_case_identity(table, case):
 def write_summary_csv(path, table):
     """写入系数总表。同一几何再次运行时，只替换本次工况，保留其它高度的行。
 
-    合并旧表时会把早期版本写过、现已下线的翼型列（见 RETIRED_CSV_COLUMNS）丢掉：
-    翼型参数暂不进产物，旧表里的这几列不再保留。其它历史行按 identity 三列对齐，
-    本次没算到的行原样留下。
+    旧行按 identity 三列对齐，本次没算到的行原样留下；旧表里多出来的列（早期版本
+    写过的翼型列、或换过 OUTPUT_COEFFICIENTS 的系数列）也原样保留在表尾。
     """
     identity = ["geometry_id", "condition_id", "altitude_m"]
     if os.path.isfile(path) and set(identity) <= set(table.columns):
@@ -735,9 +724,6 @@ def write_summary_csv(path, table):
             # 以本次的列顺序为准；旧表里多出来的列（如果换过 OUTPUT_COEFFICIENTS）放最后。
             order = list(table.columns) + [c for c in merged.columns if c not in table.columns]
             table = merged.reindex(columns=order)
-    retired = [column for column in RETIRED_CSV_COLUMNS if column in table.columns]
-    if retired:
-        table = table.drop(columns=retired)
     table.to_csv(path, index=False, encoding="utf-8-sig", float_format="%.6g")
 
 
