@@ -27,7 +27,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 
 
-`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/`。不带几何标识时文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型与头型取 `missile_spec.py` 前部的配置区（翼型三项计入 14 个几何参数，头型与锥顶倒角不进总表，见文末「四、舵面翼型」「五、鼻锥头型」）。带几何标识时主文件是 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
+`04_pointnet_demo.py` 默认把点云写到 `../data_lib/datasets/point_clouds/<geometry_id>/`：一个几何一个文件夹，文件夹名就是几何标识。不带几何标识时是纯演示、不建文件夹，文件名仍是 `missile_<N>.*`。用 `--geometry-id` 或 `--params` 读入总表的 11 个主尺寸，翼型与头型取 `missile_spec.py` 前部的配置区（翼型三项计入 14 个几何参数，头型与锥顶倒角不进总表，见文末「四、舵面翼型」「五、鼻锥头型」）。带几何标识时主文件是该文件夹下的 `<geometry_id>_pointcloud.ply`。默认 16384 点，并按 CFD 关键部位加密表面点：舵面、前缘后缘、根梢、锥顶倒角、头锥肩部、舵身交界和尾部底缘。总点数不变。脚本前部 `CFD_REFINEMENT_ENABLED = False` 可恢复按面积均匀采样。点云仍是表面点，不是 CFD 体网格。点数和文件格式仍沿用脚本里的现有演示，工作流侧的最终格式还待定。
 
 ### `../data_lib/runs/low/`（运行结果，项目外）
 
@@ -139,7 +139,7 @@ python scripts/01_batch_datcom.py --demo --mach 2.0 2.2 --alpha 4.0 6.0 --alt 50
 
 ### 3. Git 管理
 
-结果现在写到项目外的 `../data_lib/runs/low/`，由上级工作区 `.gitignore` 忽略运行产物。点云写到 `../data_lib/datasets/point_clouds/`，点云文件同样不入库。
+结果现在写到项目外的 `../data_lib/runs/low/`，由上级工作区 `.gitignore` 忽略运行产物。点云写到 `../data_lib/datasets/point_clouds/<geometry_id>/`，点云文件同样不入库。
 
 `__pycache__/` 等产物同样不入库（由上级 `.gitignore` 统一覆盖）。
 

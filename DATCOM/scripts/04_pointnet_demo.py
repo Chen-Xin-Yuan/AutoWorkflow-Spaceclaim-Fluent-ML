@@ -38,10 +38,11 @@
       文件前部 CFD_REFINEMENT_ENABLED = False 时，恢复按面积均匀采样。
       加密的是表面上的点，不是附面层体网格。
 
-输出（默认 ../data_lib/datasets/point_clouds/，可用 --outdir 改）:
-    不带几何标识时，文件名仍是 missile_<N>.*，点数和格式沿用本脚本现有演示。
-    用 --geometry-id 或 --params 读入总表的 11 个主尺寸后，主文件名是
-    <geometry_id>_pointcloud.ply / .xyz，并带标签、meta 和可选网格。
+输出（根目录默认 ../data_lib/datasets/point_clouds/，可用 --outdir 改）:
+    用 --geometry-id 或 --params 读入总表的 11 个主尺寸后，输出到 <根目录>/<geometry_id>/：
+    一个几何一个文件夹，文件夹名就是几何标识；主文件名是 <geometry_id>_pointcloud.ply / .xyz，
+    并带标签、meta、可选网格和预览图。
+    不带几何标识时是纯演示，不建文件夹，文件名仍是 missile_<N>.*，直接放在根目录下。
 
 用法（在项目根或任意目录均可，路径自动推导）:
     python scripts/04_pointnet_demo.py                 # 按默认点数生成 + 校验
@@ -87,8 +88,11 @@ from missile_spec import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 CASES_CSV = WORKSPACE_ROOT / "data_lib" / "inputs" / "cases.csv"
-# --outdir 覆盖输出目录；相对路径仍相对启动时的当前工作目录。
+# --outdir 覆盖输出根目录；相对路径仍相对启动时的当前工作目录。
 OUTPUT_DIR = WORKSPACE_ROOT / "data_lib" / "datasets" / "point_clouds"
+# 带几何标识时的子目录名模板（拼在输出根目录后面）：一个几何一个文件夹，名字就是几何标识。
+# 不带几何标识的纯演示不建子目录，文件直接落在根目录下。
+GEOMETRY_SUBDIR_TEMPLATE = "{geometry_id}"
 MAIN_DIMENSIONS = (
     "L_N", "L", "D", "L_W", "C_RW", "C_TW", "B_W", "L_F", "C_RF", "C_TF", "B_F",
 )
@@ -1771,7 +1775,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("-n", "--n-points", type=int, default=DEFAULT_N_POINTS, help=f"点数（默认 {DEFAULT_N_POINTS}）")
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED, help="随机种子（固定即完全复现）")
     ap.add_argument("--gauss", type=float, default=DEFAULT_GAUSS, help="高斯噪声标准差（米），默认无噪声")
-    ap.add_argument("--outdir", type=Path, default=None, help="输出目录，默认 data_lib/datasets/point_clouds")
+    ap.add_argument("--outdir", type=Path, default=None,
+                    help="输出根目录，默认 data_lib/datasets/point_clouds；带几何标识时再建 <geometry_id>/ 子目录")
     ap.add_argument("--tag", type=str, default=None, help="文件名标签。给出几何标识时默认 <geometry_id>_pointcloud")
     ap.add_argument("--geometry-id", default=None, help="从 data_lib/inputs/cases.csv 读取该几何的 11 个主尺寸")
     ap.add_argument("--params", type=Path, default=None, help="含 11 个主尺寸的 JSON，字段名与总表相同")
@@ -1794,6 +1799,11 @@ def main() -> int:
             geometry_id = geometry_id or args.params.stem
         elif geometry_id:
             main_dimensions = main_dimensions_from_cases(geometry_id)
+        # 几何标识会直接变成子目录名，不能带路径分隔符
+        if geometry_id and (
+            geometry_id in {".", ".."} or any(sep in geometry_id for sep in ("/", "\\"))
+        ):
+            raise ValueError(f"几何标识不能是 {geometry_id!r}：它会作为输出子目录名。")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"[ERROR] {exc}")
         return 1
@@ -1806,6 +1816,9 @@ def main() -> int:
     else:
         tag = DEFAULT_TAG_TEMPLATE.format(n_points=args.n_points)
     outdir = Path(args.outdir) if args.outdir else OUTPUT_DIR
+    if geometry_id:
+        # 一个几何一个文件夹，文件夹名就是几何标识（--outdir 指的是它的上级根目录）
+        outdir = outdir / GEOMETRY_SUBDIR_TEMPLATE.format(geometry_id=geometry_id)
     outdir.mkdir(parents=True, exist_ok=True)
 
     points, normals, labels, info = build_pointcloud(
