@@ -62,7 +62,7 @@ DATCOM 程序本体目录，存放 `datcom.exe` 与历史输入模板 `for005.da
 
 ### `.vscode/`
 
-VS Code 编辑器配置文件（`settings.json` 等）。属于 IDE 工具配置，建议保留。
+VS Code 编辑器配置文件（`settings.json` 等）。`settings.json` 里存的是本机绝对路径（Pylance 的 stub/typings 目录），按上级 `.gitignore` 与 `AGENTS.md`「安装路径不进源码与报告」**不入库**；本机可以留着用，换机器时重建即可。
 
 
 ### `hex_airfoil.png` / `naca_airfoil.png`

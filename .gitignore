@@ -105,6 +105,15 @@ venv/
 /experiments/autoCFD/Benchmark/
 # 参考文献 PDF（约 53 MB / 11 个）。如需随仓库保存，删掉下面一行即可。
 /docx/reference_papers/
+# 打包备份与压缩包一律不入库：体积不可控，而已压缩的包 git 无法有效缩减。
+# archive.zip（2.05 GB）就是踩过这个坑：提交进去后 push 只能干等，GitHub 还会拒收。
+# 备份包放 /archive/ 下（已被忽略），或放仓库外。
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
 
 # ---------------------------------------------------------------
 # 九、系统与临时文件
@@ -125,5 +134,11 @@ desktop.ini
 # ---------------------------------------------------------------
 !/DATCOM/
 !/DATCOM/**
-!/DATCOM/**/__pycache__/
-!/DATCOM/**/__pycache__/**
+# 上面两行放行整个 DATCOM 子树，会把字节码缓存和本机编辑器配置一起放进来
+# （曾因此入库 8 个 .pyc 和两个含本机绝对路径的 .vscode/settings.json）。
+# 下面几行按路径重新排除；顺序不能调整，必须留在上面两条 ! 之下才生效。
+/DATCOM/**/__pycache__/
+/DATCOM/**/__pycache__/**
+/DATCOM/**/*.py[cod]
+/DATCOM/**/.pytest_cache/
+/DATCOM/**/.vscode/settings.json
