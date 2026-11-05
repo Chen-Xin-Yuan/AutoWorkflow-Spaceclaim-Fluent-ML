@@ -73,6 +73,13 @@ test("the script measures where the fins actually sit", () => {
   assert.match(script, /"finPositions": fin_positions,/);
 });
 
+test("the script records the merged missile centre of mass", () => {
+  const script = renderModelScript("V241");
+  // The merged solid is what the geometry table stores the centroid of, so the reading has to be
+  // taken on the merged body, not on the revolution alone.
+  assert.match(script, /measurements\["centerOfMassM"\] = measure_center_of_mass\(merged\[0\]\)/);
+});
+
 test("the script holds no geometry constants of its own", () => {
   const script = renderModelScript("V241");
   for (const literal of ["0.49", "3.69", "0.18", "1.72", "0.23", "0.06", "3.2", "0.38", "0.19", "0.22", "0.012", "0.005", "18.45"]) {

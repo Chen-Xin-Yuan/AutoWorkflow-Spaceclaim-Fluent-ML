@@ -4,10 +4,9 @@
 任何脚本、子智能体、主智能体都通过 `python scripts/db.py <命令>` 改库，**不直接开
 sqlite3 连接写**，避免 `database is locked` 与"写了一半"的事务。
 
-本文件提供 `init`、`check`、`identify`、`import`、`export`、`report`、`control`、`claim`
-八个命令；`record-review`（P2）、`gc`（P6）在后续阶段加进来，配置区与规范化函数届时
-不需要改动。`watch.py` / `control.py` / `dispatch.py` 不自己写 SQL，而是 import 本模块
-第 10 节的函数，所以"所有写操作只经 db.py"在这一层成立。
+本文件提供 `init`、`check`、`identify`、`import`、`export`、`centroid`、`record-review`、
+`report`、`control`、`claim`、`gc` 等命令。`watch.py` / `control.py` / `dispatch.py` 不自己
+写 SQL，而是 import 本模块第 10 节的函数，所以"所有写操作只经 db.py"在这一层成立。
 
 -------------------------------------------------------------------------------
 输入 / 输出 / 参数配置
@@ -22,14 +21,18 @@ sqlite3 连接写**，避免 `database is locked` 与"写了一半"的事务。
                 变成两个身份、却是同一个外形。
     翼型/头型   调用方必须显式给出（数据库是唯一真相）。缺列时由 CSV 导入层回落到
                 `DATCOM/scripts/missile_spec.py` 的默认值，本模块不维护第二份默认值。
+    实测质心    SpaceClaim 建模过审时由 `review.py` 给出（模型坐标减 `nose_tip_x`
+                换算到弹尖基准），经 `record_review` → `set_geometry_centroid` 写入
+                `geometry.cg_x_m` / `cg_y_m` / `cg_z_m`。这三列是派生量，
+                **不参与身份哈希**，可以为空。
 
 输出
     `data_lib/datasets/SQLite/missile.db`，WAL 附属文件 `-wal` / `-shm` 不入库。
-    `init` 只建表与写入 `meta.schema_version`；`check` 只读，不改库。
+    `init` 只建表、跑已知迁移并写入 `meta.schema_version`；`check` 只读，不改库。
 
 参数配置（要改数值、字段顺序或路径只改这一节）
-    库文件名、表结构与索引、规范化字段顺序、枚举与大写规则、数值范围、
-    时间戳格式、浮点位数、ID 长度与前缀。
+    库文件名、表结构与索引、schema 版本与迁移、规范化字段顺序、枚举与大写规则、
+    数值范围、实测质心的校验容差、时间戳格式、浮点位数、ID 长度与前缀。
 
 覆盖优先级与时间口径
     命令行 > 环境变量 > `workspace.json` > 本节默认值。
@@ -68,7 +71,7 @@ DEFAULT_DATABASE_REL = "data_lib/datasets/SQLite/missile.db"
 DATCOM_SCRIPTS_DIR = WORKSPACE_ROOT / "DATCOM" / "scripts"
 
 # ---- 库连接参数 ----
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 JOURNAL_MODE = "WAL"          # 允许读写并发，`-wal` / `-shm` 不入版本库
 BUSY_TIMEOUT_MS = 5000        # 等锁上限，超时即报错，不重试到天荒地老
 FOREIGN_KEYS = True
@@ -100,6 +103,12 @@ FIN_SECTION_TYPES = ("hex", "naca")
 # 这个映射只在这里定义一次，dispatch.py 传参和 review.py 比对都引用它。
 SECTION_TO_TOOL = {"hex": "hexagon", "naca": "naca"}
 NOSE_SHAPES = ("ogive", "cone")
+
+# ---- 实测质心（SpaceClaim 建模过审时写回；派生量，不进规范串、不参与身份哈希）----
+# 坐标口径与 DATCOM 的 XCG、点云的 x 一致：x 从弹尖（x = 0）向尾部量，单位 m；y / z 是侧向分量。
+GEOMETRY_CENTROID_KEYS = ("cg_x_m", "cg_y_m", "cg_z_m")
+# 侧向分量容差（m）：十字舵关于弹轴对称，实测 |y|、|z| 应远小于 1 mm，超了就是模型摆错了。
+CENTROID_SYMMETRY_TOLERANCE_M = 1e-3
 
 # 翼型参数按类型二选一；整数参数单独列出，规范串里按整数写（不带小数点）
 FIN_PARAM_KEYS = {
@@ -222,6 +231,9 @@ CREATE TABLE IF NOT EXISTS geometry (
   canonical            TEXT NOT NULL UNIQUE,
   label                TEXT,                      -- 人工可读名，不参与身份
   created_at           TEXT NOT NULL,
+  -- 实测质心（SpaceClaim 过审时写回）：x 从弹尖起算，y / z 是侧向分量。
+  -- 派生量，不进规范串；没有过审的模型时保持 NULL。
+  cg_x_m REAL, cg_y_m REAL, cg_z_m REAL,
   CHECK ( (fin_section_type='hex'
            AND flat_percent IS NOT NULL AND le_radius IS NOT NULL
            AND le_radius_index IS NULL AND max_thickness_tenths IS NULL)
@@ -348,6 +360,13 @@ CREATE INDEX IF NOT EXISTS idx_geometry_state_mesh  ON geometry_state(mesh_statu
 CREATE INDEX IF NOT EXISTS idx_report_status        ON report(status);
 CREATE INDEX IF NOT EXISTS idx_review_kind_geometry ON review(kind, geometry_id);
 """
+
+# 迁移脚本：键是"库内当前版本"，值是补齐到 `SCHEMA_VERSION` 必须执行的 DDL，按顺序跑。
+# 只有这里登记过的旧版本能被 `init` 自动升级；其它版本一律拒绝，绝不猜着改结构。
+#   "1" → "2"：几何表加实测质心三列（派生量，不参与身份哈希）。
+SCHEMA_MIGRATIONS = {
+    "1": tuple(f"ALTER TABLE geometry ADD COLUMN {key} REAL" for key in GEOMETRY_CENTROID_KEYS),
+}
 
 EXPECTED_TABLES = (
     "meta", "geometry", "geometry_state", "condition", "cfd_task", "datcom_task",
@@ -682,16 +701,24 @@ def cmd_init(args) -> int:
     db_path = resolve_database(args.database)
     existed = db_path.exists()
     conn = connect(db_path, must_exist=False)
+    migrated_from = None
     try:
         before = table_names(conn)
         if "meta" in before:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             current = row["value"] if row else None
             if current != SCHEMA_VERSION:
-                raise SystemExit(
-                    f"库内 schema_version={current!r} 与本文件 {SCHEMA_VERSION!r} 不一致。\n"
-                    "改表结构必须升版本号并写迁移脚本，不能直接覆盖。"
-                )
+                steps = SCHEMA_MIGRATIONS.get(current or "")
+                if steps is None:
+                    raise SystemExit(
+                        f"库内 schema_version={current!r} 与本文件 {SCHEMA_VERSION!r} 不一致，"
+                        "而且没有登记从该版本到当前版本的迁移。\n"
+                        "改表结构必须升版本号并在 SCHEMA_MIGRATIONS 里补迁移，不能直接覆盖。"
+                    )
+                for statement in steps:
+                    conn.execute(statement)
+                conn.commit()
+                migrated_from = current
         create_schema(conn)
         after = table_names(conn)
     finally:
@@ -699,6 +726,8 @@ def cmd_init(args) -> int:
 
     print(f"数据库：{db_path}（{'新建' if not existed else '已存在'}）")
     print(f"表 {len(after)} 张：{', '.join(sorted(after))}")
+    if migrated_from is not None:
+        print(f"已迁移 schema_version：{migrated_from} → {SCHEMA_VERSION}")
     print(f"schema_version = {SCHEMA_VERSION}；journal_mode = {JOURNAL_MODE}")
     if existed:
         added = sorted(after - before)
@@ -823,6 +852,15 @@ def cmd_check(args) -> int:
             record("schema_version 一致", version == SCHEMA_VERSION, f"库内 {version}，代码 {SCHEMA_VERSION}")
         else:
             record("schema_version 一致", False, "meta 表不存在")
+
+        if "geometry" in tables:
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(geometry)")}
+            missing_centroid = [key for key in GEOMETRY_CENTROID_KEYS if key not in columns]
+            record("几何表有实测质心三列", not missing_centroid,
+                   f"缺 {missing_centroid}（先跑 python scripts/db.py init 执行迁移）"
+                   if missing_centroid else ", ".join(GEOMETRY_CENTROID_KEYS))
+        else:
+            record("几何表有实测质心三列", False, "geometry 表不存在")
     finally:
         conn.close()
 
@@ -941,6 +979,44 @@ def cmd_check(args) -> int:
         ok, detail = _expect_ok(memory, insert_geometry, _geometry_row(naca_identity), "合法 NACA 几何可写入")
         record("合法 NACA 几何可写入", ok, detail)
 
+        # 实测质心是几何表的派生列：写得进去、读得回来，而且不改变身份。
+        centroid_written, centroid_detail = False, ""
+        try:
+            centroid_written = set_geometry_centroid(
+                memory, identity["geometry_id"],
+                {"cg_x_m": 2.0, "cg_y_m": 0.0, "cg_z_m": 0.0},
+            )
+            stored = memory.execute(
+                "SELECT cg_x_m, cg_y_m, cg_z_m, canonical FROM geometry WHERE geometry_id=?",
+                (identity["geometry_id"],),
+            ).fetchone()
+            centroid_detail = (
+                f"x={stored['cg_x_m']} y={stored['cg_y_m']} z={stored['cg_z_m']}"
+                if stored is not None else "读不回来"
+            )
+            centroid_written = (centroid_written and stored is not None
+                                and stored["cg_x_m"] == 2.0
+                                and stored["canonical"] == identity["canonical"])
+        except WriteError as exc:
+            centroid_detail = str(exc)
+        record("实测质心写进几何表", centroid_written, centroid_detail)
+
+        bad_centroids = (
+            ({"cg_x_m": 5.0, "cg_y_m": 0.0, "cg_z_m": 0.0}, "轴向超出 L"),
+            ({"cg_x_m": 2.0, "cg_y_m": 0.02, "cg_z_m": 0.0}, "侧向偏离轴线"),
+            ({"cg_x_m": 2.0}, "缺分量"),
+            (None, "缺质心"),
+        )
+        missed = []
+        for bad, label in bad_centroids:
+            try:
+                set_geometry_centroid(memory, identity["geometry_id"], bad)
+            except WriteError:
+                continue
+            missed.append(label)
+        record("越界或缺失的质心被拒绝", not missed,
+               "四种都拒绝" if not missed else f"漏掉：{missed}")
+
         memory.execute(
             "INSERT INTO condition(condition_id, mach, alpha_deg, altitude_m, canonical, label, created_at)"
             " VALUES(?,?,?,?,?,?,?)",
@@ -1052,6 +1128,46 @@ def cmd_identify(args) -> int:
 
 
 # =============================================================================
+# 9b. 命令：centroid（只读，打印 SpaceClaim 实测质心）
+# =============================================================================
+def cmd_centroid(args) -> int:
+    """读实测质心：过审的建模运行经 `record_review` 把它写进 `geometry` 的派生三列。
+
+    坐标口径与 DATCOM 的 XCG、点云的 x 一致：x 从弹尖（x = 0）向尾部量，单位 m；
+    y / z 是侧向分量。三列不参与 `geometry_id`，所以空着（`measured=false`）不影响身份。
+    """
+    conn = connect(resolve_database(args.database))
+    try:
+        if args.geometry_id:
+            rows = conn.execute(
+                "SELECT geometry_id, label, L, cg_x_m, cg_y_m, cg_z_m FROM geometry"
+                " WHERE geometry_id=?", (args.geometry_id,)).fetchall()
+            if not rows:
+                raise SystemExit(f"库里没有几何 {args.geometry_id}")
+        else:
+            rows = conn.execute(
+                "SELECT geometry_id, label, L, cg_x_m, cg_y_m, cg_z_m FROM geometry"
+                " ORDER BY geometry_id").fetchall()
+    finally:
+        conn.close()
+    payload = [
+        {
+            "geometry_id": row["geometry_id"],
+            "label": row["label"],
+            "L_m": row["L"],
+            "cg_x_m": row["cg_x_m"],
+            "cg_y_m": row["cg_y_m"],
+            "cg_z_m": row["cg_z_m"],
+            "measured": row["cg_x_m"] is not None,
+        }
+        for row in rows
+    ]
+    print(json.dumps(payload[0] if args.geometry_id else payload,
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+# =============================================================================
 # 10. 写库：登记、领取、上报、启停（watch.py / control.py / dispatch.py 都调用这里，
 #     所以"所有写操作只经 db.py"在这一层成立，而不只是"只经 db.py 的命令行"）
 # =============================================================================
@@ -1142,6 +1258,46 @@ def register_condition(conn: sqlite3.Connection, identity: dict, label: str | No
             identity["condition_id"], params["mach"], params["alpha_deg"],
             params["altitude_m"], identity["canonical"], label, utc_sql(),
         ),
+    )
+    return True
+
+
+def set_geometry_centroid(conn: sqlite3.Connection, geometry_id: str,
+                          centroid: dict | None) -> bool:
+    """把 SpaceClaim 实测质心写进 `geometry` 的派生三列（不进规范串、不参与身份哈希）。
+
+    `centroid` 是模型坐标换算到弹尖基准后的 `{cg_x_m, cg_y_m, cg_z_m}`（米）：
+    x 从弹尖（x = 0）向尾部量，必须落在 (0, L) 内；y / z 是侧向分量，十字对称外形的
+    实测值应落在轴上，超过 `CENTROID_SYMMETRY_TOLERANCE_M` 就拒绝写入。
+    """
+    row = conn.execute("SELECT L FROM geometry WHERE geometry_id=?", (geometry_id,)).fetchone()
+    if row is None:
+        raise WriteError(f"库里没有几何 {geometry_id}，无法写入实测质心")
+    if not isinstance(centroid, dict):
+        raise WriteError(
+            "缺少实测质心（{}）：建模审核通过时必须带上 SpaceClaim 实测的整弹质心".format(
+                ", ".join(GEOMETRY_CENTROID_KEYS)))
+    values: dict[str, float] = {}
+    for key in GEOMETRY_CENTROID_KEYS:
+        raw = centroid.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise WriteError(f"实测质心 {key} 必须是数值，收到 {raw!r}")
+        number = float(raw)
+        if not math.isfinite(number):
+            raise WriteError(f"实测质心 {key} 必须是有限值，收到 {raw!r}")
+        values[key] = number
+    length = float(row["L"])
+    if not 0.0 < values["cg_x_m"] < length:
+        raise WriteError(
+            f"实测质心轴向位置 {values['cg_x_m']:.6f} m 不在 (0, L={length:.6f}) 内")
+    for key in ("cg_y_m", "cg_z_m"):
+        if abs(values[key]) > CENTROID_SYMMETRY_TOLERANCE_M:
+            raise WriteError(
+                f"实测质心 {key} = {values[key]:.6f} m 偏离弹轴超过 "
+                f"{CENTROID_SYMMETRY_TOLERANCE_M:g} m：十字对称外形的质心应落在轴上")
+    conn.execute(
+        "UPDATE geometry SET cg_x_m=?, cg_y_m=?, cg_z_m=? WHERE geometry_id=?",
+        (values["cg_x_m"], values["cg_y_m"], values["cg_z_m"], geometry_id),
     )
     return True
 
@@ -1930,6 +2086,7 @@ def _index_view(conn: sqlite3.Connection) -> dict:
     geometry_rows = []
     for row in conn.execute(
         "SELECT g.geometry_id, g.label, g.fin_section_type, g.nose_shape, g.L, g.D,"
+        " g.cg_x_m, g.cg_y_m, g.cg_z_m,"
         " s.model_status, s.mesh_status, s.model_path, s.mesh_path, s.deletable, s.updated_at"
         " FROM geometry g LEFT JOIN geometry_state s ON s.geometry_id = g.geometry_id"
         " ORDER BY g.geometry_id"
@@ -2257,6 +2414,11 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
             )
         artifact = {**artifact, **actual}
         rel_path = actual["rel_path"]
+
+    # 实测质心：过审的建模必须带整弹质心，先校验再写任何记录（同一条事务）。
+    # 质心不进规范串，所以它缺失或越界不会改变身份，只会让这次审核入不了库。
+    if kind == "model" and verdict == "passed":
+        set_geometry_centroid(conn, geometry_id, payload.get("centroid"))
 
     conn.execute(
         "INSERT INTO review(review_id, kind, geometry_id, condition_id, run_id, reviewer,"
@@ -2654,6 +2816,11 @@ def build_parser() -> argparse.ArgumentParser:
     identify.add_argument("--condition-json", help="mach / alpha_deg / altitude_m 的 JSON 对象")
     identify.add_argument("--condition-file", help="同上，从 JSON 文件读")
     identify.set_defaults(func=cmd_identify)
+
+    centroid = subparsers.add_parser(
+        "centroid", help="读 SpaceClaim 实测质心坐标（x 从弹尖起算，单位 m）")
+    centroid.add_argument("--geometry-id", help="只读这一个几何；不给就列出全部")
+    centroid.set_defaults(func=cmd_centroid)
 
     importer = subparsers.add_parser("import", help="把 23 列输入表导入（追加型、幂等）")
     importer.add_argument("--table", required=True, choices=sorted(INPUT_TABLES),

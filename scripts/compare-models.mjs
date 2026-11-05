@@ -33,6 +33,8 @@ const summary = (run) => ({
     extentsM: run.result.measurements.extentsM,
     volumeM3: run.result.measurements.volumeM3,
     surfaceAreaM2: run.result.measurements.surfaceAreaM2,
+    // 整弹实测质心（模型坐标，m）；旧模板的运行没有这个读数，此时字段直接省略。
+    centerOfMassM: run.result.measurements.centerOfMassM,
     enclosure: run.result.regions.enclosure,
     boi: run.result.regions.boi,
     namedSelections: run.result.namedSelections.names.slice().sort(),

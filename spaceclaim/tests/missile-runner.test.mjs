@@ -63,6 +63,9 @@ const passingResult = (request) => {
     measurements: {
       extentsM: { ...request.geometry.expectedExtents },
       surfaceAreaM2: missileGroups.reduce((total, name) => total + selections.groups[name].areaM2, 0),
+      // Whole-missile centroid in the model frame; the station from the nose tip is this minus
+      // nose_tip_x, and a symmetric cruciform keeps both lateral components on the axis.
+      centerOfMassM: { x: request.geometry.nose_tip_x + request.params.L / 2, y: 0, z: 0 },
     },
     regions: regionResult(request),
     finPositions: finPositions(request),
@@ -325,6 +328,26 @@ test("the gate rejects dimensions that drifted from the parameters", () => {
   wrongSpan.measurements.extentsM.lateral = 0.63;
   wrongSpan.measurements.extentsM.vertical = 0.63;
   assert.equal(grade(request, wrongSpan).ok, false);
+});
+
+test("the gate rejects a missing or off-axis whole missile centre of mass", () => {
+  // This is the value the workspace writes into the geometry table, so its absence or an impossible
+  // reading has to fail the run rather than be carried downstream.
+  const request = buildModelRequest({ explicit: { fin_section: "naca" } });
+  const criterion = (result) => grade(request, result).checks.find((check) => check.name.startsWith("整弹实测质心"));
+  assert.equal(criterion(passingResult(request)).ok, true);
+
+  const missing = passingResult(request);
+  delete missing.measurements.centerOfMassM;
+  assert.equal(criterion(missing).ok, false);
+
+  const offAxis = passingResult(request);
+  offAxis.measurements.centerOfMassM.y = 0.01;
+  assert.equal(criterion(offAxis).ok, false);
+
+  const behindTail = passingResult(request);
+  behindTail.measurements.centerOfMassM.x = request.geometry.nose_tip_x + request.params.L + 0.01;
+  assert.equal(criterion(behindTail).ok, false);
 });
 
 test("the extent expectation follows the cruciform phase and count", () => {

@@ -207,7 +207,7 @@ feedback/<stage>/<run_id>/
 | 表 | 作用 |
 |---|---|
 | `meta` | 键值对，存 `schema_version` |
-| `geometry` | 16 个几何参数 + 规范串 + 可读标签 |
+| `geometry` | 16 个几何参数 + 规范串 + 可读标签 + SpaceClaim 实测质心三列（派生量，不进身份） |
 | `geometry_state` | 路径状态管理表：建模/网格状态、三条路径、可删除标志 |
 | `condition` | 3 个工况参数 + 规范串 + 可读标签 |
 | `cfd_task` | 高保真任务：几何 × 工况，求解状态与三个气动系数 |
@@ -238,6 +238,7 @@ CREATE TABLE geometry (
   canonical          TEXT NOT NULL UNIQUE,
   label              TEXT,          -- 人工可读名，不参与身份
   created_at         TEXT NOT NULL,
+  cg_x_m REAL, cg_y_m REAL, cg_z_m REAL,   -- 实测质心（弹尖起算，m）；派生量，不参与身份
   CHECK ( (fin_section_type='hex'
            AND flat_percent IS NOT NULL AND le_radius IS NOT NULL
            AND le_radius_index IS NULL AND max_thickness_tenths IS NULL)

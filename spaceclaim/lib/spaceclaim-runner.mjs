@@ -25,6 +25,9 @@ const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_EXECUTE = true;
 const DEFAULT_MODEL_FILENAME = "missile.scdoc";
 const DEFAULT_ACCEPTANCE_TOLERANCE = 2e-3;
+// 整弹实测质心的侧向容差（m）。十字舵关于弹轴对称，两个侧向分量都应落在轴上；这里量的是
+// 内核读数，不是模型里的解析值，所以给 1e-3 而不是 1e-9。
+const CENTER_OF_MASS_LATERAL_TOLERANCE_M = 1e-3;
 const LEGACY_RUN_APPLICATION_DIRECTORY = "ansys-scdmdoc-mcp";
 const LEGACY_RUN_DIRECTORY = "missile-runs";
 const RUN_ARTIFACT_NAMES = {
@@ -193,6 +196,16 @@ export function evaluateAcceptance({ request, result, modelPath, modelStat, resu
   // are what pick that shift, so the body's own centre of mass is what proves the model ended up
   // where the parameters say.
   add("旋转体轴向质心 ≈ 解析值（弹尖基准与整体轴向位置）", relativeDifference(result?.diagnostics?.bodyCenterOfMassAfterRevolve?.x, geometry?.bodyCenterOfMass) <= 1e-4, `measured=${result?.diagnostics?.bodyCenterOfMassAfterRevolve?.x} expected=${geometry?.bodyCenterOfMass} noseTipX=${geometry?.nose_tip_x} placement=${request.placement?.mode}:${request.placement?.offset}`);
+
+  // The whole missile's measured centre of mass, the value the workspace writes into the geometry
+  // table. It has to exist and to be plausible: the station (measured minus the placement datum)
+  // lies inside the body, and a symmetric cruciform puts both lateral components on the axis.
+  const missileCenter = result?.measurements?.centerOfMassM;
+  const centerFromTip = Number.isFinite(missileCenter?.x) ? missileCenter.x - (geometry?.nose_tip_x ?? NaN) : NaN;
+  const centerOnAxis = Math.abs(missileCenter?.y ?? NaN) <= CENTER_OF_MASS_LATERAL_TOLERANCE_M && Math.abs(missileCenter?.z ?? NaN) <= CENTER_OF_MASS_LATERAL_TOLERANCE_M;
+  add("整弹实测质心在弹体范围内且侧向分量 ≈ 0（写进几何表的质心）",
+    Number.isFinite(centerFromTip) && centerFromTip > 0 && centerFromTip < params.L && centerOnAxis,
+    `centerOfMassM=${JSON.stringify(missileCenter)} fromTip=${centerFromTip} L=${params.L} lateralTolerance=${CENTER_OF_MASS_LATERAL_TOLERANCE_M}`);
 
   // Simulation regions: the model, the enclosure and the BOI share one document and one .scdoc.
   const regionNames = ["enclosure", "boi"].filter((name) => request.regions?.[name]);

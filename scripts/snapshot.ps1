@@ -1,6 +1,7 @@
 param(
     [string]$Label = '',
-    [string[]]$Include = @('spaceclaim', 'fluent_meshing', 'scripts', 'workspace.json', 'AGENTS.md', 'README.md')
+    # `.readme` 是 README 暂存区（镜像目录结构，见 AGENTS.md）；README 移回原位后可换成 'README.md'。
+    [string[]]$Include = @('spaceclaim', 'fluent_meshing', 'scripts', 'workspace.json', 'AGENTS.md', '.readme')
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\')

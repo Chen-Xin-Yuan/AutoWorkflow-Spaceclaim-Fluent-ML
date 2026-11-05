@@ -1474,6 +1474,13 @@ def run():
         except Exception as error:
             diagnostics["volume"] = "error: " + str(error)
 
+        # Whole-missile centre of mass (uniform density). The merge has already made the nose, the
+        # cylinder and the fins one solid, so this single reading carries the nose profile, the fin
+        # sections and where the fins sit. The workspace stores it in the geometry table as a derived
+        # column that never takes part in the identity hash. Coordinates are in the model frame; the
+        # caller subtracts nose_tip_x to state the station from the nose tip.
+        measurements["centerOfMassM"] = measure_center_of_mass(merged[0])
+
         edge_radii = {}
         try:
             for index, edge in enumerate(merged[0].Edges):

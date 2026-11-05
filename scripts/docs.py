@@ -23,9 +23,12 @@ CI/日常建议：改完参数跑一次 `--write`，提交前跑一次 `--check`
 输出
     下列 README 里被标记包住的参数表（`--write` 时重写）：
         `README.md`、`DATCOM/README.md`、`spaceclaim/README.md`
+    路径按"暂存区优先"解析：`.readme/<同一相对路径>` 存在就写它，否则写原位。
+    项目收尾把 `.readme/` 里的副本移回原位后，这里自动回到原位路径，不用改命令。
     没有标记的文件不动。
 参数配置
     TARGETS  要处理的文件与它含哪些生成块；加新表就在这里加一行，并在那个文件里放一对标记。
+    README_STAGING_DIR   README 暂存区目录名（相对工作区根），空串 = 不启用暂存区。
 覆盖优先级
     只有命令行开关；没有环境变量。生成内容不含机器绝对路径。
 -------------------------------------------------------------------------------
@@ -56,6 +59,9 @@ TARGETS = {
     #   "DATCOM/README.md": ("fin-section", "conventions"),
     #   "spaceclaim/README.md": ("geometry", "conventions"),
 }
+# README 暂存区：项目收尾前所有 README 放在 .readme/ 下（镜像原目录），见 AGENTS.md。
+# 置空串即完全不启用暂存区；`_document_path` 只在暂存副本真实存在时才用它。
+README_STAGING_DIR = ".readme"
 NODE_SCHEMA_DUMP = (
     "import('./lib/missile-schema.mjs').then((m) => {"
     "const fields = ['field','label','unit','default','min','max','range','options','implemented','kind'];"
@@ -235,6 +241,19 @@ def sync_file(path: Path, blocks: tuple[str, ...], write: bool) -> list[str]:
     return problems
 
 
+def _document_path(relative: str) -> Path:
+    """README 的当前落盘位置：暂存区副本存在就用它，否则用原位路径。
+
+    暂存阶段（`.readme/<rel>`）与项目收尾移回原位（`<rel>`）共用同一份 TARGETS，
+    所以移回之后不需要再改这个脚本。
+    """
+    if README_STAGING_DIR:
+        staged = WORKSPACE_ROOT / README_STAGING_DIR / relative
+        if staged.is_file():
+            return staged
+    return WORKSPACE_ROOT / relative
+
+
 def main(argv: list[str] | None = None) -> int:
     import db  # noqa: PLC0415  （只为了 _configure_output：管道输出用 UTF-8）
     db._configure_output()
@@ -247,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
 
     problems = []
     for relative, blocks in TARGETS.items():
-        problems += sync_file(WORKSPACE_ROOT / relative, blocks, args.write)
+        problems += sync_file(_document_path(relative), blocks, args.write)
 
     if args.write:
         if problems:

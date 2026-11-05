@@ -20,12 +20,15 @@
 输出
     审核 JSON       `data_lib/runtime/reviews/<kind>_<run_id>.json`（`--out` 可覆盖）
                     字段：kind / geometry_id / condition_id / run_id / reviewer / verdict / checks / artifact
+                    建模审核另有 `centroid`（弹尖基准的实测质心，m），过审时由 `db.py`
+                    写进 `geometry.cg_x_m` / `cg_y_m` / `cg_z_m`；它不参与身份哈希。
     `--record` 时还会经 `scripts/db.py` 写 `review` 表并推进任务状态。
 参数配置
     EXTENTS_TOLERANCE_M        外形尺寸容差（米）
     POINT_CLOUD_BLOCKING       点云核对是否否决（P6 之前不否决，见文件内说明）
     ORTHOGONAL_QUALITY_MIN     最小正交质量下限（网格）
     CONVERGENCE_*              求解收敛门槛
+    质心侧向容差                不在这里重复：写库校验与审核共用 `db.CENTROID_SYMMETRY_TOLERANCE_M`
 覆盖优先级
     命令行 > 本节默认值。时间戳一律 UTC（由 db.py 统一生成）。
 -------------------------------------------------------------------------------
@@ -190,10 +193,13 @@ def review_model(conn, run_id: str, *, force: bool = False) -> dict:
                ok,
                f"实测 {measured} 期望 {expected[axis]:.6f}（容差 {EXTENTS_TOLERANCE_M} m）")
 
-    # 判据 7：参数快照与库内几何一致
+    # 判据 7：参数快照与库内几何一致（顺带取回弹尖基准，判据 8 用它把质心换算到弹尖）
+    snapshot: dict = {}
+    nose_tip_x = None
     try:
         params = _read_json(run_dir / "params.json")
         snapshot = params.get("params") or {}
+        nose_tip_x = (params.get("geometry") or {}).get("nose_tip_x")
         tool_section = db.SECTION_TO_TOOL.get(geometry["fin_section_type"])
         wanted = {"fin_section": tool_section,
                   "thickness_percent": float(geometry["thickness_percent"]),
@@ -208,6 +214,9 @@ def review_model(conn, run_id: str, *, force: bool = False) -> dict:
     except (FileNotFoundError, json.JSONDecodeError) as exc:
         _check(checks, "params.json 的翼型/头型与库内参数一致", False, str(exc))
 
+    # 判据 8：整弹实测质心 → 过审时写进 geometry 的 cg_x_m / cg_y_m / cg_z_m
+    centroid = _measured_centroid(checks, result, geometry, nose_tip_x)
+
     # 判据 6：点云（P6 之前只告警）
     cloud_rel = _check_point_cloud(checks, geometry)
     if cloud_rel is not None:
@@ -219,7 +228,8 @@ def review_model(conn, run_id: str, *, force: bool = False) -> dict:
            str(artifact) if artifact else f"没找到 {geometry_id}_*.scdoc")
 
     return _verdict(conn, "model", geometry_id, None, run_id, checks,
-                    _fingerprint(artifact) if artifact else None)
+                    _fingerprint(artifact) if artifact else None,
+                    {"centroid": centroid} if centroid is not None else None)
 
 
 def _close(a, b, tolerance: float = 1e-6) -> bool:
@@ -238,6 +248,51 @@ def _find_model_artifact(run_dir: Path, geometry_id: str) -> Path | None:
         all_scdoc = sorted(run_dir.glob("*.scdoc"))
         return all_scdoc[0] if len(all_scdoc) == 1 else None
     return candidates[0]
+
+
+def _measured_centroid(checks: list, result: dict, geometry, nose_tip_x) -> dict | None:
+    """核整弹实测质心，合格时返回可写进库的弹尖基准坐标，否则返回 None。
+
+    质心是几何表的派生列，**不参与身份哈希**：这里只证明读数存在、落在弹体内、侧向
+    落在轴上（十字对称外形），再减掉模型摆放的 `nose_tip_x` 换算到弹尖基准，然后由
+    `db.record_review` 写进 `geometry.cg_x_m` / `cg_y_m` / `cg_z_m`。
+    """
+    measured = (result.get("measurements") or {}).get("centerOfMassM")
+    numbers: dict[str, float] = {}
+    ok = isinstance(measured, dict)
+    if ok:
+        for key in ("x", "y", "z"):
+            value = measured.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                ok = False
+                break
+            numbers[key] = float(value)
+    _check(checks, "result.json 记录了整弹实测质心", ok,
+           "缺 measurements.centerOfMassM（旧版 SpaceClaim 模板的产物，重跑建模）"
+           if not ok else "x={x:.6f} y={y:.6f} z={z:.6f}（模型坐标，m）".format(**numbers))
+
+    datum_ok = (isinstance(nose_tip_x, (int, float)) and not isinstance(nose_tip_x, bool)
+                and math.isfinite(float(nose_tip_x)))
+    if not (ok and datum_ok):
+        if not ok:
+            axial_detail = "缺 measurements.centerOfMassM，无法换算到弹尖基准"
+        else:
+            axial_detail = "params.json 缺 geometry.nose_tip_x，无法把质心换算到弹尖基准"
+        _check(checks, "质心轴向位置在弹体范围内（弹尖起算）", False, axial_detail)
+        _check(checks, f"质心侧向分量 ≈ 0（容差 {db.CENTROID_SYMMETRY_TOLERANCE_M:g} m）",
+               False, "同上")
+        return None
+
+    from_tip = numbers["x"] - float(nose_tip_x)
+    _check(checks, "质心轴向位置在弹体范围内（弹尖起算）",
+           0.0 < from_tip < float(geometry["L"]),
+           f"x_tip={from_tip:.6f} m，L={float(geometry['L']):.6f} m，"
+           f"nose_tip_x={float(nose_tip_x):.6f} m")
+    _check(checks, f"质心侧向分量 ≈ 0（容差 {db.CENTROID_SYMMETRY_TOLERANCE_M:g} m）",
+           abs(numbers["y"]) <= db.CENTROID_SYMMETRY_TOLERANCE_M
+           and abs(numbers["z"]) <= db.CENTROID_SYMMETRY_TOLERANCE_M,
+           f"y={numbers['y']:.6f} z={numbers['z']:.6f}")
+    return {"cg_x_m": from_tip, "cg_y_m": numbers["y"], "cg_z_m": numbers["z"]}
 
 
 def _check_point_cloud(checks: list, geometry) -> str | None:
