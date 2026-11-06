@@ -1,11 +1,154 @@
 # 工作流与数据闭环计划
 
+> 重构版（2026-11-07）。原版把"设计契约"和"实施工单"写在一起，读不出哪句已经落地。
+> 本版分两块：**A 状态总览 / B 已实现 / C 未实现** 在前，**设计契约（原 §1–§12，编号不变）** 在后。
+> 正文里 `§7.1`、`§4.3`、`§10`、`§12` 这类引用仍按原编号解析，没有被重排打乱。
 
-现状一句话：目录骨架已有，`data_lib/datasets/SQLite/` 是空目录，全仓库没有一行 SQLite 代码；`spaceclaim` 与 `fluent_meshing` 能跑，`DATCOM` 能按 `cases.csv` 批量算，`fluent_solution` 与 `ML_training` 仍是空壳。
+现状一句话（2026-11-07 复核）：P0–P4 已跑通真实实例——2 个几何、4 个工况、1 套过审模型与网格、8 条 DATCOM 系数都在库里；没落地的是**审核子智能体那一层**（含 MCP 注册）、**求解器**、**真实训练一轮**、**README 回位与七条验收复验**。
+
 
 ---
 
+## A. 实施状态总览（P0–P7）
+
+| 阶段 | 计划内容（原 §10） | 状态 | 本次复核依据 |
+|---|---|---|---|
+| **P0** | 库表结构、`normalize()`、`check` | 完成 | `db.py check` 共 **30 项全过**；11 张表存在；另有计划外的 `centroid`（质心参与规范化，`90a4f61`） |
+| **P1** | `import` / `export cases-csv` / `watch.py` / `control.py` | 完成 | 库内 2 几何 + 4 工况；`control.py status` 输出 workflow / stage 两层生效状态；`stop` 用 Win32 终止整棵进程树并把任务置 `cancelled` |
+| **P2`*`** | 建模链路 + `review.py --kind model` + `dispatch.py` + 队列指针 + **注册 MCP** | 完成，**MCP 注册未做** | `g48ee1449b30c` 走完 `pending→queued→running→reviewing→passed`，`model_path` 已写；`queues/scdoc_for_fluent/` 有指针文件 |
+| **P3** | 网格链路：OQ 0.01→0.05、bbox、`review.py --kind mesh` | 完成（bbox 换实现） | `mesh_validation.py:24` 与 `review.py:68` 都是 0.05；`mesh_status='passed'`，实测 449 万单元、`OQ_min 0.0738`；反向验证留下 1 条 `mesh rejected` |
+| **P4** | 低保真：`--input`、按行翼型/头型、`run.json` | 完成 | 8 条 `datcom_task` 全 passed，对应 8 条 `review(kind='datcom')`；`runs/low/g48ee…/` 有批次目录 |
+| **P5** | 求解骨架（求解脚本留空） | 骨架完成，求解器按决定不做 | `dispatch.py:83-85` 拒绝启动并写上报单；该单已被 `dismissed` |
+| **P6** | 训练闭环 + `gc` + 点云改读库 | 部分完成 | `gc` 已实现并验过；`train.py` 有 `--dry-run`；**`training_round` 仍 0 行**，从未真跑 |
+| **P7** | 退役 `index.mjs`、逐目录 README、七条验收 | 部分完成 | `scripts/index.mjs` 已不存在；README 全部移入 `.readme/` 暂存，一致性未收尾 |
+
+合计：**P0–P4 五项完成**（其中 P2 差一步 MCP 注册）、**P5 停在骨架**、**P6 / P7 各差尾款**。
+
+---
+
+## B. 已实现
+
+每条写四样：能做什么 / 怎么触发 / 证据 / 已知缺口。证据都可以在仓库里直接复现。
+
+### B.1 库与身份（P0）
+
+- **能力**：11 张表；16 参数规范化与 canonical 串；48 bit 哈希 ID（`g` / `c` / `r` / `p` 前缀）；质心范围校验；`check` 自检含 PRAGMA、约束、规范化四类。
+- **入口**：`python scripts/db.py init|check|identify|centroid|import|export|claim|record-review|report|resolve-report|requeue|control|gc`
+- **证据**：`db.py check` → `共 30 项，全部通过。`；`geometry` 2 行、`condition` 4 行。
+- **缺口**：`import` 幂等这次没有重跑验证；`centroid` 原计划没有，属加项。
+
+### B.2 状态推进与启停（P1）
+
+- **能力**：`pending→queued`（watch）、`queued→running`（dispatch 认领）、僵死回收、产物被 `gc` 删除后回落 `pending`；启停三层优先级 `task > stage > workflow`，`stop` 杀整棵进程树并置 `cancelled`，`stopped` / `cancelled` 不自动恢复。
+- **入口**：`python scripts/watch.py --once`、`python scripts/control.py start|pause|stop|status --target …`
+- **证据**：`control.py status` 打印 `workflow:high/low` 与四个 `stage:*` 全为 `running`；`control` 表 0 行、`task_process` 表 0 行（无残留）。
+- **缺口**：见 C.2 —— `reviewing` 这一段没有任何无人格进程推进。
+
+### B.3 建模链路（P2）
+
+- **能力**：`dispatch.py --stage spaceclaim` → `node spaceclaim/scripts/missile.mjs`（16 参数逐项从库拼命令行）→ 成功后自动补跑点云 → 置 `reviewing` → `review.py --kind model` → `db record_review` → 事务提交后重写队列指针。
+- **证据**：`geometry_state.g48ee1449b30c` 的 `model_status='passed'` 且 `model_path` 指向 `runs/high/spaceclaim/g48ee1449b30c__shared__20261031T105042Z/…scdoc`；`review` 表 `model` 2 passed + 2 rejected；`queues/scdoc_for_fluent/g48ee1449b30c__shared__20261031T105042Z.json` 存在。
+- **缺口**：
+  - **MCP 没注册**（C.1）。
+  - 流水线本身不经 MCP：dispatch 直接调 node CLI。也就是说 MCP 只是给智能体用的取证工具，不是流水线组件。
+
+### B.4 网格链路（P3）
+
+- **能力**：同上模式，`--stage fluent_meshing`；喂给 Fluent 的是 `runtime/model_stage/<run_id>/missile.scdoc` 副本（避免下游重存破坏 sha256 证据链）；`review.py --kind mesh` 9 条判据（8 否决 + 1 告警）。
+- **证据**：`mesh_status='passed'`、`mesh_path` 指向 `…/g48ee1449b30c__shared__20261031T111141Z/missile_mesh.msh.h5`，实测 449 万单元、`OQ_min 0.0738`；`review` 表 `mesh` 1 passed + 1 rejected（后者是把 OQ 压到 0.01 的反向验证）；`queues/meshing_for_solution/` 有指针。
+- **缺口**：bbox 判据不是按原计划写进 `quality.json`，改为从 `validation.trn` 解析（`review.py:_bbox_from_transcript`），`quality.json` 里没有 `bbox` 字段——效果等价，但 §11.1 的措辞已过时。
+
+### B.5 低保真链路（P4）
+
+- **能力**：`dispatch.py --stage datcom` 按 `geometry_id + altitude_m` 合并成一批，用 `db.export_batch_input` 现导 CSV 传给 `01_batch_datcom.py --input`，跑完按工况拆回 `datcom_task` 并逐条记 `review`。
+- **证据**：8 条 `datcom_task` 全 passed；`runs/low/g48ee1449b30c/<run_id>/` 有批次目录；`01_batch_datcom.py:1359` 有 `--input`，`dispatch.py:330-334` 有导出调用。
+- **缺口**：脚本默认 `INPUT_TABLE`（`:117`）仍指向已退役的 `data_lib/inputs/cases.csv`，只影响手工运行，不影响派发。
+
+### B.6 审核闸门（贯穿 P0–P4）
+
+- **能力**：四个 `kind` 的确定性判据；写库前拦截"有否决项未过却记 passed"；核对产物 sha256（审核后有人动文件必被抓）；`--force --force-reason` 用于产物被下游重存后的重审；`attempts` 由 `review` 表的拒绝记录算出；超 `SELF_REPAIR_BUDGET=2` 自动写 `open` 上报单（按阶段+几何+工况去重）；通过即事务提交后重写队列指针。
+- **证据**：`review` 表 14 行 = `datcom` 8 passed + `mesh` 1 passed/1 rejected + `model` 2 passed/2 rejected。
+- **缺口**：只有第一层（脚本判据），第二层"审核子智能体复核"没有实现。
+
+### B.7 上报、重排与关闭
+
+- **能力**：`report` 开单与去重、`resolve-report`、`requeue --resolve-reports`（回到 `pending` 时不删审核历史、不重置预算）。
+- **证据**：`report` 表 5 行，4 条 `resolved` + 1 条 `dismissed`。四条 `resolved` 分别记录了：SpaceClaim 界面打开后污染产物、`flat_percent` 60.995 的回归（改为 64.6 后重建 `g48ee1449b30c`）、`run_meshing.cmd` 的中文注释吞掉 `HERE`、Fluent 用文件名主干拼 face zone label 导致 sizing 失败。
+
+### B.8 训练骨架与 `gc`（P6 部分）
+
+- **能力**：`train.py`（`--threshold`、`--max-proposals`、`--dry-run`）按 §6.3 写 `training_round` 与 `origin='active_learning'` 的 `pending` 行；`db.py gc` 五步护栏（路径必须在工作区内、必须在规定运行根下、`feedback/` 不碰）。
+- **证据**：`gc` 上次实施时五步验证通过（护栏拒深路径、`--apply` 只删假文件、真产物完好）；`training_round` 0 行。
+- **缺口**：真样本训练一次都没跑（C.5）。
+
+### B.9 文档归档与退役（P7 部分）
+
+- **证据**：`scripts/index.mjs` 已不存在（索引改由 `db export --format index` 生成）；README 全部移入 `.readme/`，映射与 SHA-256 记在 `.readme/_manifest.json`，`.readme/` 已进根 `.gitignore`。
+
+---
+
+## C. 未实现
+
+每条写四样：缺什么 / 卡在哪 / 依赖 / 验收判据。C.1–C.6 都在原计划框架内；C.7 是本轮新提出、原计划没有的方向，只登记不展开。
+
+### C.1（P2 尾款）SpaceClaim MCP 没有注册
+
+- **缺什么**：`spaceclaim/server.mjs` 的 7 个工具（`search_api`、`get_doc`、`find_python_command`、`get_geometry_recipe`、`validate_missile_params`、`generate_model_script`、`build_missile_model`）没有接进 DSH：`~/.dsh/settings.yaml` 无 `mcp` 段，工作区无 `.mcp.json`。
+- **卡在哪**：只是没接线，服务器本身可跑。
+- **影响**：审核子智能体没有取证工具；**不影响流水线**。
+- **验收**：会话里能直接调用 `validate_missile_params` 并拿到 errors / warnings / automatic corrections。
+
+### C.2（原 §8.2）三个审核子智能体没有落地
+
+- **缺什么**：模型 / 网格 / 求解三个角色的会话装配、`review.reviewer` 的标识约定（`review.py --reviewer` 已支持，但没人填）、"修复"与"判定"是否分离、以及**谁发现 `reviewing`**。
+- **卡在哪**：`watch.py` 只做认领、僵死回收、复活三件事，`dispatch.py` 只领 `queued`；`reviewing` 目前只有会话里的主智能体看着推进。没人看着时任务永远停在 `reviewing`，不会入库。
+- **依赖**：C.3；模型侧另需 C.1。
+- **验收**：`review.reviewer` 出现 `agent:*` 记录；无人值守时 `reviewing` 也在推进。
+
+### C.3（关键缺口）"自修重跑"没有合法通道
+
+- **缺什么**：`rejected` 的任务不会被 dispatch 重新领走（只认 `queued`），必须 `db.py requeue` 打回 `pending` 才能重跑；而各阶段能改的旋钮是：
+  - 建模：**0 个** —— `dispatch.py:92` 注释写明"参数只从库里来，不读任何配置文件"，改参数等于换 `geometry_id`；
+  - 网格：**4 个 CLI** —— `mesh_runner.py:49-61` 的 `-n/--processors`、`--draw-size-control`、`--start-timeout`、`--timeout`；决定 OQ 的 `P_IMPORT / P_LOCAL_SIZING / P_SURFACE_MESH / P_BOUNDARY_LAYER / P_VOLUME_MESH` 是 `mesh_missile.py:92-251` 的模块级 dict；
+  - 求解：没有脚本。
+- **卡在哪**：原计划 §6.1 的"自修白名单"写着"15 个建模字段、`P_*` 表"，但改这两样都等于改几何或改源码，与 §8.2 的硬边界冲突。要么给每阶段开一条可审计的 per-run 覆盖通道，要么承认自修只覆盖环境类故障。
+- **验收**：出现一次真实的 `rejected → requeue → 重跑 → passed` 自修闭环，且 `attempts` 累计到 2 时停止。
+
+### C.4（P5）求解脚本不存在
+
+- **状态**：按 2026-10-31 的决定，求解器不由智能体实现。
+- **影响**：`fluent_solution` 领到任务必然 rejected + 上报；P6 的真实训练也没法开始。
+- **验收**：这一项不设验收，等决定变更。
+
+### C.5（P6 尾款）真实训练一次都没跑
+
+- **缺什么**：一批 `cfd_task.status='passed'` 的真实高保真样本（依赖 C.4）；一次非合成的 `train.py` 真跑。
+- **卡在哪**：现在 `cfd_task` 是 4 `pending` + 4 `queued`，没有任何 passed 行。
+- **验收**：`training_round` 出现 ≥1 行 passed，且它提出的 `origin='active_learning'` 的 `pending` 行能被 `watch.py` 自动入队。
+
+### C.6（P7 尾款）README 一致性与七条验收
+
+- **缺什么**：README 移到 `.readme/` 后的逐目录校对与回位；§1 七条逐条复验。
+- **卡在哪**：暂存是有意的中间态，一致性检查要等回位后做。
+- **验收**：§1.1 七条全绿。
+
+### C.7（本轮新提出，原计划不含，仅登记）
+
+- 你要的方向：MCP server 放到各自目录（`spaceclaim/`、`fluent_meshing/`、`fluent_solution/`），`multiagents/` 里只写"每个智能体 → 用哪个 MCP、哪个 skill"，且这套东西还需要大改。
+- 现状：全仓库只有 `spaceclaim/server.mjs` 一个 MCP；历史上的 `mcp_skill/{spaceclaim,autoCFD,Fluent_meshing_mcp}` 目录已不存在。
+- 这一项没有拆解，等你确认要不要立项，再按 §10 的格式补阶段表。
+
+
+---
+
+# 设计契约（原 §1–§12，编号不变）
+
+下面每一节开头加一行「实现状态」，正文保持原样。改契约只改这一块，改状态只改 A / B / C 三节。
+
+
 ## 1. 目标与成功判据
+
+> **实现状态**：七条判据里 4 条达成、2 条部分达成、1 条未达成，逐条见 §1.1。
 
 目标：让"几何参数 → 建模 → 网格 → 求解 → 气动系数 → 训练 → 补点"这条闭环在**无人手动搬文件**的前提下转起来，并且**任何进入数据库的结果都经过一次可复查的审核**。
 
@@ -19,9 +162,23 @@
 6. 训练一轮后，新提出的几何/工况直接成为 `pending` 任务行，不需要人工再写 SQL。
 7. 每个目录的 `README.md` 与实际子项一致（含新增的 `SQLite/`）。
 
+### 1.1 七条验收的当前达成情况（2026-11-07）
+
+| # | 判据 | 状态 | 说明 |
+|---|---|---|---|
+| 1 | `db import` 重复执行行数不变 | 部分 | 导入确实做过（2 几何 / 4 工况在库），但幂等性这次没有重跑验证 |
+| 2 | 新几何自动出现两阶段目录，过审后进两个队列 | 达成 | `g48ee1449b30c` 的 `spaceclaim` / `fluent_meshing` 两个运行目录与两个队列指针都在 |
+| 3 | 失败最多自修 2 次，仍失败则 `report` 留 `open` 并留失败包 | 部分 | 上报单与失败包都有真实实例（5 条上报单、`feedback/<stage>/<run_id>/`），但预算机制没被真正跑满过 |
+| 4 | `stop` 后 5 秒内进程消失，任务置 `cancelled` | 达成 | 实测 0.08 s 清空父+孙进程并注销 `task_process`，任务置 `cancelled` |
+| 5 | `gc` 能删产物且不误删 | 达成（上次验证） | 五步验证通过；本次未复验 |
+| 6 | 训练一轮后新行自动变 `pending` | 未达成 | 依赖 C.4 / C.5 |
+| 7 | 每个目录 README 与实际子项一致 | 未达成 | README 在 `.readme/` 暂存，收尾见 C.6 |
+
 ---
 
 ## 2. 配置区（要改路径和参数只改这里）
+
+> **实现状态**：`workspace.json` 已是 `schemaVersion: 2`，`database` 与 `queues` 两项已写入；本表其余数值均已在代码中生效。
 
 路径全部相对工作区根目录；根路径由脚本自 `workspace.json` 推导，代码里不写绝对路径。
 
@@ -52,7 +209,10 @@
 
 ---
 
+
 ## 3. 标识符与参数规范化
+
+> **实现状态**：已按 16 参数 / 3 工况规范化并参与哈希；`db.py identify` 与计划外的 `centroid` 都已实现。
 
 ### 3.1 几何是 16 个参数
 
@@ -113,7 +273,10 @@ mach=2.000000|alpha_deg=4.000000|altitude_m=0.000000
 
 ---
 
+
 ## 4. 目录与文件命名
+
+> **实现状态**：`runs/high/<stage>/<run_id>/` 与两条队列目录都已实际产出（证据见 B.3 / B.4）。
 
 ### 4.1 高保真
 
@@ -198,7 +361,10 @@ feedback/<stage>/<run_id>/
 
 ---
 
+
 ## 5. SQLite 数据库
+
+> **实现状态**：11 张表全部建出，`db.py check` 30 项全过。
 
 单一库文件，WAL 模式，`PRAGMA foreign_keys=ON`，`busy_timeout=5000`。写入统一经过 `scripts/db.py`，任何子智能体、脚本、智能体都不直接开 `sqlite3` 连接写（避免 `database is locked` 与半事务）。
 
@@ -379,7 +545,10 @@ CREATE TABLE training_round (
 
 ---
 
+
 ## 6. 三条工作流
+
+> **实现状态**：高保真前两阶段与低保真链路已跑通真实实例；求解阶段按设计拒绝启动；训练闭环只有骨架。
 
 ### 6.1 高保真
 
@@ -463,7 +632,10 @@ flowchart TD
 
 ---
 
+
 ## 7. 审核判据
+
+> **实现状态**：`review.py` 四个 `kind` 的确定性判据全部实现并入库；**第二层"审核子智能体复核"未实现**（C.2）。
 
 审核是**唯一的入库闸门**。两层：先由 `scripts/review.py` 跑确定性判据写 `checks_json`，再由审核子智能体复核并调用 `db record_review`。子智能体不在场时任务停在 `reviewing`，不会自动入库。
 
@@ -517,7 +689,10 @@ flowchart TD
 
 ---
 
+
 ## 8. 智能体与控制
+
+> **实现状态**：§8.4 watcher、§8.5 dispatcher、§8.6 启停已实现并实测；**§8.1 主智能体的无人值守职责、§8.2 三个审核子智能体、§8.3 MCP 均未落地**（C.1 / C.2）。
 
 ### 8.1 主智能体
 
@@ -583,7 +758,10 @@ python scripts/control.py stop --target task:<run_id>
 
 ---
 
+
 ## 9. 数据登记与删除
+
+> **实现状态**：`deletable` + `gc` 已实现并验过；入队指针由 `record_review` 在事务提交后自动重写。
 
 ### 9.1 入库时机
 
@@ -620,7 +798,10 @@ python scripts/db.py gc --apply   # 真删
 
 ---
 
+
 ## 10. 实施顺序
+
+> **实现状态**：本节的逐阶段状态表（原 10.1）已被 A 节取代，下面只留计划原文。
 
 | 阶段 | 内容 | 完成标志 |
 |---|---|---|
@@ -635,22 +816,14 @@ python scripts/db.py gc --apply   # 真删
 
 P0–P1 是其余全部工作的前提，不能并行跳过。
 
-### 10.1 实施状态（2026-10-31）
+### 10.1 实施状态
 
-| 阶段 | 状态 | 依据 |
-|---|---|---|
-| P0 | 完成 | `db.py init` 出 11 张表；`db.py check` 27 项全过 |
-| P1 | 完成 | 两份输入表导入幂等；`pending → queued` 推进；`start/pause/stop` 生效（`stop` 用 Win32 终止整棵进程树，实测 0.08 s 清空父+孙进程并注销 `task_process`） |
-| P2 | 完成 | `g48ee1449b30c` 走完 `pending → queued → running → reviewing → passed`；`data_lib/queues/scdoc_for_fluent/` 出现指针文件；模型审核 10 条否决性判据全过 |
-| P3 | 完成 | 网格 `mesh_status='passed'`（449 万单元，OQ_min 0.0738）；反向验证：把 OQ 压到 0.01 会被判 `rejected` |
-| P4 | 完成 | 两类翼型/两种头型混跑；8 条 `datcom_task` passed |
-| P5 | 骨架完成，求解器暂缓 | `dispatch.py --stage fluent_solution` 明确拒绝并说明未实现；求解脚本本身按用户 2026-10-31 决定不由智能体实现 |
-| P6 | 部分完成 | `gc` 五步验证通过（护栏拒深路径、`--apply` 只删假文件、真产物完好）；训练闭环**逻辑**已验（`--dry-run` 不写库、真跑写 `training_round` + `origin='active_learning'` 的 `pending` 行），但用的是合成样本——真实训练要等高保真样本，即 P5 求解器 |
-| P7 | 进行中 | `index.mjs` 已退役；逐目录 README 与 §1 七条验收待收尾 |
+见 **A 节**。这里不再维护第二份状态表，避免两处说法不一致。
 
----
 
 ## 11. 必须同步的文档与代码
+
+> **实现状态**：本表是当时的工单清单。代码项基本落地（判据是 §4 的目录约定已在真实产物中生效）；文档项因为 README 暂存到 `.readme/` 而未收尾。已知过时的一行：§11.1 说"`quality.json` 增导出 bbox"，实际改为从 `validation.trn` 解析（B.4）。
 
 ### 11.1 代码改动
 
@@ -702,7 +875,10 @@ P0–P1 是其余全部工作的前提，不能并行跳过。
 
 ---
 
+
 ## 12. 待定项
+
+> **实现状态**：8 条待定项里，"求解器"已于 2026-10-31 决定暂缓，其余 7 条仍未定。
 
 以下各项不阻塞 P0–P4，取值定下来后改一处配置即可：
 
@@ -718,6 +894,7 @@ P0–P1 是其余全部工作的前提，不能并行跳过。
 | 上报后的调整权 | 白名单之外（脚本源码、几何参数）必须人工；是否要再放宽 |
 
 ---
+
 
 ## 与上一版的差异
 
@@ -737,6 +914,7 @@ P0–P1 是其余全部工作的前提，不能并行跳过。
 | 文件删除 | 未定义 | `deletable` 自动判定 + `gc` + 路径安全校验 |
 
 ---
+
 
 ## 附：一次性迁移命令序列
 
