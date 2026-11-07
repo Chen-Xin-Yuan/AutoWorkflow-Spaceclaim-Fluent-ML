@@ -8,6 +8,12 @@ sqlite3 连接写**，避免 `database is locked` 与"写了一半"的事务。
 `report`、`control`、`claim`、`gc` 等命令。`watch.py` / `control.py` / `dispatch.py` 不自己
 写 SQL，而是 import 本模块第 10 节的函数，所以"所有写操作只经 db.py"在这一层成立。
 
+状态机只有三态（`TASK_STATUSES`）：`pending`（待处理，含待审核）、`repairing`（审核
+不通过，修理中）、`queued`（审核通过，可被下一流程领取）。"谁正在跑"不靠状态词，靠
+`claimed_at` + `task_process` 的 pid 登记：领取是 `UPDATE ... WHERE claimed_at IS NULL`
+的原子写，`rowcount` 判成功，所以同一个任务不会被两个进程同时拿走。网格按
+`(geometry_id, condition_id)` 建行（`mesh_task`），同一几何不同工况各画各的网格。
+
 -------------------------------------------------------------------------------
 输入 / 输出 / 参数配置
 -------------------------------------------------------------------------------
@@ -71,7 +77,7 @@ DEFAULT_DATABASE_REL = "data_lib/datasets/SQLite/missile.db"
 DATCOM_SCRIPTS_DIR = WORKSPACE_ROOT / "DATCOM" / "scripts"
 
 # ---- 库连接参数 ----
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "4"
 JOURNAL_MODE = "WAL"          # 允许读写并发，`-wal` / `-shm` 不入版本库
 BUSY_TIMEOUT_MS = 5000        # 等锁上限，超时即报错，不重试到天荒地老
 FOREIGN_KEYS = True
@@ -179,10 +185,41 @@ REVIEW_KINDS = ("model", "mesh", "solution", "datcom")
 QUEUE_FOR_REVIEW_KIND = {"model": "scdoc_for_fluent", "mesh": "meshing_for_solution"}
 QUEUE_POINTER_SCHEMA_VERSION = 1
 
-# ---- 七态状态词表（四阶段共用，库内存英文码，中文只出现在文档里）----
-TASK_STATUSES = (
-    "pending", "queued", "running", "reviewing", "rejected", "passed", "cancelled",
-)
+# ---- 三态状态词表（四阶段共用，库内存英文码，中文只出现在文档里）----
+# pending    待处理，含"脚本跑完等审核"；审核不通过 → repairing
+# repairing  审核不通过，修理中（子智能体修完再送审）；复审通过 → queued
+# queued     审核通过，可被下一流程领取；领取靠 claimed_at + task_process
+TASK_STATUSES = ("pending", "repairing", "queued")
+# "谁在跑"不再单独设状态词：claimed_at 非空 = 已被某个进程领走。
+CLAIMED_COLUMNS = ("claimed_at", "run_id")
+
+# ---- 修理超时（watch.py 用）----
+# repairing 行超过这个秒数还没进入 queued，watch 写一条 open 的 report 上报主智能体。
+REPAIR_TIMEOUT_SECONDS = 1800
+# 领取标记的孤儿超时：`claimed_at` 挂着、但 `task_process` 里没有对应 pid 登记，
+# 且已经过了这么久 → 视作"进程在登记 pid 之前就崩了"，回收成 repairing。
+# 正常路径下 spawn 到登记 pid 之间只有一两秒，300 秒足够宽松。
+CLAIM_ORPHAN_SECONDS = 300
+
+# ---- 网格任务（mesh_task，按几何 + 工况）----
+# 网格必须按工况分开：边界层首层高度与层数由来流马赫数、高度决定，同几何不同工况
+# 的 y+ 目标算出的首层高度不同，共用一个网格就有一个工况落在 y+ 之外。
+MESH_TASK_TABLE = "mesh_task"
+# 2→3 迁移复制过来的网格行**一律 `pending`**（见 `_migrate_2_to_3` 与
+# `repair_mesh_migration`）。这里刻意不再提供"迁移写哪个状态"的配置项：旧网格是按旧
+# 规则（固定 0.07 mm / 12 层）画的几何级产物，一份网格服务多个工况，从来没按工况
+# 验证过，所以它只能是 `pending`（待按工况重画），不可能是 `queued`（审核通过）。
+# 旧路径也不复制进新表——留着就会被下游当交付物（队列指针、求解、gc 都只看
+# `status='queued' AND mesh_path IS NOT NULL`），只作为历史证据留在
+# `data_lib/runs/high/fluent_meshing/<几何级 run_id>/` 下。
+
+# ---- 修理计时（repairing 从哪一刻算起）----
+# `updated_at` 是"这一行最后一次被写"的时间，不是"开始修理"的时间：迁移时旧 rejected
+# 行被映射成 repairing，`updated_at` 还是它当年被否决的时刻，拿它判超时会把历史证据
+# 误读成当前故障。所以另设一列记进入 repairing 的时刻，NULL = 不是真在修（历史遗留），
+# 不参与超时判断。四张任务表都有这一列（见 `REPAIR_STARTED_TABLE`）。
+REPAIR_STARTED_COLUMN = "repair_started_at"
+REPAIR_STARTED_TABLES = ("geometry_state", "mesh_task", "cfd_task", "datcom_task")
 
 # ---- `check` 的固定样例：与 myplan.md §3.3 的规范串逐字一致 ----
 # 这几个 ID 是身份契约的一部分。改动配置区导致它们变化时 `check` 会立刻报错，
@@ -208,9 +245,12 @@ GOLDEN_CONDITION_CANONICAL = "mach=2.000000|alpha_deg=4.000000|altitude_m=0.0000
 GOLDEN_CONDITION_ID = "cc9633c86a360"
 
 # =============================================================================
-# 2. 表结构与索引（单一库、11 张表；改字段必须同时升 SCHEMA_VERSION）
+# 2. 表结构与索引（单一库、12 张表；改字段必须同时升 SCHEMA_VERSION）
 # =============================================================================
-SCHEMA_SQL = """
+# 三态 CHECK 的正文只在这里拼一次：schema 与 2→3 迁移都用它，避免两处写法漂移。
+STATUS_ENUM_SQL = ", ".join(f"'{status}'" for status in TASK_STATUSES)
+
+SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -242,14 +282,18 @@ CREATE TABLE IF NOT EXISTS geometry (
            AND flat_percent IS NULL AND le_radius IS NULL) )
 );
 
+-- 建模是几何级的（一个几何只建一次模型、生成一份点云）；
+-- 网格不是：它按 (geometry_id, condition_id) 放在 mesh_task 里，见下面的表。
 CREATE TABLE IF NOT EXISTS geometry_state (
   geometry_id  TEXT PRIMARY KEY REFERENCES geometry(geometry_id),
-  model_status TEXT NOT NULL DEFAULT 'pending' CHECK (model_status IN
-               ('pending','queued','running','reviewing','rejected','passed','cancelled')),
-  mesh_status  TEXT NOT NULL DEFAULT 'pending' CHECK (mesh_status IN
-               ('pending','queued','running','reviewing','rejected','passed','cancelled')),
-  model_path   TEXT, mesh_path TEXT, cloud_path TEXT,
-  model_run_id TEXT, mesh_run_id TEXT, cloud_run_id TEXT,
+  model_status TEXT NOT NULL DEFAULT 'pending' CHECK (model_status IN ({STATUS_ENUM_SQL})),
+  model_path   TEXT, cloud_path TEXT,
+  model_run_id TEXT, cloud_run_id TEXT,
+  -- claimed_at 非空 = 这条建模任务已被某个进程领走；结束时清空。
+  -- 它和 task_process 的 pid 一起承担"防重复领取"，所以不需要 running 这类状态词。
+  claimed_at   TEXT,
+  -- 进入 repairing 的时刻（UTC）；NULL = 不是真在修（迁移遗留），不参与超时判断。
+  repair_started_at TEXT,
   deletable    INTEGER NOT NULL DEFAULT 0 CHECK (deletable IN (0,1)),
   updated_at   TEXT NOT NULL
 );
@@ -263,16 +307,36 @@ CREATE TABLE IF NOT EXISTS condition (
   UNIQUE (mach, alpha_deg, altitude_m)
 );
 
+-- 网格按工况：同一几何不同来流马赫数的边界层首层高度/层数不同（见
+-- fluent_meshing/boundary_layer.py），共用一个网格就会有工况落在 y+ 之外。
+CREATE TABLE IF NOT EXISTS mesh_task (
+  geometry_id      TEXT NOT NULL REFERENCES geometry(geometry_id),
+  condition_id     TEXT NOT NULL REFERENCES condition(condition_id),
+  status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({STATUS_ENUM_SQL})),
+  run_id           TEXT, mesh_path TEXT,
+  -- 本次网格用的边界层设计值（跑之前算好写进来，review 按同一套公式复核）
+  first_height_mm  REAL, n_layers INTEGER, growth_rate REAL,
+  -- 可追溯证据：设计时的 y+ 目标与算出来的中间量
+  y_plus_target    REAL, re REAL, cf REAL, u_tau REAL, delta_m REAL,
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  claimed_at       TEXT,
+  repair_started_at TEXT,
+  review_id        TEXT REFERENCES review(review_id),
+  created_at       TEXT NOT NULL, updated_at TEXT NOT NULL,
+  PRIMARY KEY (geometry_id, condition_id)
+);
+
 CREATE TABLE IF NOT EXISTS cfd_task (
   geometry_id  TEXT NOT NULL REFERENCES geometry(geometry_id),
   condition_id TEXT NOT NULL REFERENCES condition(condition_id),
-  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
-               ('pending','queued','running','reviewing','rejected','passed','cancelled')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({STATUS_ENUM_SQL})),
   attempts     INTEGER NOT NULL DEFAULT 0,
   CL REAL, CD REAL, CM REAL,
   converged    INTEGER,              -- 0/1，求解阶段填
   residual     REAL,                 -- 连续性残差
   run_id       TEXT, result_dir TEXT, log_path TEXT,
+  claimed_at   TEXT,
+  repair_started_at TEXT,
   review_id    TEXT REFERENCES review(review_id),
   origin       TEXT NOT NULL DEFAULT 'human' CHECK (origin IN ('human','active_learning')),
   round_id     TEXT REFERENCES training_round(round_id),
@@ -283,11 +347,12 @@ CREATE TABLE IF NOT EXISTS cfd_task (
 CREATE TABLE IF NOT EXISTS datcom_task (
   geometry_id  TEXT NOT NULL REFERENCES geometry(geometry_id),
   condition_id TEXT NOT NULL REFERENCES condition(condition_id),
-  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN
-               ('pending','queued','running','reviewing','rejected','passed','cancelled')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ({STATUS_ENUM_SQL})),
   attempts     INTEGER NOT NULL DEFAULT 0,
   CL REAL, CD REAL, CM REAL,
   run_id       TEXT, result_dir TEXT, log_path TEXT,
+  claimed_at   TEXT,
+  repair_started_at TEXT,
   review_id    TEXT REFERENCES review(review_id),
   origin       TEXT NOT NULL DEFAULT 'human' CHECK (origin IN ('human','active_learning')),
   round_id     TEXT REFERENCES training_round(round_id),
@@ -299,7 +364,7 @@ CREATE TABLE IF NOT EXISTS review (
   review_id       TEXT PRIMARY KEY,
   kind            TEXT NOT NULL CHECK (kind IN ('model','mesh','solution','datcom')),
   geometry_id     TEXT NOT NULL,
-  condition_id    TEXT,            -- model / mesh 为 NULL
+  condition_id    TEXT,            -- model 为 NULL；mesh / solution / datcom 必须给
   run_id          TEXT NOT NULL,
   reviewer        TEXT NOT NULL,   -- 'script:review.py' 或子智能体标识
   verdict         TEXT NOT NULL CHECK (verdict IN ('passed','rejected')),
@@ -352,31 +417,360 @@ CREATE TABLE IF NOT EXISTS training_round (
 );
 """
 
-INDEX_SQL = """
+INDEX_SQL = f"""
 CREATE INDEX IF NOT EXISTS idx_cfd_task_status      ON cfd_task(status);
 CREATE INDEX IF NOT EXISTS idx_datcom_task_status   ON datcom_task(status);
+CREATE INDEX IF NOT EXISTS idx_mesh_task_status     ON mesh_task(status);
 CREATE INDEX IF NOT EXISTS idx_geometry_state_model ON geometry_state(model_status);
-CREATE INDEX IF NOT EXISTS idx_geometry_state_mesh  ON geometry_state(mesh_status);
 CREATE INDEX IF NOT EXISTS idx_report_status        ON report(status);
 CREATE INDEX IF NOT EXISTS idx_review_kind_geometry ON review(kind, geometry_id);
 """
 
-# 迁移脚本：键是"库内当前版本"，值是补齐到 `SCHEMA_VERSION` 必须执行的 DDL，按顺序跑。
+# 迁移：键是"库内当前版本"，值是一个收连接的函数，把它补齐到**下一版**。
 # 只有这里登记过的旧版本能被 `init` 自动升级；其它版本一律拒绝，绝不猜着改结构。
+# 每个迁移函数只改结构/数据，**不自己写 `meta.schema_version`**——版本号由 `cmd_init`
+# 在每一步之后显式落库（见 `_set_schema_version`），这样"结构改到哪一版"和
+# "库里记的是哪一版"永远同一步推进，不会出现"列已补、版本还是旧值"的半迁移库。
 #   "1" → "2"：几何表加实测质心三列（派生量，不参与身份哈希）。
+#   "2" → "3"：状态词七态 → 三态（重建表换掉 CHECK）、网格从几何级改成按工况。
+#   "3" → "4"：四张任务表补 `repair_started_at`，并修正 2→3 留下的旧网格行。
+# 旧词映射：passed→queued、rejected→repairing、reviewing→pending、running→pending
+# （claimed_at 一并清空）、cancelled→pending。
+# 旧的 queued 只代表"watcher 已认领、等 dispatcher 启动"，不是审核通过，所以也回
+# pending——按新语义 queued 的含义是"审核通过、可被下一流程领取"。
+MIGRATION_STATUS_MAP = {
+    "pending": "pending",
+    "queued": "pending",
+    "running": "pending",
+    "reviewing": "pending",
+    "rejected": "repairing",
+    "passed": "queued",
+    "cancelled": "pending",
+}
+# 迁移前后必须逐表核对行数的表（新增 mesh_task 由复制而来，单独核）
+MIGRATION_ROW_TABLES = (
+    "geometry", "condition", "geometry_state", "cfd_task", "datcom_task", "review", "report",
+)
+
+
+def _row_count(conn: sqlite3.Connection, table: str) -> int:
+    return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def _status_case(column: str) -> str:
+    """把旧状态词映射成三态；未知值一律落 `pending`（宁可重跑，不可假装通过）。"""
+    branches = " ".join(
+        f"WHEN '{old}' THEN '{new}'" for old, new in MIGRATION_STATUS_MAP.items())
+    return f"CASE {column} {branches} ELSE 'pending' END"
+
+
+def _migrate_1_to_2(conn: sqlite3.Connection) -> None:
+    for key in GEOMETRY_CENTROID_KEYS:
+        conn.execute(f"ALTER TABLE geometry ADD COLUMN {key} REAL")
+    conn.commit()
+
+
+def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
+    """2→3：三态状态词 + 网格按 (geometry_id, condition_id)。
+
+    SQLite 改不了 CHECK 约束，所以两张任务表与 `geometry_state` 都是"建新表 → 拷数据
+    → 删旧表 → 改名"。迁移前后逐表数行数，必须完全一致；否则整体回滚并报错——迁移
+    不许悄悄丢行。
+
+    旧 `geometry_state.mesh_status/mesh_path/mesh_run_id` 在 `mesh_task` 里按该几何每个
+    condition 建行，状态**写死 `pending`**（不设可配置项：旧网格没按工况验证过，
+    没有"迁移即通过"这种可能），而且
+    **`mesh_path` / `mesh_run_id` 一律写 NULL**：那份网格是按旧规则（固定 0.07 mm /
+    12 层）画的几何级产物，一份网格服务多个工况，从来没按工况验证过。留着路径就会被
+    下游当交付物（队列指针、求解、gc 都只看 `status='queued' AND mesh_path IS NOT NULL`），
+    所以旧路径只作为历史证据留在 `runs/high/fluent_meshing/<旧 run_id>/` 下，不进新表。
+    这几列从此废弃：几何级只剩建模与点云，网格一律按工况重画。
+
+    `rejected → repairing` 的旧行没有"开始修理"的时刻，`repair_started_at` 写 NULL
+    （见 `REPAIR_STARTED_COLUMN`），因此不会被 `scan_repair_timeouts` 当成当前故障。
+    """
+    before = {name: _row_count(conn, name) for name in MIGRATION_ROW_TABLES}
+    # 旧网格路径不复制进新表，这里读出来只为在标准输出里说明"旧网格还在哪"。
+    old_mesh = [tuple(row) for row in conn.execute(
+        "SELECT geometry_id, mesh_path, mesh_run_id FROM geometry_state")]
+    stamp = utc_sql()
+    conn.commit()
+    # 重建期间不查外键：`review` 等表对旧表没有引用，但临时表名会让引用短暂悬空。
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        # ---- geometry_state：只留建模 + 点云 ----
+        conn.execute(f"""
+            CREATE TABLE geometry_state_v3 (
+              geometry_id  TEXT PRIMARY KEY REFERENCES geometry(geometry_id),
+              model_status TEXT NOT NULL DEFAULT 'pending'
+                           CHECK (model_status IN ({STATUS_ENUM_SQL})),
+              model_path   TEXT, cloud_path TEXT,
+              model_run_id TEXT, cloud_run_id TEXT,
+              claimed_at   TEXT,
+              repair_started_at TEXT,
+              deletable    INTEGER NOT NULL DEFAULT 0 CHECK (deletable IN (0,1)),
+              updated_at   TEXT NOT NULL
+            )
+        """)
+        # 旧状态词为 rejected 的行映射成 repairing，但没有开始修理的时刻 → NULL
+        conn.execute(f"""
+            INSERT INTO geometry_state_v3(geometry_id, model_status, model_path, cloud_path,
+                                          model_run_id, cloud_run_id, claimed_at,
+                                          repair_started_at, deletable, updated_at)
+            SELECT geometry_id, {_status_case('model_status')}, model_path, cloud_path,
+                   model_run_id, cloud_run_id, NULL, NULL, deletable, updated_at
+            FROM geometry_state
+        """)
+
+        # ---- cfd_task / datcom_task：换 CHECK，加 claimed_at / repair_started_at ----
+        for table, extra_column in (("cfd_task", "converged, residual,"),
+                                    ("datcom_task", "")):
+            conn.execute(f"""
+                CREATE TABLE {table}_v3 (
+                  geometry_id  TEXT NOT NULL REFERENCES geometry(geometry_id),
+                  condition_id TEXT NOT NULL REFERENCES condition(condition_id),
+                  status       TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ({STATUS_ENUM_SQL})),
+                  attempts     INTEGER NOT NULL DEFAULT 0,
+                  CL REAL, CD REAL, CM REAL, {extra_column}
+                  run_id       TEXT, result_dir TEXT, log_path TEXT,
+                  claimed_at   TEXT,
+                  repair_started_at TEXT,
+                  review_id    TEXT REFERENCES review(review_id),
+                  origin       TEXT NOT NULL DEFAULT 'human'
+                               CHECK (origin IN ('human','active_learning')),
+                  round_id     TEXT REFERENCES training_round(round_id),
+                  created_at   TEXT NOT NULL, updated_at TEXT NOT NULL,
+                  PRIMARY KEY (geometry_id, condition_id)
+                )
+            """)
+            columns = ("geometry_id, condition_id, status, attempts, CL, CD, CM, "
+                       f"{extra_column} run_id, result_dir, log_path, review_id, origin, "
+                       "round_id, created_at, updated_at")
+            mapped = columns.replace("status,", f"{_status_case('status')},", 1)
+            conn.execute(f"INSERT INTO {table}_v3({columns}, claimed_at, repair_started_at)"
+                         f" SELECT {mapped}, NULL, NULL FROM {table}")
+
+        # ---- 新表 mesh_task（结构必须和 SCHEMA_SQL 里那份一致）----
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS mesh_task (
+              geometry_id      TEXT NOT NULL REFERENCES geometry(geometry_id),
+              condition_id     TEXT NOT NULL REFERENCES condition(condition_id),
+              status           TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ({STATUS_ENUM_SQL})),
+              run_id           TEXT, mesh_path TEXT,
+              first_height_mm  REAL, n_layers INTEGER, growth_rate REAL,
+              y_plus_target    REAL, re REAL, cf REAL, u_tau REAL, delta_m REAL,
+              attempts         INTEGER NOT NULL DEFAULT 0,
+              claimed_at       TEXT,
+              repair_started_at TEXT,
+              review_id        TEXT REFERENCES review(review_id),
+              created_at       TEXT NOT NULL, updated_at TEXT NOT NULL,
+              PRIMARY KEY (geometry_id, condition_id)
+            )
+        """)
+
+        # ---- 为每个 (几何, 工况) 建一行 pending 网格任务；旧网格路径不入表 ----
+        # 状态写死 'pending'：旧网格没按工况验证过，迁移不允许产生"已通过"的网格行。
+        all_conditions = [row[0] for row in conn.execute(
+            "SELECT condition_id FROM condition ORDER BY condition_id")]
+        for geometry_id, _mesh_path, _mesh_run_id in old_mesh:
+            condition_ids = [row[0] for row in conn.execute(
+                "SELECT DISTINCT condition_id FROM cfd_task WHERE geometry_id=?"
+                " ORDER BY condition_id", (geometry_id,))] or all_conditions
+            for condition_id in condition_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO mesh_task(geometry_id, condition_id, status,"
+                    " run_id, mesh_path, created_at, updated_at)"
+                    " VALUES(?,?,'pending',NULL,NULL,?,?)",
+                    (geometry_id, condition_id, stamp, stamp))
+
+        conn.execute("DROP TABLE geometry_state")
+        conn.execute("ALTER TABLE geometry_state_v3 RENAME TO geometry_state")
+        for table in ("cfd_task", "datcom_task"):
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {table}_v3 RENAME TO {table}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    # ---- 迁移后自检：行数一致 + 没有旧状态词残留 ----
+    after = {name: _row_count(conn, name) for name in MIGRATION_ROW_TABLES}
+    lost = {name: f"{before[name]} → {after[name]}"
+            for name in before if before[name] != after[name]}
+    if lost:
+        raise SystemExit(f"迁移 2→3 前后行数不一致：{lost}")
+    for table, column in (("geometry_state", "model_status"), ("cfd_task", "status"),
+                          ("datcom_task", "status"), ("mesh_task", "status")):
+        stale = conn.execute(f"SELECT COUNT(*) FROM {table}"
+                             f" WHERE {column} NOT IN ({STATUS_ENUM_SQL})").fetchone()[0]
+        if stale:
+            raise SystemExit(f"迁移 2→3 后 {table}.{column} 仍有 {stale} 行不是三态词")
+    conn.commit()
+
+
+def _shared_run_id_pattern(column: str = "run_id") -> str:
+    """`run_id` 是几何级（中段是 `shared`）的 SQL 匹配式。"""
+    return f"{column} LIKE '%{RUN_ID_SEPARATOR}{SHARED_CONDITION_ID}{RUN_ID_SEPARATOR}%'"
+
+
+# "旧的几何级网格被当成按工况过审"的唯一判据：**只看两件事**
+#   1. `first_height_mm IS NULL`——没按该工况算过边界层设计值，就不可能是按工况审的；
+#   2. 这一行还挂着几何级 `run_id`（中段 `shared`）。
+# 刻意**不看** `status` / `mesh_path`：判据一旦依赖"当前状态"，行被下游改成别的值就
+# 检测不到了，修完也可能留下 `mesh_path` 非空却 `pending` 的怪行。两列一并清空才是
+# 真正的"不留成有效产物"。
+# 默认还加 `claimed_at IS NULL` 作为安全阀：正在被进程领取的行走这条路说明有人刚领走
+# 它，这时改 `run_id` 会让 `resolve_run` 失去线索。要清这类行必须显式指名
+# （`repair-mesh-migration --release-claim`），由调用方承担"这个进程确实不该再跑"。
+MESH_MIGRATION_CONDITION = (
+    "first_height_mm IS NULL"
+    f" AND {_shared_run_id_pattern()}"
+    " AND claimed_at IS NULL"
+)
+# 不含领取安全阀的版本：只给 `--release-claim` 显式指名时用。
+MESH_MIGRATION_CONDITION_ANY_CLAIM = MESH_MIGRATION_CONDITION.replace(
+    " AND claimed_at IS NULL", "")
+
+
+def _mesh_reset_sql() -> str:
+    """把"旧的几何级网格被当成按工况过审"的行改回 `pending`，并清掉旧路径/运行号。
+
+    判据见 `MESH_MIGRATION_CONDITION`。清 `run_id` / `mesh_path` 是必须的：这两列非空
+    就会被队列指针 / 求解 / gc 当成有效产物。旧网格本身留在
+    `runs/high/fluent_meshing/<旧 run_id>/` 下作为历史证据，不进新表。
+    """
+    return (
+        "UPDATE mesh_task SET status='pending', run_id=NULL, mesh_path=NULL,"
+        f" {REPAIR_STARTED_COLUMN}=NULL, updated_at=?"
+        f" WHERE {MESH_MIGRATION_CONDITION}"
+    )
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def ensure_repair_started_column(conn: sqlite3.Connection) -> list[str]:
+    """给四张任务表补 `repair_started_at`（已有则跳过），返回本次实际补的表。
+
+    幂等，所以对"已经迁到 v4"的库是空操作，对停在 v3 的库就是那一步补列。3→4 迁移与
+    `repair-mesh-migration` 共用它：数据修正要写这一列，不能假设列已经存在。
+    """
+    added: list[str] = []
+    for table in REPAIR_STARTED_TABLES:
+        if table not in table_names(conn):
+            continue
+        if REPAIR_STARTED_COLUMN in _table_columns(conn, table):
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {REPAIR_STARTED_COLUMN} TEXT")
+        added.append(table)
+    if added:
+        conn.commit()
+    return added
+
+
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    """3→4：四张任务表补 `repair_started_at`，并把"旧网格被当成按工况过审"的行修正。
+
+    两件事，顺序不能颠倒：
+
+    1. **补列**：`geometry_state` / `mesh_task` / `cfd_task` / `datcom_task` 各加一列
+       `repair_started_at TEXT`（可空，见 `ensure_repair_started_column`）。补列不改任何
+       现有值——历史遗留的 `repairing` 行（含 2→3 里 `rejected → repairing` 的旧行）
+       因此天然是 NULL，不参与修理超时判断（见 `scan_repair_timeouts`）。
+    2. **修正 2→3 的网格迁移结果**：最早那版 2→3 把旧几何级网格复制进 `mesh_task`
+       时置的是 `queued` 且带着同一个 `mesh_path` / `run_id`，四个工况共用一份没按
+       工况验证过的网格。`repair_mesh_migration` 按 `MESH_MIGRATION_CONDITION` 把它们
+       改成 `pending` 并清空路径——它要写 `repair_started_at`，所以必须在上一步之后。
+
+    队列目录由 `cmd_init` 在迁移循环结束后统一重写（`export_queue`），不在这里做：
+    迁移函数只碰库，不碰文件。
+    """
+    conn.commit()
+    ensure_repair_started_column(conn)
+    repair_mesh_migration(conn)
+
+
+def repair_mesh_migration(conn: sqlite3.Connection,
+                          *, reset_claim: list[str] | None = None) -> dict:
+    """把"旧几何级网格被当成按工况过审"的行改成 `pending`；返回改动清单。
+
+    幂等：没有这样的行时返回空清单。对已经修好的库重复调用不会造成任何变化。
+    `db.py repair-mesh-migration` 是它的命令行入口，`_migrate_3_to_4` 也会调用它，
+    所以手工补过列的老库和新迁上来的库走的是同一段逻辑，不存在两套规则。
+
+    这是**数据修正**，不升 `schema_version`：3→4 迁移本身（补列）与"旧网格行改回
+    pending"是两件独立的事，已经迁到 v4 的库再跑一次只会得到空清单。
+
+    `reset_claim` 是要连领取一起放弃的 `run_id` 列表：这些行的 `claimed_at` 非空，被
+    `MESH_MIGRATION_CONDITION` 的安全阀排除在批量修正之外，必须显式指名。清领取走
+    `abandon_claim`（拒绝活着的进程、注销 `task_process`、任务回 pending 并开单），
+    不在这里另写一套。
+    """
+    columns = _table_columns(conn, MESH_TASK_TABLE)
+    if not {"status", "mesh_path", "run_id"} <= columns:
+        raise WriteError(f"{MESH_TASK_TABLE} 不存在或结构不对，先跑 python scripts/db.py init")
+    # 修正要用到 `repair_started_at`；停在 v3 的库还没这一列，就地补上（与 3→4 同一个
+    # 函数，不会重复补，也不改任何现有值）。
+    ensure_repair_started_column(conn)
+    rows = conn.execute(
+        "SELECT geometry_id, condition_id, status, run_id, mesh_path FROM mesh_task"
+        f" WHERE {MESH_MIGRATION_CONDITION}"
+        " ORDER BY geometry_id, condition_id").fetchall()
+    if rows:
+        conn.execute(_mesh_reset_sql(), (utc_sql(),))
+        conn.commit()
+    released: list[dict] = []
+    for run_id in reset_claim or ():
+        released.append(abandon_claim(conn, run_id))
+    return {"reset": [dict(row) for row in rows], "released_claims": released}
+
+
 SCHEMA_MIGRATIONS = {
-    "1": tuple(f"ALTER TABLE geometry ADD COLUMN {key} REAL" for key in GEOMETRY_CENTROID_KEYS),
+    "1": _migrate_1_to_2,
+    "2": _migrate_2_to_3,
+    "3": _migrate_3_to_4,
+}
+# 每一步迁移把库补到哪一版：`cmd_init` 跑完 `SCHEMA_MIGRATIONS[旧版]` 后写这个值。
+# 它必须与 `SCHEMA_MIGRATIONS` 的键一一对上（`check` 会校验），否则链条会断在半路。
+SCHEMA_MIGRATION_TARGETS = {
+    "1": "2",
+    "2": "3",
+    "3": "4",
+}
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: str) -> None:
+    """写 `meta.schema_version` 并提交：迁移的每一步都必须当场落盘版本号。
+
+    迁移函数只改结构/数据，版本号统一在这里写——这是"半迁移库"（列已加、数据已改、
+    但 `meta` 还停在旧版）唯一的防线。写完之后 `while` 循环才会前进，不会重复跑同一
+    步迁移、也不会在下一步找不到登记时误报"链条缺环"。
+    """
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES('schema_version', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (version,),
+    )
+    conn.commit()
+
+# 2→3 迁移会删掉的三张表里的旧网格列；`init` 打印"本次废弃"用。
+RETIRED_COLUMNS = {
+    "geometry_state": ("mesh_status", "mesh_path", "mesh_run_id"),
 }
 
 EXPECTED_TABLES = (
-    "meta", "geometry", "geometry_state", "condition", "cfd_task", "datcom_task",
-    "review", "report", "control", "task_process", "training_round",
+    "meta", "geometry", "geometry_state", "condition", "mesh_task", "cfd_task",
+    "datcom_task", "review", "report", "control", "task_process", "training_round",
 )
 
 EXPECTED_INDEXES = (
-    "idx_cfd_task_status", "idx_datcom_task_status",
-    "idx_geometry_state_model", "idx_geometry_state_mesh",
-    "idx_report_status", "idx_review_kind_geometry",
+    "idx_cfd_task_status", "idx_datcom_task_status", "idx_mesh_task_status",
+    "idx_geometry_state_model", "idx_report_status", "idx_review_kind_geometry",
 )
 
 
@@ -702,24 +1096,39 @@ def cmd_init(args) -> int:
     existed = db_path.exists()
     conn = connect(db_path, must_exist=False)
     migrated_from = None
+    reset_meshes: list[dict] = []
     try:
         before = table_names(conn)
         if "meta" in before:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             current = row["value"] if row else None
-            if current != SCHEMA_VERSION:
-                steps = SCHEMA_MIGRATIONS.get(current or "")
-                if steps is None:
+            migrated_from = current if current != SCHEMA_VERSION else None
+            # 逐版本往上走，不一步跳到底：每一步都只认 `SCHEMA_MIGRATIONS` 里登记过的
+            # 上一版，链条缺一环就拒绝，绝不猜着改结构。
+            while current != SCHEMA_VERSION:
+                step = SCHEMA_MIGRATIONS.get(current or "")
+                if step is None:
                     raise SystemExit(
                         f"库内 schema_version={current!r} 与本文件 {SCHEMA_VERSION!r} 不一致，"
                         "而且没有登记从该版本到当前版本的迁移。\n"
                         "改表结构必须升版本号并在 SCHEMA_MIGRATIONS 里补迁移，不能直接覆盖。"
                     )
-                for statement in steps:
-                    conn.execute(statement)
-                conn.commit()
-                migrated_from = current
+                step(conn)
+                # 迁移函数只改结构与数据；版本号必须在这里推进，否则循环会反复跑同一步
+                # （重复补列会报 duplicate column，3→4 的网格修正也会被反复执行），
+                # 库里还会留下"列已是新版、meta 仍是旧版"的半迁移状态。
+                _set_schema_version(conn, SCHEMA_MIGRATION_TARGETS[current])
+                current = conn.execute(
+                    "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+                current = current["value"] if current else None
         create_schema(conn)
+        # 走过迁移才重写队列目录：它是数据库的只读视图，3→4 的网格修正确实会让某些
+        # 指针不该存在了。新建库（没有任何迁移）不重写——那会把目录整片清空，
+        # 而空库本来就没有"该有的指针"可言。
+        queue_rewrites: list[tuple[str, list[str]]] = []
+        if migrated_from is not None:
+            for queue in sorted(set(QUEUE_FOR_REVIEW_KIND.values())):
+                queue_rewrites.append((queue, export_queue(conn, queue)))
         after = table_names(conn)
     finally:
         conn.close()
@@ -728,6 +1137,12 @@ def cmd_init(args) -> int:
     print(f"表 {len(after)} 张：{', '.join(sorted(after))}")
     if migrated_from is not None:
         print(f"已迁移 schema_version：{migrated_from} → {SCHEMA_VERSION}")
+        for table, columns in RETIRED_COLUMNS.items():
+            print(f"废弃列（{table}）：{', '.join(columns)}"
+                  "（旧值只留在 runs/ 下作历史证据，不进 mesh_task）")
+    for queue, written in queue_rewrites:
+        print(f"队列指针已按库重写：{queue} → {len(written)} 个"
+              f"（{workspace_rel(queue_directory(queue))}）")
     print(f"schema_version = {SCHEMA_VERSION}；journal_mode = {JOURNAL_MODE}")
     if existed:
         added = sorted(after - before)
@@ -838,13 +1253,14 @@ def cmd_check(args) -> int:
         missing = [name for name in EXPECTED_TABLES if name not in tables]
         extra = sorted(tables - set(EXPECTED_TABLES))
         record(
-            f"11 张表齐全",
+            f"{len(EXPECTED_TABLES)} 张表齐全",
             not missing,
             f"缺 {missing}" if missing else (f"多余 {extra}（不阻塞）" if extra else "全部就位"),
         )
         indexes = index_names(conn)
         missing_index = [name for name in EXPECTED_INDEXES if name not in indexes]
-        record("6 个索引齐全", not missing_index, f"缺 {missing_index}" if missing_index else "全部就位")
+        record(f"{len(EXPECTED_INDEXES)} 个索引齐全", not missing_index,
+               f"缺 {missing_index}" if missing_index else "全部就位")
 
         if "meta" in tables:
             row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -861,6 +1277,123 @@ def cmd_check(args) -> int:
                    if missing_centroid else ", ".join(GEOMETRY_CENTROID_KEYS))
         else:
             record("几何表有实测质心三列", False, "geometry 表不存在")
+
+        # 网格按工况：mesh_task 必须存在且带边界层设计值与领取标记
+        if "mesh_task" in tables:
+            mesh_columns = {row["name"] for row in conn.execute("PRAGMA table_info(mesh_task)")}
+            missing_mesh = [key for key in ("geometry_id", "condition_id", "status", "run_id",
+                                            "mesh_path", "first_height_mm", "n_layers",
+                                            "growth_rate", "claimed_at")
+                            if key not in mesh_columns]
+            record("网格表按 (几何, 工况) 且带边界层设计值", not missing_mesh,
+                   f"缺 {missing_mesh}" if missing_mesh else
+                   f"{_row_count(conn, 'mesh_task')} 行")
+        else:
+            record("网格表按 (几何, 工况) 且带边界层设计值", False, "mesh_task 表不存在")
+
+        # 三张状态表都必须有 claimed_at（防重复领取的唯一标记）
+        unclaimed = [name for name in ("geometry_state", "mesh_task", "cfd_task", "datcom_task")
+                     if name in tables
+                     and "claimed_at" not in {row["name"] for row in
+                                              conn.execute(f"PRAGMA table_info({name})")}]
+        record("四张任务表都有 claimed_at", not unclaimed,
+               f"缺 {unclaimed}" if unclaimed else "geometry_state / mesh_task / cfd_task / datcom_task")
+
+        # 几何级网格三列必须已废弃（存在说明 2→3 迁移没跑）
+        if "geometry_state" in tables:
+            state_columns = {row["name"] for row in conn.execute(
+                "PRAGMA table_info(geometry_state)")}
+            leftover = [key for key in RETIRED_COLUMNS["geometry_state"] if key in state_columns]
+            record("几何级网格三列已废弃", not leftover,
+                   f"仍存在 {leftover}（先跑 python scripts/db.py init 执行 2→3 迁移）"
+                   if leftover else "moved to mesh_task")
+
+        # 状态词的 CHECK 必须真的是三态：真库里不该有旧词
+        stale = {}
+        for table, column in (("geometry_state", "model_status"), ("mesh_task", "status"),
+                              ("cfd_task", "status"), ("datcom_task", "status")):
+            if table not in tables:
+                continue
+            count = int(conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {column} NOT IN ({STATUS_ENUM_SQL})"
+            ).fetchone()[0])
+            if count:
+                stale[table] = count
+        record("状态词只剩三态", not stale,
+               f"旧词残留 {stale}" if stale else " / ".join(TASK_STATUSES))
+
+        # 修理计时列：四张任务表都必须有，否则修理超时没有可靠的起点
+        missing_started = [name for name in REPAIR_STARTED_TABLES
+                           if name in tables
+                           and REPAIR_STARTED_COLUMN not in {row["name"] for row in
+                                                             conn.execute(
+                                                                 f"PRAGMA table_info({name})")}]
+        record(f"四张任务表都有 {REPAIR_STARTED_COLUMN}", not missing_started,
+               f"缺 {missing_started}（先跑 python scripts/db.py init 执行 3→4 迁移）"
+               if missing_started else " / ".join(REPAIR_STARTED_TABLES))
+
+        # 迁移链完整性：登记迁移的每一步都必须有目标版本，且目标恰好是"下一版"，
+        # 否则 `init` 的 `while` 循环会原地打转或跳过某一版。这是结构配置的内部一致性。
+        orphan_steps = sorted(set(SCHEMA_MIGRATIONS) - set(SCHEMA_MIGRATION_TARGETS))
+        bad_targets = sorted(f"{step}→{target}" for step, target in
+                             SCHEMA_MIGRATION_TARGETS.items() if target != str(int(step) + 1))
+        record("迁移链每一步都指向下一版", not orphan_steps and not bad_targets,
+               f"缺目标版本 {orphan_steps}、目标不是下一版 {bad_targets}"
+               if (orphan_steps or bad_targets)
+               else " → ".join(f"{k}→{v}" for k, v in sorted(SCHEMA_MIGRATION_TARGETS.items())))
+
+        # 队列目录是数据库的只读视图，只能由 `export_queue` 写。库里"不该有指针"的行
+        # 一变，目录里就必须跟着消失；这里逐目录比对文件名，把残留的指针抓出来。
+        for queue in sorted(set(QUEUE_FOR_REVIEW_KIND.values())):
+            directory = queue_directory(queue)
+            if not directory.is_dir():
+                record(f"队列 {queue} 与库一致", True, "目录不存在（库为空）")
+                continue
+            _kind, entries = queue_entries(conn, queue)
+            expected_names = {entry["name"] for entry in entries if "name" in entry}
+            actual_names = {item.name for item in directory.glob("*.json")}
+            stale_names = sorted(actual_names - expected_names)
+            missing_names = sorted(expected_names - actual_names)
+            detail = []
+            if stale_names:
+                detail.append(f"多出 {len(stale_names)} 个（{', '.join(stale_names[:3])}"
+                              f"{'…' if len(stale_names) > 3 else ''}）")
+            if missing_names:
+                detail.append(f"缺 {len(missing_names)} 个（{', '.join(missing_names[:3])}"
+                              f"{'…' if len(missing_names) > 3 else ''}）")
+            record(f"队列 {queue} 与库一致", not stale_names and not missing_names,
+                   "；".join(detail) + "，跑 python scripts/db.py export --format queue "
+                   f"--queue {queue}" if detail else f"{len(expected_names)} 个指针")
+
+        # repairing 行没有修理起点 = 迁移遗留（历史证据），不该被算成"正在修"：
+        # 它们既不参与超时上报，也不该被误当成当前故障。这里只统计，不拦。
+        if not missing_started:
+            no_start = {}
+            for table, column in (("geometry_state", "model_status"), ("mesh_task", "status"),
+                                  ("cfd_task", "status"), ("datcom_task", "status")):
+                if table not in tables:
+                    continue
+                count = int(conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {column}='repairing'"
+                    f" AND {REPAIR_STARTED_COLUMN} IS NULL").fetchone()[0])
+                if count:
+                    no_start[table] = count
+            record("repairing 行都有修理起点（除迁移遗留）", True,
+                   f"无起点的 repairing 行（历史遗留，不参与超时）：{no_start}"
+                   if no_start else "全部有起点")
+
+        # 迁移修正的结果：不许再有"没按工况算过边界层、却带着几何级网格"的行。
+        # 这种行会被队列指针 / 求解 / gc 当成已交付的网格。判据与
+        # `repair_mesh_migration` 相同（含领取中的行——领取中的旧网格同样是缺陷，
+        # 只是修它要显式 `--release-claim`）。
+        if "mesh_task" in tables and REPAIR_STARTED_COLUMN in {
+                row["name"] for row in conn.execute("PRAGMA table_info(mesh_task)")}:
+            bad_mesh = int(conn.execute(
+                f"SELECT COUNT(*) FROM mesh_task WHERE {MESH_MIGRATION_CONDITION_ANY_CLAIM}"
+            ).fetchone()[0])
+            record("无未按工况验证的旧网格被当成过审", bad_mesh == 0,
+                   f"{bad_mesh} 行仍是几何级旧网格（跑 python scripts/db.py "
+                   "repair-mesh-migration）" if bad_mesh else "0 行")
     finally:
         conn.close()
 
@@ -1029,20 +1562,59 @@ def cmd_check(args) -> int:
         memory.commit()
 
         now = utc_sql()
+        condition_id = condition_identity["condition_id"]
         ok, detail = _expect_error(
             memory,
             "INSERT INTO cfd_task(geometry_id, condition_id, status, created_at, updated_at)"
             " VALUES(?,?,?,?,?)",
-            (identity["geometry_id"], condition_identity["condition_id"], "bogus", now, now),
+            (identity["geometry_id"], condition_id, "bogus", now, now),
             "非法任务状态",
         )
-        record("任务状态只能取七态", ok, detail)
+        record("任务状态只能取三态", ok, detail)
+
+        # 已删除的旧词必须真被 CHECK 挡住，而不只是文档里删掉
+        old_words = ("running", "reviewing", "rejected", "passed", "cancelled")
+        accepted = []
+        for word in old_words:
+            ok, _ = _expect_error(
+                memory,
+                "INSERT INTO cfd_task(geometry_id, condition_id, status, created_at, updated_at)"
+                " VALUES(?,?,?,?,?)",
+                (identity["geometry_id"], condition_id, word, now, now),
+                f"旧状态词 {word}",
+            )
+            if not ok:
+                accepted.append(word)
+        record("旧状态词全部被 CHECK 拒绝", not accepted,
+               "五个旧词都插不进去" if not accepted else f"仍可写入：{accepted}")
+
+        # 网格按工况：同一 (几何, 工况) 只能一行；几何级三列已不存在
+        ok, detail = _expect_ok(
+            memory,
+            "INSERT INTO mesh_task(geometry_id, condition_id, status, first_height_mm,"
+            " n_layers, growth_rate, created_at, updated_at) VALUES(?,?,'pending',?,?,?,?,?)",
+            (identity["geometry_id"], condition_id, 0.0021, 18, 1.2, now, now),
+            "网格任务按工况可写入",
+        )
+        record("网格任务按工况可写入", ok, detail)
+        ok, detail = _expect_error(
+            memory,
+            "INSERT INTO mesh_task(geometry_id, condition_id, status, created_at, updated_at)"
+            " VALUES(?,?,'pending',?,?)",
+            (identity["geometry_id"], condition_id, now, now),
+            "同一 (几何, 工况) 的第二行网格",
+        )
+        record("同一 (几何, 工况) 只能有一行网格", ok, detail)
+        state_columns = {row["name"] for row in memory.execute("PRAGMA table_info(geometry_state)")}
+        record("几何状态表不再有网格三列", not (state_columns & set(RETIRED_COLUMNS["geometry_state"])),
+               "已废弃到 mesh_task" if not (state_columns & set(RETIRED_COLUMNS["geometry_state"]))
+               else f"仍存在 {sorted(state_columns & set(RETIRED_COLUMNS['geometry_state']))}")
 
         ok, detail = _expect_error(
             memory,
             "INSERT INTO cfd_task(geometry_id, condition_id, status, created_at, updated_at)"
             " VALUES(?,?,?,?,?)",
-            ("gnotexist00000", condition_identity["condition_id"], "pending", now, now),
+            ("gnotexist00000", condition_id, "pending", now, now),
             "不存在的 geometry_id",
         )
         record("外键拦住孤儿任务", ok, detail)
@@ -1053,7 +1625,7 @@ def cmd_check(args) -> int:
             ("workflow:high", "resume", now, "check"),
             "非法启停状态",
         )
-        record("启停状态只能取三态", ok, detail)
+        record("启停状态只能取 running/paused/stopped", ok, detail)
 
         ok, detail = _expect_error(
             memory,
@@ -1068,10 +1640,103 @@ def cmd_check(args) -> int:
             memory,
             "INSERT INTO cfd_task(geometry_id, condition_id, status, created_at, updated_at)"
             " VALUES(?,?,?,?,?)",
-            (identity["geometry_id"], condition_identity["condition_id"], "pending", now, now),
+            (identity["geometry_id"], condition_id, "pending", now, now),
             "合法任务可写入",
         )
         record("合法任务可写入", ok, detail)
+
+        # 领取标记：同一行只能被领一次（UPDATE ... WHERE claimed_at IS NULL 的 rowcount）
+        first = memory.execute(
+            "UPDATE cfd_task SET claimed_at=? WHERE geometry_id=? AND condition_id=?"
+            " AND claimed_at IS NULL", (now, identity["geometry_id"], condition_id))
+        memory.commit()
+        second = memory.execute(
+            "UPDATE cfd_task SET claimed_at=? WHERE geometry_id=? AND condition_id=?"
+            " AND claimed_at IS NULL", (now, identity["geometry_id"], condition_id))
+        memory.rollback()
+        record("claimed_at 原子领取只成功一次",
+               first.rowcount == 1 and second.rowcount == 0,
+               f"第一次 rowcount={first.rowcount}，第二次 rowcount={second.rowcount}")
+
+        # 修理计时：置 repairing 写起点、离开 repairing 清起点。
+        # 这是"修理超时按 repair_started_at 判断"的前提，必须在建表阶段就成立。
+        run = run_target("fluent_solution", identity["geometry_id"], condition_id)
+        mark_task(memory, run, "repairing")
+        started = memory.execute(
+            f"SELECT {REPAIR_STARTED_COLUMN} AS s FROM cfd_task"
+            " WHERE geometry_id=? AND condition_id=?",
+            (identity["geometry_id"], condition_id)).fetchone()
+        started_ok = started is not None and bool(started["s"])
+        mark_task(memory, run, "queued")
+        cleared = memory.execute(
+            f"SELECT {REPAIR_STARTED_COLUMN} AS s FROM cfd_task"
+            " WHERE geometry_id=? AND condition_id=?",
+            (identity["geometry_id"], condition_id)).fetchone()
+        cleared_ok = cleared is not None and cleared["s"] is None
+        record("置 repairing 记起点、离开 repairing 清起点",
+               started_ok and cleared_ok,
+               f"repairing 时 {started['s'] if started else None}，"
+               f"queued 时 {cleared['s'] if cleared else None}")
+
+        # 2→3 迁移修的正是"一份几何级旧网格被当成四个工况都过审"：
+        # 这里造一条几何级 run_id + 空边界层设计值的行，确认修复会把它改成 pending
+        # 且清空 run_id / mesh_path（留着任一个，下游都会当成交付物）。
+        geometry_id = identity["geometry_id"]
+        other_condition = "c0000000000ff"
+        memory.execute(
+            "INSERT INTO condition(condition_id, mach, alpha_deg, altitude_m, canonical, label,"
+            " created_at) VALUES(?,?,?,?,?,?,?)",
+            (other_condition, 0.8, 0.0, 5000.0, "mach=0.800000|alpha_deg=0.000000|"
+                                              "altitude_m=5000.000000", "C01", now))
+        legacy_run = f"{geometry_id}{RUN_ID_SEPARATOR}{SHARED_CONDITION_ID}{RUN_ID_SEPARATOR}20261031T111141Z"
+        memory.execute(
+            "INSERT INTO mesh_task(geometry_id, condition_id, status, run_id, mesh_path,"
+            " created_at, updated_at) VALUES(?,?,'queued',?,?,?,?)",
+            (geometry_id, other_condition, legacy_run,
+             "data_lib/runs/high/fluent_meshing/legacy/missile_mesh.msh.h5", now, now))
+        memory.commit()
+        fixed = repair_mesh_migration(memory)
+        after = memory.execute(
+            "SELECT status, run_id, mesh_path FROM mesh_task"
+            " WHERE geometry_id=? AND condition_id=?",
+            (geometry_id, other_condition)).fetchone()
+        again = repair_mesh_migration(memory)
+        legacy_ok = (
+            len(fixed["reset"]) == 1
+            and after is not None and after["status"] == "pending"
+            and after["run_id"] is None and after["mesh_path"] is None
+            # 幂等：第二次跑不应该再有可修的行
+            and not again["reset"]
+        )
+        record("旧几何级网格被改回 pending 且清空产物列", legacy_ok,
+               f"修复 {len(fixed['reset'])} 行、二次运行 {len(again['reset'])} 行；"
+               f"结果 {after['status'] if after else '行不存在'} / "
+               f"run_id {after['run_id'] if after else '—'} / "
+               f"mesh_path {after['mesh_path'] if after else '—'}")
+
+        # 放弃领取：清 claimed_at / run_id 并注销 pid 登记，任务回 pending
+        memory.execute(
+            "UPDATE mesh_task SET claimed_at=?, run_id=? WHERE geometry_id=?"
+            " AND condition_id=?", (now, legacy_run, geometry_id, other_condition))
+        memory.commit()
+        register_task_process(memory, legacy_run, 999999)     # 不存在的 pid：一定判死
+        released = abandon_claim(memory, legacy_run)
+        row = memory.execute(
+            "SELECT status, claimed_at, run_id FROM mesh_task"
+            " WHERE geometry_id=? AND condition_id=?",
+            (geometry_id, other_condition)).fetchone()
+        left = memory.execute(
+            "SELECT COUNT(*) FROM task_process WHERE run_id=?", (legacy_run,)).fetchone()[0]
+        abandon_ok = (
+            row is not None and row["status"] == "pending"
+            and row["claimed_at"] is None and row["run_id"] is None and left == 0
+            and bool(released["report_id"])
+        )
+        record("放弃领取清 claimed_at / run_id 并注销 pid", abandon_ok,
+               f"结果 {row['status'] if row else '行不存在'} / "
+               f"claimed_at {row['claimed_at'] if row else '—'} / "
+               f"task_process 残留 {left} 行" if not abandon_ok
+               else f"回 pending，上报 {released['report_id']}")
     finally:
         memory.close()
 
@@ -1358,77 +2023,262 @@ def register_task_for_stages(conn: sqlite3.Connection, geometry_id: str, conditi
     return created
 
 
-# ---- 领取：pending → queued（只是状态推进，不启动进程）----
-STAGE_STATUS_FIELD = {"spaceclaim": "model_status", "fluent_meshing": "mesh_status"}
+# ---- 网格任务：按工况建行（watch.py 在建模过审后调用）----
+def ensure_mesh_tasks(conn: sqlite3.Connection, geometry_id: str) -> list[str]:
+    """为一个几何的每个高保真工况建 `mesh_task` 行（`pending`），返回新建的 condition_id。
 
+    网格按 `(geometry_id, condition_id)` 一行：同一个几何在不同来流下需要的边界层
+    首层高度不同（见 `fluent_meshing/boundary_layer.py`），所以不能共用一份网格。
 
-def claim_geometry_stage(conn: sqlite3.Connection, stage: str, limit: int = 1,
-                         *, source_status: str = "pending",
-                         target_status: str = "queued") -> list[str]:
-    """领取建模/网格。`watch.py` 用默认值做 `pending → queued`；`dispatch.py` 用
-    `source_status='queued'` 把它推进到 `running`。网格要多一道建模已通过的闸门。"""
-    if stage not in STAGE_STATUS_FIELD:
-        raise WriteError(f"该阶段不按几何领取：{stage}")
-    for status in (source_status, target_status):
-        if status not in TASK_STATUSES:
-            raise WriteError(f"未知状态：{status}（只能是 {TASK_STATUSES}）")
-    field = STAGE_STATUS_FIELD[stage]
-    gate = ""
-    if stage == "fluent_meshing":
-        gate = " AND model_status='passed' AND model_path IS NOT NULL"
-    rows = conn.execute(
-        f"SELECT geometry_id FROM geometry_state WHERE {field}=?{gate}"
-        " ORDER BY geometry_id LIMIT ?",
-        (source_status, limit),
-    ).fetchall()
-    claimed = [row["geometry_id"] for row in rows]
-    for geometry_id in claimed:
+    已存在的行不动——重复调用幂等，watch 每轮都能安全地调一次。
+    """
+    condition_ids = [row["condition_id"] for row in conn.execute(
+        "SELECT DISTINCT condition_id FROM cfd_task WHERE geometry_id=?"
+        " ORDER BY condition_id", (geometry_id,))]
+    created: list[str] = []
+    stamp = utc_sql()
+    for condition_id in condition_ids:
+        exists = conn.execute(
+            "SELECT 1 FROM mesh_task WHERE geometry_id=? AND condition_id=?",
+            (geometry_id, condition_id)).fetchone()
+        if exists:
+            continue
         conn.execute(
-            f"UPDATE geometry_state SET {field}=?, updated_at=? WHERE geometry_id=?",
-            (target_status, utc_sql(), geometry_id),
+            "INSERT INTO mesh_task(geometry_id, condition_id, status, created_at, updated_at)"
+            " VALUES(?,?,'pending',?,?)", (geometry_id, condition_id, stamp, stamp))
+        created.append(condition_id)
+    if created:
+        conn.commit()
+    return created
+
+
+def geometries_ready_for_mesh(conn: sqlite3.Connection) -> list[str]:
+    """建模已审核通过（`model_status='queued'` 且有 `model_path`）、且有工况的几何。"""
+    return [row["geometry_id"] for row in conn.execute(
+        "SELECT s.geometry_id FROM geometry_state s"
+        " WHERE s.model_status='queued' AND s.model_path IS NOT NULL"
+        "   AND EXISTS (SELECT 1 FROM cfd_task t WHERE t.geometry_id = s.geometry_id)"
+        " ORDER BY s.geometry_id")]
+
+
+def set_mesh_design(conn: sqlite3.Connection, geometry_id: str, condition_id: str,
+                    design: dict) -> None:
+    """把边界层设计值写进 `mesh_task` 行（跑网格之前写，review 按同一套值复核）。
+
+    `design` 是 `boundary_layer.design_boundary_layer(...).as_dict()`（或它的子集），
+    键名与列名一一对应。没给的列保持原值。
+    """
+    mapping = {
+        "first_height_mm": design.get("first_height_mm"),
+        "n_layers": design.get("n_layers"),
+        "growth_rate": design.get("growth_rate"),
+        "y_plus_target": design.get("y_plus_target"),
+        "re": design.get("re"),
+        "cf": design.get("cf"),
+        "u_tau": design.get("u_tau_m_s", design.get("u_tau")),
+        "delta_m": design.get("delta_m"),
+    }
+    sets = ", ".join(f"{key}=?" for key in mapping)
+    conn.execute(
+        f"UPDATE mesh_task SET {sets}, updated_at=? WHERE geometry_id=? AND condition_id=?",
+        (*mapping.values(), utc_sql(), geometry_id, condition_id))
+    conn.commit()
+
+
+def mesh_design(conn: sqlite3.Connection, geometry_id: str,
+                condition_id: str) -> dict | None:
+    """读回 `mesh_task` 行里记录的边界层设计值。"""
+    row = conn.execute(
+        "SELECT first_height_mm, n_layers, growth_rate, y_plus_target, re, cf, u_tau, delta_m"
+        " FROM mesh_task WHERE geometry_id=? AND condition_id=?",
+        (geometry_id, condition_id)).fetchone()
+    return dict(row) if row is not None else None
+
+
+# ---- 阶段 → 行定位 ----
+# 每个阶段的"任务行"落在哪张表、状态列叫什么、是否按工况。
+# 建模是几何级的（`geometry_state`）；网格/求解/低保真都是按 `(几何, 工况)` 一行。
+STAGE_TARGET = {
+    "spaceclaim": {"table": "geometry_state", "status": "model_status", "scoped": False},
+    "fluent_meshing": {"table": "mesh_task", "status": "status", "scoped": True},
+    "fluent_solution": {"table": "cfd_task", "status": "status", "scoped": True},
+    "datcom": {"table": "datcom_task", "status": "status", "scoped": True},
+}
+# 可被领取执行的状态：`pending` 是"待处理"（含新建、修理完、脚本跑完等审核）。
+# `queued` 已经在审核通过之后，不再重跑；`repairing` 由子智能体修，不由脚本领。
+CLAIMABLE_STATUSES = ("pending",)
+# 领取前的前置闸门（SQL 片段，作用在表的别名 t 上）。
+# 网格必须等建模过审：没有过审的模型就没有可喂给 Fluent 的 .scdoc。
+CLAIM_GATES = {
+    "fluent_meshing": (
+        "EXISTS (SELECT 1 FROM geometry_state s WHERE s.geometry_id = t.geometry_id"
+        " AND s.model_status='queued' AND s.model_path IS NOT NULL)"
+    ),
+}
+
+
+def _stage_of_table(table: str) -> str:
+    for stage, spec in STAGE_TARGET.items():
+        if spec["table"] == table:
+            return stage
+    raise WriteError(f"未知任务表：{table}")
+
+
+def run_target(stage: str, geometry_id: str, condition_id: str | None = None) -> dict:
+    """把 `(阶段, 几何, 工况)` 变成一条可交给 `mark_task` 的行描述。"""
+    spec = STAGE_TARGET[stage]
+    if spec["scoped"] and not condition_id:
+        raise WriteError(f"{stage} 是按工况的任务，必须给 condition_id")
+    return {"stage": stage, "table": spec["table"], "field": spec["status"],
+            "geometry_id": geometry_id,
+            "condition_id": condition_id if spec["scoped"] else None}
+
+
+def _run_column(table: str) -> str:
+    """建模的运行号列叫 `model_run_id`，其余三张表都叫 `run_id`。"""
+    return "model_run_id" if table == "geometry_state" else "run_id"
+
+
+def _claim_rows(conn: sqlite3.Connection, stage: str, limit: int,
+                statuses: tuple[str, ...] = CLAIMABLE_STATUSES) -> list[dict]:
+    """原子领取：`UPDATE ... WHERE claimed_at IS NULL` + `rowcount` 判成功。
+
+    两条 watch / dispatch 进程同时看到同一条任务时，只有一个的 `rowcount` 是 1，
+    另一个是 0 —— 这就是"不重复启动第二个进程"的唯一保证，不需要 running 状态词。
+    领取时同时写入本次的 `run_id`，所以 `claimed_at + run_id` 一起代表"谁在跑哪一次"。
+    """
+    spec = STAGE_TARGET[stage]
+    table, status_column = spec["table"], spec["status"]
+    run_column = _run_column(table)
+    placeholders = ", ".join("?" for _ in statuses)
+    key_columns = "t.geometry_id, t.condition_id" if spec["scoped"] else "t.geometry_id"
+    gate = CLAIM_GATES.get(stage)
+    gate_sql = f" AND {gate}" if gate else ""
+    rows = conn.execute(
+        f"SELECT t.rowid AS rid, {key_columns} FROM {table} t"
+        f" WHERE t.{status_column} IN ({placeholders}) AND t.claimed_at IS NULL{gate_sql}"
+        f" ORDER BY {key_columns} LIMIT ?",
+        (*statuses, max(1, int(limit))),
+    ).fetchall()
+    claimed: list[dict] = []
+    stamp = utc_sql()
+    for row in rows:
+        condition_id = row["condition_id"] if spec["scoped"] else None
+        run_id = make_run_id(row["geometry_id"], condition_id or SHARED_CONDITION_ID,
+                             taken_run_ids(conn) | {item["run_id"] for item in claimed})
+        cursor = conn.execute(
+            f"UPDATE {table} SET claimed_at=?, {run_column}=?, updated_at=?"
+            f" WHERE rowid=? AND {status_column} IN ({placeholders}) AND claimed_at IS NULL",
+            (stamp, run_id, stamp, row["rid"], *statuses),
         )
+        if cursor.rowcount != 1:                # 被别的进程抢先了，跳过
+            continue
+        claimed.append({"stage": stage, "table": table, "field": status_column,
+                        "geometry_id": row["geometry_id"], "condition_id": condition_id,
+                        "run_id": run_id})
     conn.commit()
     return claimed
 
 
-def claim_cfd_tasks(conn: sqlite3.Connection, limit: int = 1, *,
-                    source_status: str = "pending",
-                    target_status: str = "queued") -> list[tuple[str, str]]:
-    """领取求解任务：网格已通过、产物还在。"""
-    rows = conn.execute(
-        "SELECT t.geometry_id, t.condition_id FROM cfd_task t"
-        " JOIN geometry_state s ON s.geometry_id = t.geometry_id"
-        " WHERE t.status=? AND s.mesh_status='passed' AND s.mesh_path IS NOT NULL"
-        " ORDER BY t.geometry_id, t.condition_id LIMIT ?",
-        (source_status, limit),
-    ).fetchall()
-    claimed = [(row["geometry_id"], row["condition_id"]) for row in rows]
-    for geometry_id, condition_id in claimed:
-        conn.execute(
-            "UPDATE cfd_task SET status=?, updated_at=? WHERE geometry_id=? AND condition_id=?",
-            (target_status, utc_sql(), geometry_id, condition_id),
-        )
-    conn.commit()
-    return claimed
+def claim_model(conn: sqlite3.Connection, limit: int = 1) -> list[dict]:
+    """领一条建模任务（`geometry_state`，几何级）。"""
+    return _claim_rows(conn, "spaceclaim", limit)
 
 
-def claim_datcom_tasks(conn: sqlite3.Connection, limit: int = 1, *,
-                       source_status: str = "pending",
-                       target_status: str = "queued") -> list[tuple[str, str]]:
-    """领取低保真任务：无前置条件（按行领取，批量版见 `claim_datcom_batch`）。"""
-    rows = conn.execute(
-        "SELECT geometry_id, condition_id FROM datcom_task WHERE status=?"
-        " ORDER BY geometry_id, condition_id LIMIT ?",
-        (source_status, limit),
-    ).fetchall()
-    claimed = [(row["geometry_id"], row["condition_id"]) for row in rows]
-    for geometry_id, condition_id in claimed:
+def claim_mesh(conn: sqlite3.Connection, limit: int = 1) -> list[dict]:
+    """领一条网格任务（`mesh_task`，按 `(几何, 工况)`）。"""
+    return _claim_rows(conn, "fluent_meshing", limit)
+
+
+def claim_solution(conn: sqlite3.Connection, limit: int = 1) -> list[dict]:
+    """领一条求解任务。求解脚本未实现，`dispatch.py` 在领取之前就拒绝启动。"""
+    return _claim_rows(conn, "fluent_solution", limit)
+
+
+def claim_datcom_tasks(conn: sqlite3.Connection, limit: int = 1) -> list[dict]:
+    """领一条低保真任务（按行；整批领取见 `claim_datcom_batch`）。"""
+    return _claim_rows(conn, "datcom", limit)
+
+
+def clear_claim(conn: sqlite3.Connection, table: str, geometry_id: str,
+                condition_id: str | None = None, *, commit: bool = True) -> None:
+    """任务结束时清 `claimed_at`（`run_id` 保留：它是"上一次跑的是哪一次"的证据）。"""
+    if table not in {spec["table"] for spec in STAGE_TARGET.values()}:
+        raise WriteError(f"未知任务表：{table}")
+    if condition_id is None:
+        conn.execute(f"UPDATE {table} SET claimed_at=NULL, updated_at=? WHERE geometry_id=?",
+                     (utc_sql(), geometry_id))
+    else:
         conn.execute(
-            "UPDATE datcom_task SET status=?, updated_at=? WHERE geometry_id=? AND condition_id=?",
-            (target_status, utc_sql(), geometry_id, condition_id),
-        )
+            f"UPDATE {table} SET claimed_at=NULL, updated_at=?"
+            " WHERE geometry_id=? AND condition_id=?",
+            (utc_sql(), geometry_id, condition_id))
+    if commit:
+        conn.commit()
+
+
+def abandon_claim(conn: sqlite3.Connection, run_id: str) -> dict:
+    """放弃一次"领了却没跑完"的领取：清 `claimed_at`、注销 pid 登记、任务回 `pending`。
+
+    与 `clear_claim` 的区别：`clear_claim` 是"跑完了，正常收尾"，产物与 `run_id` 都要
+    留下；`abandon_claim` 是"这次运行作废"，所以连 `run_id` 也不留（它记的是作废的那一次）。
+    产物文件不动，仍在 `runs/` 下作为证据。
+
+    会**拒绝**仍然活着的进程：那说明任务真的在跑，清掉领取等于让它变成孤儿，
+    而且同一个任务可能被第二次启动。要停它先用 `control.py stop --target task:<run_id>`。
+
+    用 `--reset-report` 之外的场景：`repair-mesh-migration --release-claim` 也走它。
+    返回 `{run_id, stage, geometry_id, condition_id, pid, report_id}`。
+    """
+    row = conn.execute("SELECT run_id, pid FROM task_process WHERE run_id=?", (run_id,)).fetchone()
+    pid = int(row["pid"]) if row is not None else None
+    if pid is not None and pid_alive(pid):
+        raise WriteError(
+            f"{run_id} 的进程 pid {pid} 还活着：先 control.py stop --target task:{run_id} 收掉它")
+    run = resolve_run(conn, run_id)
+    if run is None:
+        # 库里已经没有对应任务（行被删/被 gc 清掉了）：只清 pid 登记，别假装改了状态
+        conn.execute("DELETE FROM task_process WHERE run_id=?", (run_id,))
+        conn.commit()
+        return {"run_id": run_id, "stage": None, "geometry_id": None, "condition_id": None,
+                "pid": pid, "report_id": None}
+
+    table, condition_id = run["table"], run["condition_id"]
+    stamp = utc_sql()
+    where = "geometry_id=?" if condition_id is None else "geometry_id=? AND condition_id=?"
+    params = (run["geometry_id"],) if condition_id is None else (run["geometry_id"], condition_id)
+    run_column = _run_column(table)
+    status_column = run["field"]
+    if run_column not in _task_columns(conn, table):
+        run_column = None
+    sets = [f"{status_column}='pending'", "claimed_at=NULL", "updated_at=?"]
+    values: list = [stamp]
+    if run_column:
+        sets.insert(0, f"{run_column}=NULL")
+    if REPAIR_STARTED_COLUMN in _task_columns(conn, table):
+        sets.append(f"{REPAIR_STARTED_COLUMN}=NULL")
+    conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE {where}", (*values, *params))
+    conn.execute("DELETE FROM task_process WHERE run_id=?", (run_id,))
     conn.commit()
-    return claimed
+
+    # 领取被放弃 = 这次运行没跑成，跟"被 stop 杀掉"一样需要人知道，所以开一张单；
+    # 已有同任务 open 的单就复用，不会每轮开一张新的。
+    report_id = record_report(
+        conn, stage=run["stage"], geometry_id=run["geometry_id"], run_id=run_id,
+        attempts=_attempts_of(conn, run), condition_id=condition_id, dedupe=True,
+        last_error=f"领取 {run_id} 被放弃（pid {pid or '未登记'}），任务回 pending 待重跑",
+    )
+    return {"run_id": run_id, "stage": run["stage"], "geometry_id": run["geometry_id"],
+            "condition_id": condition_id, "pid": pid, "report_id": report_id}
+
+
+def is_claimed(conn: sqlite3.Connection, table: str, geometry_id: str,
+               condition_id: str | None = None) -> bool:
+    spec = STAGE_TARGET[_stage_of_table(table)]
+    where = "geometry_id=?" if not spec["scoped"] else "geometry_id=? AND condition_id=?"
+    params = (geometry_id,) if not spec["scoped"] else (geometry_id, condition_id)
+    row = conn.execute(f"SELECT claimed_at FROM {table} WHERE {where}", params).fetchone()
+    return bool(row and row["claimed_at"])
 
 
 def taken_run_ids(conn: sqlite3.Connection) -> set[str]:
@@ -1436,7 +2286,7 @@ def taken_run_ids(conn: sqlite3.Connection) -> set[str]:
     taken = {row["run_id"] for row in conn.execute("SELECT run_id FROM task_process")}
     taken |= {row[0] for row in conn.execute(
         "SELECT model_run_id FROM geometry_state WHERE model_run_id IS NOT NULL"
-        " UNION SELECT mesh_run_id FROM geometry_state WHERE mesh_run_id IS NOT NULL"
+        " UNION SELECT run_id FROM mesh_task WHERE run_id IS NOT NULL"
         " UNION SELECT run_id FROM cfd_task WHERE run_id IS NOT NULL"
         " UNION SELECT run_id FROM datcom_task WHERE run_id IS NOT NULL")}
     return taken
@@ -1445,37 +2295,44 @@ def taken_run_ids(conn: sqlite3.Connection) -> set[str]:
 def claim_datcom_batch(conn: sqlite3.Connection) -> dict | None:
     """领一批低保真任务：同一个 `geometry_id` + 同一个 `altitude_m` 用一次 DATCOM 调用算完。
 
-    返回 `{"geometry_id", "altitude_m", "condition_ids", "run_id"}`；这批行全部置
-    `running` 并记下同一个 `run_id`（批次级产物，`condition_id` 写 `shared`）。
+    返回 `{"geometry_id", "altitude_m", "condition_ids", "run_id"}`。批里的每一行都走
+    和单行相同的原子领取（`claimed_at IS NULL` + `rowcount`），所以两个 dispatch 不会
+    领到同一行；任一行被别人抢先领走，就只领到自己拿到的那几条。
     """
     row = conn.execute(
         "SELECT t.geometry_id AS geometry_id, c.altitude_m AS altitude_m FROM datcom_task t"
         " JOIN condition c ON c.condition_id = t.condition_id"
-        " WHERE t.status='queued'"
+        " WHERE t.status=? AND t.claimed_at IS NULL"
         " GROUP BY t.geometry_id, c.altitude_m"
         " ORDER BY t.geometry_id, c.altitude_m LIMIT 1",
+        (CLAIMABLE_STATUSES[0],),
     ).fetchone()
     if row is None:
         return None
     geometry_id, altitude_m = row["geometry_id"], row["altitude_m"]
-    condition_ids = [item["condition_id"] for item in conn.execute(
+    candidates = [item["condition_id"] for item in conn.execute(
         "SELECT t.condition_id FROM datcom_task t"
         " JOIN condition c ON c.condition_id = t.condition_id"
-        " WHERE t.status='queued' AND t.geometry_id=? AND c.altitude_m=?"
+        " WHERE t.status=? AND t.claimed_at IS NULL AND t.geometry_id=? AND c.altitude_m=?"
         " ORDER BY t.condition_id",
-        (geometry_id, altitude_m),
+        (CLAIMABLE_STATUSES[0], geometry_id, altitude_m),
     )]
     run_id = make_run_id(geometry_id, SHARED_CONDITION_ID, taken_run_ids(conn))
     stamp = utc_sql()
-    for condition_id in condition_ids:
-        conn.execute(
-            "UPDATE datcom_task SET status='running', run_id=?, updated_at=?"
-            " WHERE geometry_id=? AND condition_id=?",
-            (run_id, stamp, geometry_id, condition_id),
+    claimed: list[str] = []
+    for condition_id in candidates:
+        cursor = conn.execute(
+            "UPDATE datcom_task SET claimed_at=?, run_id=?, updated_at=?"
+            " WHERE geometry_id=? AND condition_id=? AND status=? AND claimed_at IS NULL",
+            (stamp, run_id, stamp, geometry_id, condition_id, CLAIMABLE_STATUSES[0]),
         )
+        if cursor.rowcount == 1:
+            claimed.append(condition_id)
     conn.commit()
+    if not claimed:
+        return None
     return {"geometry_id": geometry_id, "altitude_m": altitude_m,
-            "condition_ids": condition_ids, "run_id": run_id}
+            "condition_ids": claimed, "run_id": run_id}
 
 
 def export_batch_input(conn: sqlite3.Connection, geometry_id: str,
@@ -1570,29 +2427,30 @@ def _pid_alive_via_kernel(pid: int) -> bool | None:
 
 
 def resolve_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
-    """由 `run_id` 反查它属于哪个阶段、哪个任务（`run_id` 本身不含阶段名）。"""
+    """由 `run_id` 反查它属于哪个阶段、哪个任务（`run_id` 本身不含阶段名）。
+
+    顺序按阶段排：先几何级建模，再按工况的网格 / 求解 / 低保真。同一个 run_id 不会
+    同时出现在两处（`make_run_id` 会撞库顺延）。
+    """
     row = conn.execute(
-        "SELECT geometry_id, model_run_id, mesh_run_id FROM geometry_state"
-        " WHERE model_run_id = ? OR mesh_run_id = ?",
-        (run_id, run_id),
-    ).fetchone()
+        "SELECT geometry_id FROM geometry_state WHERE model_run_id = ?", (run_id,)).fetchone()
     if row is not None:
-        stage = "spaceclaim" if row["model_run_id"] == run_id else "fluent_meshing"
-        return {"stage": stage, "geometry_id": row["geometry_id"], "condition_id": None,
-                "table": "geometry_state", "field": STAGE_STATUS_FIELD[stage]}
-    row = conn.execute(
-        "SELECT geometry_id, condition_id FROM cfd_task WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    if row is not None:
-        return {"stage": "fluent_solution", "geometry_id": row["geometry_id"],
-                "condition_id": row["condition_id"], "table": "cfd_task", "field": "status"}
-    row = conn.execute(
-        "SELECT geometry_id, condition_id FROM datcom_task WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    if row is not None:
-        return {"stage": "datcom", "geometry_id": row["geometry_id"],
-                "condition_id": row["condition_id"], "table": "datcom_task", "field": "status"}
+        return {"stage": "spaceclaim", "geometry_id": row["geometry_id"], "condition_id": None,
+                "table": "geometry_state", "field": "model_status"}
+    for stage, table in (("fluent_meshing", "mesh_task"),
+                         ("fluent_solution", "cfd_task"),
+                         ("datcom", "datcom_task")):
+        row = conn.execute(
+            f"SELECT geometry_id, condition_id FROM {table} WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is not None:
+            return {"stage": stage, "geometry_id": row["geometry_id"],
+                    "condition_id": row["condition_id"], "table": table, "field": "status"}
     return None
+
+
+def _task_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def mark_task(
@@ -1604,41 +2462,59 @@ def mark_task(
     run_id: str | None = None,
     result_dir: str | None = None,
     log_path: str | None = None,
+    keep_claim: bool = False,
+    repair_started_at: str | None = None,
 ) -> None:
-    """把一条任务/几何阶段推到指定状态。状态词表由 CHECK 兜底，这里只挡拼写错误。
+    """把一条任务/几何阶段推到指定状态，并清掉领取标记（除非 `keep_claim`）。
 
-    自己提交：状态推进必须当场落地。早期依赖调用方后续 commit 时，失败路径被
-    `record_report()` 的 commit 顺手带上，成功路径（`running → reviewing`）却什么都没写，
-    表现为 dispatch 打印了 `→ reviewing` 而库里仍是 `running`、`model_run_id` 为空。
+    状态词表由 CHECK 兜底，这里只挡拼写错误。三态的含义是"排队位置"，不是"进程
+    在不在跑"：所以 `pending` 既可以是新建待跑，也可以是脚本跑完等审核。
+    `claimed_at` 的清理与状态推进写在同一事务里——否则会留下"状态已变、还挂着领取
+    标记"的行，watch 的僵死回收会把它误判成进程崩了。
+
+    `result_dir` / `log_path` 只在表里真有这两列时才写：`mesh_task` 的运行目录由
+    `run_id` 唯一确定，不重复存列（存了就会和 `run_id` 漂移）。自己提交：状态推进
+    必须当场落地，不能靠调用方后续 commit。
+
+    `repair_started_at` 与状态同一个 UPDATE 写：置 `repairing` 时记下此刻（修理超时
+    从这里算起，不是从 `updated_at`——那可能是几周前的历史时刻），离开 `repairing`
+    就清成 NULL。重复置 `repairing` 会刷新时刻：每次重新开始修都该重新计时。
+    显式传 `repair_started_at` 可以写一个指定的起点（验收"真的修理超时能报"时用，
+    生产路径不传，一律取当前时刻）。
     """
     if status not in TASK_STATUSES:
         raise WriteError(f"未知状态：{status}（只能是 {TASK_STATUSES}）")
     table, field = run["table"], run["field"]
+    columns = _task_columns(conn, table)
     stamp = utc_sql()
+    claim_sql = "" if keep_claim else ", claimed_at=NULL"
+    repair_value = (repair_started_at or stamp) if status == "repairing" else None
+    repair_sql = (f", {REPAIR_STARTED_COLUMN}=?" if REPAIR_STARTED_COLUMN in columns else "")
     if table == "geometry_state":
         conn.execute(
-            f"UPDATE geometry_state SET {field}=?, updated_at=? WHERE geometry_id=?",
-            (status, stamp, run["geometry_id"]),
+            f"UPDATE geometry_state SET {field}=?, updated_at=?{claim_sql}{repair_sql}"
+            " WHERE geometry_id=?",
+            (status, stamp, *([repair_value] if repair_sql else []), run["geometry_id"]),
         )
-        # 几何级阶段用 model_run_id / mesh_run_id 反查是哪一次运行（run_id 本身不含阶段名）
-        run_column = "model_run_id" if field == "model_status" else "mesh_run_id"
+        # 几何级建模用 model_run_id 反查是哪一次运行（run_id 本身不含阶段名）
         if run_id is not None:
             conn.execute(
-                f"UPDATE geometry_state SET {run_column}=? WHERE geometry_id=?",
+                "UPDATE geometry_state SET model_run_id=? WHERE geometry_id=?",
                 (run_id, run["geometry_id"]),
             )
         conn.commit()
         return
     where = "geometry_id=? AND condition_id=?"
     key = (run["geometry_id"], run["condition_id"])
-    conn.execute(f"UPDATE {table} SET status=?, updated_at=? WHERE {where}", (status, stamp, *key))
-    if bump_attempts:
+    conn.execute(f"UPDATE {table} SET status=?, updated_at=?{claim_sql}{repair_sql} WHERE {where}",
+                 (status, stamp, *([repair_value] if repair_sql else []), *key))
+    if bump_attempts and "attempts" in columns:
         conn.execute(f"UPDATE {table} SET attempts=attempts+1 WHERE {where}", key)
     if run_id is not None:
         conn.execute(f"UPDATE {table} SET run_id=? WHERE {where}", (run_id, *key))
-    if result_dir is not None:
+    if result_dir is not None and "result_dir" in columns:
         conn.execute(f"UPDATE {table} SET result_dir=? WHERE {where}", (result_dir, *key))
-    if log_path is not None:
+    if log_path is not None and "log_path" in columns:
         conn.execute(f"UPDATE {table} SET log_path=? WHERE {where}", (log_path, *key))
     conn.commit()
 
@@ -1654,10 +2530,23 @@ def record_report(
     condition_id: str | None = None,
     review_json: str | None = None,
     feedback_dir: str | None = None,
+    dedupe: bool = False,
 ) -> str:
-    """写一条上报单。`report_id = "p" + sha256(stage+run_id+created_at)[:12]`。"""
+    """写一条上报单。`report_id = "p" + sha256(stage+run_id+created_at)[:12]`。
+
+    `dedupe=True` 时先按 `stage + geometry_id + condition_id` 查一条还开着的单，
+    有就直接返回它——`watch.py` 的修理超时扫描每轮都会发现同一行，不能每轮开一张新单。
+    """
     if stage not in STAGES:
         raise WriteError(f"未知阶段：{stage}")
+    if dedupe:
+        existing = conn.execute(
+            "SELECT report_id FROM report WHERE stage=? AND geometry_id=?"
+            " AND condition_id IS ? AND status='open'",
+            (stage, geometry_id, condition_id),
+        ).fetchone()
+        if existing is not None:
+            return existing["report_id"]
     created = utc_sql()
     report_id = _unique_id(conn, "report", "report_id", ID_PREFIX["report"],
                            f"{stage}{run_id}{created}")
@@ -1678,35 +2567,35 @@ REQUEUE_STAGE_KIND = {
     "fluent_solution": "solution",
     "datcom": "datcom",
 }
-REQUEUE_ALLOWED_STATUSES = ("rejected", "cancelled", "pending")
+# 能被人为重排的状态：`queued` 是审核通过，重排等于让它重跑，允许（人要重算）；
+# `repairing` 是子智能体正在修，重排就是替它决定"照原参数再跑一次"，也允许。
+REQUEUE_ALLOWED_STATUSES = TASK_STATUSES
 
 
 def _requeue_target(conn: sqlite3.Connection, stage: str,
                     geometry_id: str, condition_id: str | None):
-    """定位要重排的那一行，返回 `(status, updates, run_id)`。
+    """定位要重排的那一行，返回 `((table, column), status, run_id, claimed_at)`。
 
-    几何级阶段（建模/网格）读 `geometry_state`；按工况的阶段读 `cfd_task` / `datcom_task`。
-    找不到就报错——不要静默返回"没有可重排的任务"。
+    建模读 `geometry_state`；网格 / 求解 / 低保真读各自的任务表。找不到就报错——
+    不要静默返回"没有可重排的任务"。
     """
-    if stage in ("spaceclaim", "fluent_meshing"):
-        column = "model_status" if stage == "spaceclaim" else "mesh_status"
-        run_column = "model_run_id" if stage == "spaceclaim" else "mesh_run_id"
+    spec = STAGE_TARGET[stage]
+    table, column = spec["table"], spec["status"]
+    if spec["scoped"]:
+        if not condition_id:
+            raise WriteError(f"{stage} 是按工况的任务，必须给 --condition-id")
         row = conn.execute(
-            f"SELECT {column} AS status, {run_column} AS run_id FROM geometry_state"
+            f"SELECT {column} AS status, run_id, claimed_at FROM {table}"
+            " WHERE geometry_id=? AND condition_id=?", (geometry_id, condition_id)).fetchone()
+        if row is None:
+            raise WriteError(f"库里没有 {stage} 任务：{geometry_id} / {condition_id}")
+    else:
+        row = conn.execute(
+            f"SELECT {column} AS status, model_run_id AS run_id, claimed_at FROM {table}"
             " WHERE geometry_id=?", (geometry_id,)).fetchone()
         if row is None:
             raise WriteError(f"库里没有几何 {geometry_id}")
-        return ("geometry_state", column), row["status"], row["run_id"]
-
-    table = "cfd_task" if stage == "fluent_solution" else "datcom_task"
-    if not condition_id:
-        raise WriteError(f"{stage} 是按工况的任务，必须给 --condition-id")
-    row = conn.execute(
-        f"SELECT status, run_id FROM {table} WHERE geometry_id=? AND condition_id=?",
-        (geometry_id, condition_id)).fetchone()
-    if row is None:
-        raise WriteError(f"库里没有 {stage} 任务：{geometry_id} / {condition_id}")
-    return (table, "status"), row["status"], row["run_id"]
+    return (table, column), row["status"], row["run_id"], row["claimed_at"]
 
 
 def requeue_task(
@@ -1718,42 +2607,43 @@ def requeue_task(
     resolve_reports: bool = False,
     reason: str | None = None,
 ) -> dict:
-    """把一条 `rejected` / `cancelled` 的任务放回 `pending`，等 `watch.py` 重排进队列。
+    """把一条任务放回 `pending`，让 `watch.py` / `dispatch.py` 重新领它。
 
-    只动"排队状态"，**不改产物、不删审核历史、不重置重试次数**：重试次数是按 `review`
-    表里的拒绝记录算出来的，清它等于篡改历史。真跑过预算就先按预算停手，
-    由人来判断是环境问题还是模型问题。
+    只动"排队位置"和领取标记，**不改产物、不删审核历史、不重置重试次数**：重试次数
+    是按 `review` 表里的拒绝记录算出来的，清它等于篡改历史。
     """
     if stage not in STAGES:
         raise WriteError(f"未知阶段：{stage}（只能是 {STAGES}）")
-    (table, column), status, run_id = _requeue_target(conn, stage, geometry_id, condition_id)
+    (table, column), status, run_id, claimed_at = _requeue_target(
+        conn, stage, geometry_id, condition_id)
 
-    if status == "running":
-        raise WriteError(f"任务还在 running（run_id {run_id}）：先 `control.py stop` 收掉进程再重排")
-    if status not in REQUEUE_ALLOWED_STATUSES:
-        raise WriteError(
-            f"{stage} / {geometry_id} 当前是 {status}，只有 {REQUEUE_ALLOWED_STATUSES} 能重排")
-
-    # 遗留的 pid 登记必须先清掉：它还占着 run_id，会让新任务领不到号。
-    if run_id:
-        stale = conn.execute("SELECT pid FROM task_process WHERE run_id=?", (run_id,)).fetchone()
-        if stale is not None:
-            if pid_alive(int(stale["pid"])):
-                raise WriteError(
-                    f"run_id {run_id} 的进程 {stale['pid']} 还活着：先 `control.py stop` 再重排")
-            conn.execute("DELETE FROM task_process WHERE run_id=?", (run_id,))
+    if claimed_at:
+        pid_row = conn.execute("SELECT pid FROM task_process WHERE run_id=?",
+                               (run_id,)).fetchone() if run_id else None
+        if pid_row is not None and pid_alive(int(pid_row["pid"])):
+            raise WriteError(
+                f"{stage} / {geometry_id} 已被领取（pid {pid_row['pid']} 还活着）："
+                "先 `control.py stop` 收掉进程再重排")
+        # 领取标记还在但进程已死：清掉，否则新任务领不到
+        conn.execute(f"UPDATE {table} SET claimed_at=NULL WHERE "
+                     + ("geometry_id=?" if column == "model_status"
+                        else "geometry_id=? AND condition_id=?"),
+                     (geometry_id,) if column == "model_status" else (geometry_id, condition_id))
 
     kind = REQUEUE_STAGE_KIND[stage]
     rejections = _rejections_since_last_pass(conn, kind, geometry_id, condition_id)
     stamp = utc_sql()
-    if table == "geometry_state":
-        # run_id 保留：它记的是"哪一次被否了"，是证据；领取时会生成新的 run_id 覆盖它
+    # run_id 保留：它记的是"哪一次被否了"，是证据；领取时会生成新的 run_id 覆盖它
+    # repair_started_at 清成 NULL：重排后它已经不在 repairing，"这段修理"结束了。
+    if column == "model_status":
         conn.execute(
-            f"UPDATE geometry_state SET {column}='pending', updated_at=? WHERE geometry_id=?",
+            f"UPDATE geometry_state SET {column}='pending', {REPAIR_STARTED_COLUMN}=NULL,"
+            " updated_at=? WHERE geometry_id=?",
             (stamp, geometry_id))
     else:
         conn.execute(
-            f"UPDATE {table} SET status='pending', updated_at=? WHERE geometry_id=? AND condition_id=?",
+            f"UPDATE {table} SET status='pending', {REPAIR_STARTED_COLUMN}=NULL,"
+            " updated_at=? WHERE geometry_id=? AND condition_id=?",
             (stamp, geometry_id, condition_id))
 
     resolved: list[str] = []
@@ -1802,33 +2692,139 @@ def clear_task_process(conn: sqlite3.Connection, run_id: str) -> None:
     conn.commit()
 
 
+def _age_seconds(stamp: str | None) -> float:
+    """`YYYY-MM-DDTHH:MM:SSZ` 距今多少秒；解析不了返回 `inf`（当作从未更新）。"""
+    if not stamp:
+        return float("inf")
+    try:
+        moment = datetime.strptime(stamp, SQL_TIMESTAMP_FORMAT).replace(tzinfo=TIMEZONE)
+    except (TypeError, ValueError):
+        return float("inf")
+    return datetime.now(TIMEZONE).timestamp() - moment.timestamp()
+
+
 def reclaim_zombies(conn: sqlite3.Connection) -> list[dict]:
-    """僵死回收：`task_process` 里 pid 已不存在 → `rejected` + `attempts+1` + 上报单。"""
+    """僵死回收：`claimed_at` 还挂着，但进程已经没了。
+
+    两种来源：
+      1. `task_process` 里登记过 pid，而该 pid 已不存在；
+      2. **领取后没来得及登记 pid 就崩了**（子进程起不来、依赖缺失等）：
+         `claimed_at` 挂着但 `task_process` 里没有这一行，且已超过 `CLAIM_ORPHAN_SECONDS`。
+
+    处置：置 `repairing` + `attempts+1` + 清 `claimed_at` + 写一条去重的上报单。
+    置 `repairing` 而不是 `pending` 是刻意的——进程非正常消失属于"需要人看"的失败，
+    自动重排队会让坏环境反复烧机器；`repairing` 由子智能体接手，超时由
+    `scan_repair_timeouts()` 再报一次。
+    """
     reclaimed: list[dict] = []
+    live_run_ids = {row["run_id"] for row in conn.execute("SELECT run_id FROM task_process")}
+    # ---- 1. 登记过 pid、但进程已消失 ----
     for row in conn.execute("SELECT run_id, pid FROM task_process").fetchall():
         run_id, pid = row["run_id"], int(row["pid"])
         if pid_alive(pid):
             continue
         run = resolve_run(conn, run_id)
         conn.execute("DELETE FROM task_process WHERE run_id=?", (run_id,))
+        conn.commit()
+        live_run_ids.discard(run_id)
         if run is None:
-            conn.commit()
             reclaimed.append({"run_id": run_id, "pid": pid, "stage": None})
             continue
+        claimed = is_claimed(conn, run["table"], run["geometry_id"], run["condition_id"])
+        if not claimed:
+            # 进程正常结束、登记也已清：这条 pid 记录是上一次运行的残留，不用管。
+            continue
         attempts = _attempts_of(conn, run)
-        mark_task(conn, run, "rejected", bump_attempts=True)
-        record_report(
+        mark_task(conn, run, "repairing", bump_attempts=True)
+        report_id = record_report(
             conn, stage=run["stage"], geometry_id=run["geometry_id"], run_id=run_id,
-            attempts=attempts + 1, condition_id=run["condition_id"],
-            last_error=f"进程 {pid} 已不存在，任务停在 running（僵死回收）",
+            attempts=attempts + 1, condition_id=run["condition_id"], dedupe=True,
+            last_error=f"进程 {pid} 已不存在但领取标记未清（僵死回收）→ repairing",
         )
-        reclaimed.append({"run_id": run_id, "pid": pid, **run})
+        reclaimed.append({"run_id": run_id, "pid": pid, "report_id": report_id, **run})
+
+    # ---- 2. 领取了却从没登记 pid（子进程在启动前就崩了）----
+    for stage, spec in STAGE_TARGET.items():
+        table, column = spec["table"], spec["status"]
+        run_column = "model_run_id" if table == "geometry_state" else "run_id"
+        rows = conn.execute(
+            f"SELECT *, {run_column} AS current_run_id FROM {table}"
+            " WHERE claimed_at IS NOT NULL").fetchall()
+        for row in rows:
+            run_id = row["current_run_id"]
+            if run_id and run_id in live_run_ids:
+                continue
+            if _age_seconds(row["claimed_at"]) < CLAIM_ORPHAN_SECONDS:
+                continue
+            condition_id = row["condition_id"] if spec["scoped"] else None
+            run = run_target(stage, row["geometry_id"], condition_id)
+            attempts = _attempts_of(conn, run)
+            mark_task(conn, run, "repairing", bump_attempts=True)
+            report_id = record_report(
+                conn, stage=stage, geometry_id=row["geometry_id"],
+                run_id=run_id or make_run_id(row["geometry_id"],
+                                             condition_id or SHARED_CONDITION_ID,
+                                             taken_run_ids(conn)),
+                attempts=attempts + 1, condition_id=condition_id, dedupe=True,
+                last_error="领取后从未登记 pid（子进程启动前就退出了）→ repairing",
+            )
+            reclaimed.append({"run_id": run_id, "pid": None, "report_id": report_id, **run})
     return reclaimed
+
+
+def scan_repair_timeouts(conn: sqlite3.Connection,
+                         timeout_seconds: float | None = None) -> list[dict]:
+    """修理超时：`repairing` 超过 `REPAIR_TIMEOUT_SECONDS` 还没解决 → 上报主智能体。
+
+    **计时起点是 `repair_started_at`，不是 `updated_at`**。`updated_at` 只是"这一行最后
+    一次被写"的时刻：迁移时旧 rejected 行被映射成 repairing，它的 `updated_at` 还是当年
+    被否决的时间（可能是几周前），拿它判超时等于把历史证据误读成当前故障，每轮都开一张
+    假单。`repair_started_at` 由 `mark_task` 在置 repairing 时写入。
+
+    `repair_started_at IS NULL` 的行**不参与判断**：那是迁移/历史遗留的 repairing，没有
+    "开始修理"这个事件。真要修它，走 `db.py requeue` 或审核侧重新置 repairing。
+
+    按 `stage + geometry_id + condition_id` 去重，所以同一条任务每轮扫到也只开一张单；
+    上报单 `open` 着就说明还没人处理，watcher 会继续在输出里提示。
+    """
+    limit = REPAIR_TIMEOUT_SECONDS if timeout_seconds is None else float(timeout_seconds)
+    created: list[dict] = []
+    for stage, spec in STAGE_TARGET.items():
+        table, column = spec["table"], spec["status"]
+        run_column = _run_column(table)
+        if REPAIR_STARTED_COLUMN not in _table_columns(conn, table):
+            continue                     # 老库还没补列：没有计时起点，不猜
+        rows = conn.execute(
+            f"SELECT *, {run_column} AS current_run_id FROM {table}"
+            f" WHERE {column}='repairing'"
+            f"   AND {REPAIR_STARTED_COLUMN} IS NOT NULL").fetchall()
+        for row in rows:
+            stamp = row[REPAIR_STARTED_COLUMN]
+            if _age_seconds(stamp) <= limit:
+                continue
+            condition_id = row["condition_id"] if spec["scoped"] else None
+            run_id = row["current_run_id"] or make_run_id(
+                row["geometry_id"], condition_id or SHARED_CONDITION_ID, taken_run_ids(conn))
+            minutes = limit / 60
+            report_id = record_report(
+                conn, stage=stage, geometry_id=row["geometry_id"], run_id=run_id,
+                attempts=_attempts_of(conn, {"table": table,
+                                             "geometry_id": row["geometry_id"],
+                                             "condition_id": condition_id}),
+                condition_id=condition_id, dedupe=True,
+                last_error=f"修理超过 {minutes:g} 分钟仍未完成"
+                           f"（{REPAIR_STARTED_COLUMN} {stamp}）",
+            )
+            created.append({"stage": stage, "geometry_id": row["geometry_id"],
+                            "condition_id": condition_id, "report_id": report_id,
+                            "repair_started_at": stamp})
+    conn.commit()
+    return created
 
 
 def _attempts_of(conn: sqlite3.Connection, run: dict) -> int:
     if run["table"] == "geometry_state":
-        return 0                      # 几何阶段没有 attempts 字段，用 report 计数
+        return 0                      # 建模没有 attempts 字段，用 report 计数
     row = conn.execute(
         f"SELECT attempts FROM {run['table']} WHERE geometry_id=? AND condition_id=?",
         (run["geometry_id"], run["condition_id"]),
@@ -1837,40 +2833,48 @@ def _attempts_of(conn: sqlite3.Connection, run: dict) -> int:
 
 
 def revive_deleted_artifacts(conn: sqlite3.Connection) -> list[str]:
-    """产物被 `gc` 删过（路径为 NULL）但又有 `pending` 工况 → 建模/网格回落 `pending`。
+    """产物不在（路径为 NULL）但状态是 `queued` → 回落 `pending`，等重新产出。
 
-    只回退**曾经通过**的阶段（`passed` 且路径为 NULL）。判据故意很窄：
-    - `pending` / `queued` 本来就是等重跑，不用动；
-    - `running` 正在跑，动它会打断；
-    - `rejected` 重跑要走重试预算，不能由 watcher 悄悄重置；
-    - `cancelled` 按约定**永不自动恢复**，必须显式 `start`。
+    典型来源有两个：`gc` 删掉了产物但状态没回退；或 2→3 迁移时把几何级网格值复制到
+    各工况，而那一行本来就没有 `mesh_path`。两种情况都说明"这条记录声称已通过，
+    却没有可交付的文件"，必须重跑。
+
+    只回退**已经通过审核**（`queued`）且路径为 NULL 的行：
+    - `pending` 本来就在等重跑；
+    - `repairing` 的重跑要走重试预算，不能由 watcher 悄悄重置；
+    - 领取中的行（`claimed_at` 非空）不能动，那会打断正在跑的进程。
+
+    网格按工况检查：任意一行是 `queued` 但 `mesh_path` 为 NULL 就回落 `pending`——
+    同一几何只有一个网格产物的时代已经结束。
     """
-    rows = conn.execute(
-        "SELECT s.geometry_id, s.model_status, s.mesh_status, s.model_path, s.mesh_path"
-        " FROM geometry_state s"
-        " WHERE EXISTS (SELECT 1 FROM cfd_task t"
-        "               WHERE t.geometry_id = s.geometry_id AND t.status = 'pending')"
-        "   AND (s.model_path IS NULL OR s.mesh_path IS NULL)"
-    ).fetchall()
-    revived: list[str] = []
     stamp = utc_sql()
+    revived: list[str] = []
+    # ---- 建模：几何级 ----
+    rows = conn.execute(
+        "SELECT s.geometry_id FROM geometry_state s"
+        " WHERE s.model_status='queued' AND s.model_path IS NULL AND s.claimed_at IS NULL"
+        "   AND EXISTS (SELECT 1 FROM cfd_task t"
+        "               WHERE t.geometry_id = s.geometry_id AND t.status='pending')"
+    ).fetchall()
     for row in rows:
-        geometry_id = row["geometry_id"]
-        changed = False
-        if row["model_path"] is None and row["model_status"] == "passed":
-            conn.execute(
-                "UPDATE geometry_state SET model_status='pending', updated_at=? WHERE geometry_id=?",
-                (stamp, geometry_id),
-            )
-            changed = True
-        if row["mesh_path"] is None and row["mesh_status"] == "passed":
-            conn.execute(
-                "UPDATE geometry_state SET mesh_status='pending', updated_at=? WHERE geometry_id=?",
-                (stamp, geometry_id),
-            )
-            changed = True
-        if changed:
-            revived.append(geometry_id)
+        conn.execute(
+            "UPDATE geometry_state SET model_status='pending', updated_at=?"
+            " WHERE geometry_id=?", (stamp, row["geometry_id"]))
+        revived.append(row["geometry_id"])
+    # ---- 网格：按工况 ----
+    # 只复活"建模已过审"的几何：没有模型就没有可重画的东西，留着 pending 只会污染列表。
+    mesh_rows = conn.execute(
+        "SELECT m.geometry_id, m.condition_id FROM mesh_task m"
+        " WHERE m.status='queued' AND m.mesh_path IS NULL AND m.claimed_at IS NULL"
+        "   AND EXISTS (SELECT 1 FROM geometry_state s WHERE s.geometry_id = m.geometry_id"
+        "               AND s.model_status='queued' AND s.model_path IS NOT NULL)"
+    ).fetchall()
+    for row in mesh_rows:
+        conn.execute(
+            "UPDATE mesh_task SET status='pending', updated_at=?"
+            " WHERE geometry_id=? AND condition_id=?",
+            (stamp, row["geometry_id"], row["condition_id"]))
+        revived.append(f"{row['geometry_id']}/{row['condition_id']}")
     conn.commit()
     return revived
 
@@ -2080,19 +3084,23 @@ def _index_view(conn: sqlite3.Connection) -> dict:
     counts = {}
     for table in ("geometry", "condition", "review", "report"):
         counts[table] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-    for table in ("cfd_task", "datcom_task"):
+    for table in ("mesh_task", "cfd_task", "datcom_task"):
         counts[table] = {row["status"]: row["n"] for row in conn.execute(
             f"SELECT status, COUNT(*) AS n FROM {table} GROUP BY status")}
     geometry_rows = []
     for row in conn.execute(
         "SELECT g.geometry_id, g.label, g.fin_section_type, g.nose_shape, g.L, g.D,"
         " g.cg_x_m, g.cg_y_m, g.cg_z_m,"
-        " s.model_status, s.mesh_status, s.model_path, s.mesh_path, s.deletable, s.updated_at"
+        " s.model_status, s.model_path, s.cloud_path, s.deletable, s.updated_at"
         " FROM geometry g LEFT JOIN geometry_state s ON s.geometry_id = g.geometry_id"
         " ORDER BY g.geometry_id"
     ):
         entry = dict(row)
         entry["deletable"] = bool(entry.get("deletable"))
+        entry["mesh_tasks"] = [dict(item) for item in conn.execute(
+            "SELECT condition_id, status, mesh_path, first_height_mm, n_layers, claimed_at"
+            " FROM mesh_task WHERE geometry_id=? ORDER BY condition_id",
+            (row["geometry_id"],))]
         entry["cfd_tasks"] = {item["status"]: item["n"] for item in conn.execute(
             "SELECT status, COUNT(*) AS n FROM cfd_task WHERE geometry_id=? GROUP BY status",
             (row["geometry_id"],))}
@@ -2363,8 +3371,13 @@ def _check_artifact_path(rel_path: str, geometry_id: str, stage: str) -> Path:
 def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
     """把一次审核写进 `review` 表，并按结论推进任务状态。
 
-    **这是唯一的入库凭证**：产物路径、气动系数、`passed` 状态都只在 `verdict='passed'`
-    时写入。连续 `SELF_REPAIR_BUDGET + 1` 次不过就写一条 `open` 上报单并停手。
+    **这是唯一的入库凭证**：产物路径、气动系数、`queued` 状态都只在 `verdict='passed'`
+    时写入；`verdict='rejected'` 把任务置 `repairing`，交给子智能体修。
+    连续 `SELF_REPAIR_BUDGET + 1` 次不过就写一条 `open` 上报单并停手。
+
+    状态映射（三态）：`passed → queued`（审核通过、可被下一流程领取）、
+    `rejected → repairing`（审核不通过、修理中）。领取标记在两条分支里都清掉：
+    审核结束时进程已经退出了。
     """
     kind = payload.get("kind")
     verdict = payload.get("verdict")
@@ -2379,10 +3392,11 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
     run_id = payload.get("run_id")
     if not run_id:
         raise WriteError("审核记录缺少 run_id")
-    if kind in ("solution", "datcom") and not condition_id:
-        raise WriteError(f"{kind} 审核必须给出 condition_id")
-    if kind in ("model", "mesh") and condition_id:
-        raise WriteError(f"{kind} 是按几何审核的，condition_id 必须为空")
+    if kind == "model" and condition_id:
+        raise WriteError("model 是按几何审核的，condition_id 必须为空")
+    if kind in ("mesh", "solution", "datcom") and not condition_id:
+        raise WriteError(f"{kind} 是按工况审核的，必须给出 condition_id"
+                         "（网格按 (geometry_id, condition_id) 一行，见 mesh_task）")
     reviewer = payload.get("reviewer") or "script:review.py"
     checks = payload.get("checks") or []
     if not isinstance(checks, list) or not checks:
@@ -2399,6 +3413,7 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
                            f"{kind}{run_id}{verdict}{created}")
     rejections = _rejections_since_last_pass(conn, kind, geometry_id, condition_id)
     attempts = rejections + (1 if verdict == "rejected" else 0)
+    target_status = "queued" if verdict == "passed" else "repairing"
 
     artifact = payload.get("artifact") or {}
     rel_path = artifact.get("rel_path")
@@ -2431,26 +3446,35 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
     stamp = utc_sql()
     report_id = None
     queue_files: list[str] = []
+    # 审核结论也要维护修理计时：置 repairing 的那一支记下此刻，通过的那一支清空。
+    # 与 `mark_task` 同一口径——`repair_started_at` 只表示"当前这段修理从何时开始"。
+    repair_value = stamp if target_status == "repairing" else None
     if kind == "model":
         if verdict == "passed" and not rel_path:
             raise WriteError("模型审核通过必须给出产物路径")
         conn.execute(
-            "UPDATE geometry_state SET model_status=?, model_path=?, model_run_id=?, updated_at=?"
-            " WHERE geometry_id=?",
-            (("passed" if verdict == "passed" else "rejected"),
+            "UPDATE geometry_state SET model_status=?, model_path=?, model_run_id=?,"
+            f" claimed_at=NULL, {REPAIR_STARTED_COLUMN}=?, updated_at=? WHERE geometry_id=?",
+            (target_status,
              rel_path if verdict == "passed" else None,
              # run_id 一律记下：被否决的运行也要能反查是哪一次、重跑时也不用猜
-             run_id, stamp, geometry_id),
+             run_id, repair_value, stamp, geometry_id),
         )
     elif kind == "mesh":
         if verdict == "passed" and not rel_path:
             raise WriteError("网格审核通过必须给出产物路径")
+        exists = conn.execute(
+            "SELECT 1 FROM mesh_task WHERE geometry_id=? AND condition_id=?",
+            (geometry_id, condition_id)).fetchone()
+        if not exists:
+            raise WriteError(f"mesh_task 里没有 {geometry_id} / {condition_id} 这条网格任务"
+                             "（网格按工况建行，先让 watch.py 建出这一行）")
         conn.execute(
-            "UPDATE geometry_state SET mesh_status=?, mesh_path=?, mesh_run_id=?, updated_at=?"
-            " WHERE geometry_id=?",
-            (("passed" if verdict == "passed" else "rejected"),
-             rel_path if verdict == "passed" else None,
-             run_id, stamp, geometry_id),
+            "UPDATE mesh_task SET status=?, mesh_path=?, run_id=?, review_id=?,"
+            f" claimed_at=NULL, {REPAIR_STARTED_COLUMN}=?, updated_at=?"
+            " WHERE geometry_id=? AND condition_id=?",
+            (target_status, rel_path if verdict == "passed" else None,
+             run_id, review_id, repair_value, stamp, geometry_id, condition_id),
         )
     else:
         table = "cfd_task" if kind == "solution" else "datcom_task"
@@ -2462,11 +3486,12 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
             raise WriteError(f"{table} 里没有 {geometry_id} / {condition_id} 这条任务")
         if verdict == "passed":
             conn.execute(
-                f"UPDATE {table} SET status='passed', CL=?, CD=?, CM=?, run_id=?,"
+                f"UPDATE {table} SET status=?, CL=?, CD=?, CM=?, run_id=?,"
                 " result_dir=COALESCE(?, result_dir), log_path=COALESCE(?, log_path),"
-                " review_id=?, updated_at=? WHERE geometry_id=? AND condition_id=?",
-                (payload.get("CL"), payload.get("CD"), payload.get("CM"), run_id,
-                 payload.get("result_dir"), payload.get("log_path"),
+                f" review_id=?, claimed_at=NULL, {REPAIR_STARTED_COLUMN}=NULL, updated_at=?"
+                " WHERE geometry_id=? AND condition_id=?",
+                (target_status, payload.get("CL"), payload.get("CD"), payload.get("CM"),
+                 run_id, payload.get("result_dir"), payload.get("log_path"),
                  review_id, stamp, geometry_id, condition_id),
             )
             if kind == "solution":
@@ -2478,9 +3503,10 @@ def record_review(conn: sqlite3.Connection, payload: dict) -> dict:
                 )
         else:
             conn.execute(
-                f"UPDATE {table} SET status='rejected', run_id=?, updated_at=?"
+                f"UPDATE {table} SET status=?, run_id=?, claimed_at=NULL,"
+                f" {REPAIR_STARTED_COLUMN}=?, updated_at=?"
                 " WHERE geometry_id=? AND condition_id=?",
-                (run_id, stamp, geometry_id, condition_id),
+                (target_status, run_id, repair_value, stamp, geometry_id, condition_id),
             )
 
     # 超出预算就上报，且只报一次
@@ -2524,50 +3550,90 @@ def queue_directory(queue: str) -> Path:
     return (WORKSPACE_ROOT / relative).resolve()
 
 
-def export_queue(conn: sqlite3.Connection, queue: str, *, prune: bool = True) -> list[str]:
-    """把队列目录重写成数据库的只读视图：一个通过的产物一个指针 JSON。
+def _queue_status_query(queue: str) -> tuple[str, str]:
+    """`(kind, SQL)`：队列对应的审核种类与"该有指针"的行。
 
-    下游领任务只看数据库；这个目录整目录删掉也能重建。产物文件缺失的行直接跳过——
-    指向不存在的文件比没有指针更坏。
+    网格队列按 `(几何, 工况)` 一行，**只认 `status='queued'` 且有 `mesh_path`**——这就
+    是"审核通过且产物已定位"的定义。迁移遗留的旧网格行在 `repair_mesh_migration` 之后
+    是 `pending` 且 `mesh_path IS NULL`，所以天然进不了这个视图。
     """
-    kind = "model" if queue == "scdoc_for_fluent" else "mesh"
-    column, run_column = (
-        ("model_path", "model_run_id") if kind == "model" else ("mesh_path", "mesh_run_id")
-    )
+    if queue == "scdoc_for_fluent":
+        # 建模是几何级的，没有工况列；补一个 NULL 让两条队列的返回列一致。
+        return "model", (
+            "SELECT geometry_id, NULL AS condition_id, model_path AS path,"
+            "       model_run_id AS run_id FROM geometry_state"
+            " WHERE model_status='queued' AND model_run_id IS NOT NULL"
+            "   AND model_path IS NOT NULL ORDER BY geometry_id")
+    return "mesh", (
+        "SELECT geometry_id, condition_id, mesh_path AS path, run_id FROM mesh_task"
+        " WHERE status='queued' AND run_id IS NOT NULL AND mesh_path IS NOT NULL"
+        " ORDER BY geometry_id, condition_id")
+
+
+def queue_entries(conn: sqlite3.Connection, queue: str) -> tuple[str, list[dict]]:
+    """算出队列目录**应该**有哪些指针文件，以及每条被跳过的原因（不写盘、不算哈希）。
+
+    返回值 `(kind, entries)`，每条 entry 含 `name` / `pointer` 以外的行字段与 `path`。
+    跳过规则（指向不存在的文件比没有指针更坏）：
+      * 产物已不在磁盘上；
+      * 库里没有对应的 `verdict='passed'` 审核记录。
+
+    文件名默认 `<run_id>.json`。2→3 迁移遗留的行曾共享同一个几何级 `run_id`，直接拼
+    会互相覆盖，所以撞名时补上 `condition_id`——修复后这种行已不存在，逻辑保留是为了
+    对老库仍然安全。
+    """
+    kind, sql = _queue_status_query(queue)
+    entries: list[dict] = []
+    taken: set[str] = set()
+    for row in conn.execute(sql).fetchall():
+        artifact_path = (WORKSPACE_ROOT / row["path"]).resolve()
+        if not artifact_path.exists():
+            entries.append({"row": row, "skip": f"产物已不在磁盘上（{row['path']}）"})
+            continue
+        review = conn.execute(
+            "SELECT review_id, created_at FROM review WHERE kind=? AND run_id=?"
+            " AND verdict='passed' ORDER BY created_at DESC LIMIT 1",
+            (kind, row["run_id"]),
+        ).fetchone()
+        if review is None:
+            entries.append({"row": row, "skip": "库里没有对应的通过记录"})
+            continue
+        name = f"{row['run_id']}.json"
+        if name in taken:
+            name = f"{row['run_id']}__{row['condition_id']}.json"
+        taken.add(name)
+        entries.append({"row": row, "review": review, "artifact": artifact_path, "name": name})
+    return kind, entries
+
+
+def export_queue(conn: sqlite3.Connection, queue: str, *, prune: bool = True) -> list[str]:
+    """把队列目录重写成数据库的只读视图：一个已通过审核的产物一个指针 JSON。
+
+    下游领任务只看数据库；这个目录整目录删掉也能重建。该有哪些指针由 `queue_entries`
+    决定（产物缺失或没有通过记录的行跳过），库一变就必须重写，否则目录会残留指向
+    未验证产物的指针。
+    """
+    _kind, entries = queue_entries(conn, queue)
     directory = queue_directory(queue)
     directory.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
     expected: set[str] = set()
-    rows = conn.execute(
-        f"SELECT geometry_id, {column} AS path, {run_column} AS run_id FROM geometry_state"
-        f" WHERE {run_column} IS NOT NULL AND {column} IS NOT NULL"
-        " ORDER BY geometry_id"
-    ).fetchall()
-    for row in rows:
-        artifact_path = (WORKSPACE_ROOT / row["path"]).resolve()
-        if not artifact_path.exists():
-            print(f"跳过 {row['run_id']}：产物已不在磁盘上（{row['path']}）", file=sys.stderr)
+    for entry in entries:
+        row = entry["row"]
+        if "skip" in entry:
+            print(f"跳过 {row['run_id']}：{entry['skip']}", file=sys.stderr)
             continue
-        review = conn.execute(
-            "SELECT review_id, created_at FROM review WHERE kind=? AND run_id=? AND verdict='passed'"
-            " ORDER BY created_at DESC LIMIT 1",
-            (kind, row["run_id"]),
-        ).fetchone()
-        if review is None:
-            print(f"跳过 {row['run_id']}：库里没有对应的通过记录", file=sys.stderr)
-            continue
-        fingerprint = file_fingerprint(artifact_path)
         pointer = {
             "schemaVersion": QUEUE_POINTER_SCHEMA_VERSION,
             "queue": queue,
             "run_id": row["run_id"],
             "geometry_id": row["geometry_id"],
-            "condition_id": SHARED_CONDITION_ID,
-            "artifact": fingerprint,
-            "review_id": review["review_id"],
-            "approved_at": review["created_at"],
+            "condition_id": row["condition_id"] or SHARED_CONDITION_ID,
+            "artifact": file_fingerprint(entry["artifact"]),
+            "review_id": entry["review"]["review_id"],
+            "approved_at": entry["review"]["created_at"],
         }
-        target = directory / f"{row['run_id']}.json"
+        target = directory / entry["name"]
         target.write_text(json.dumps(pointer, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         written.append(workspace_rel(target))
         expected.add(target.name)
@@ -2582,7 +3648,11 @@ def export_queue(conn: sqlite3.Connection, queue: str, *, prune: bool = True) ->
 # 13b. 清理：deletable 判定与 gc
 # =============================================================================
 def refresh_deletable(conn: sqlite3.Connection) -> list[str]:
-    """自动判定 `deletable`：该几何至少有一行 `cfd_task`，且所有 `cfd_task` 都 `passed`。
+    """自动判定 `deletable`：该几何至少有一行 `cfd_task`，且所有 `cfd_task` 都已审核通过。
+
+    "审核通过"在三态里是 `queued`（`passed` 这个词已从任务表里删除；`review.verdict`
+    仍是 `passed/rejected`，那是审核结论，不是排队状态）。网格同理：该几何的每一行
+    `mesh_task` 都必须是 `queued`。
 
     人工可以把某一行的 `deletable` 强制置 1（`UPDATE`），这里只负责把自动判定的
     结果写回，不会把人工置的 1 改回 0——只升不降，否则人工决定会被自动规则覆盖。
@@ -2592,14 +3662,19 @@ def refresh_deletable(conn: sqlite3.Connection) -> list[str]:
         "SELECT s.geometry_id, s.deletable,"
         "       (SELECT COUNT(*) FROM cfd_task t WHERE t.geometry_id = s.geometry_id) AS total,"
         "       (SELECT COUNT(*) FROM cfd_task t WHERE t.geometry_id = s.geometry_id"
-        "          AND t.status = 'passed') AS passed"
+        "          AND t.status = 'queued') AS done,"
+        "       (SELECT COUNT(*) FROM mesh_task m WHERE m.geometry_id = s.geometry_id) AS mesh_total,"
+        "       (SELECT COUNT(*) FROM mesh_task m WHERE m.geometry_id = s.geometry_id"
+        "          AND m.status = 'queued' AND m.mesh_path IS NOT NULL) AS mesh_done"
         " FROM geometry_state s"
     ).fetchall()
     stamp = utc_sql()
     for row in rows:
         if row["deletable"]:
             continue
-        if row["total"] > 0 and row["total"] == row["passed"]:
+        tasks_ready = row["total"] > 0 and row["total"] == row["done"]
+        meshes_ready = row["mesh_total"] == 0 or row["mesh_total"] == row["mesh_done"]
+        if tasks_ready and meshes_ready:
             conn.execute(
                 "UPDATE geometry_state SET deletable=1, updated_at=? WHERE geometry_id=?",
                 (stamp, row["geometry_id"]),
@@ -2630,17 +3705,25 @@ def _gc_guard(path: Path, geometry_id: str, stage: str) -> str | None:
 
 
 def gc_candidates(conn: sqlite3.Connection) -> list[dict]:
-    """列出 `deletable=1` 的几何要删哪些文件，以及跳过原因。"""
+    """列出 `deletable=1` 的几何要删哪些文件，以及跳过原因。
+
+    网格按工况有多份（`mesh_task.mesh_path`），所以先按几何汇总所有网格路径，
+    每条路径单独过安全校验。点云不在这个范围内，永远不碰。
+    """
     candidates: list[dict] = []
     rows = conn.execute(
-        "SELECT geometry_id, model_path, mesh_path FROM geometry_state"
-        " WHERE deletable=1 ORDER BY geometry_id"
+        "SELECT gs.geometry_id, gs.model_path,"
+        "       (SELECT GROUP_CONCAT(mesh_path, '|') FROM mesh_task m"
+        "        WHERE m.geometry_id = gs.geometry_id AND m.mesh_path IS NOT NULL) AS mesh_paths"
+        " FROM geometry_state gs WHERE gs.deletable=1 ORDER BY gs.geometry_id"
     ).fetchall()
     for row in rows:
         geometry_id = row["geometry_id"]
         entry = {"geometry_id": geometry_id, "delete": [], "skipped": []}
-        for column, stage in (("model_path", "spaceclaim"), ("mesh_path", "fluent_meshing")):
-            rel = row[column]
+        targets = [("spaceclaim", row["model_path"])]
+        targets += [("fluent_meshing", item)
+                    for item in (row["mesh_paths"] or "").split("|") if item]
+        for stage, rel in targets:
             if not rel:
                 continue
             path = (WORKSPACE_ROOT / rel).resolve()
@@ -2648,10 +3731,12 @@ def gc_candidates(conn: sqlite3.Connection) -> list[dict]:
             if reason:
                 entry["skipped"].append(f"{rel}：{reason}")
                 continue
-            entry["delete"].append(path)
+            if path not in entry["delete"]:
+                entry["delete"].append(path)
             # 同目录里跟这个几何同名的日志一并删；点云不在这个目录，永远不碰
             for sibling in path.parent.glob(f"{geometry_id}_*.log"):
-                entry["delete"].append(sibling)
+                if sibling not in entry["delete"]:
+                    entry["delete"].append(sibling)
         candidates.append(entry)
     return candidates
 
@@ -2684,10 +3769,16 @@ def cmd_gc(args) -> int:
                     pass
                 except OSError as exc:
                     print(f"  删除失败 {workspace_rel(path)}：{exc}", file=sys.stderr)
-            # 产物没了，但"曾经验过"这件事保留：状态仍是 passed，路径与运行号清空
+            # 产物没了，但"曾经审过"这件事保留：状态不回退，路径与运行号清空。
+            # 网格路径按工况逐行清空（同一几何可能有多份网格）。
             conn.execute(
-                "UPDATE geometry_state SET model_path=NULL, mesh_path=NULL, model_run_id=NULL,"
-                " mesh_run_id=NULL, deletable=0, updated_at=? WHERE geometry_id=?",
+                "UPDATE geometry_state SET model_path=NULL, model_run_id=NULL, deletable=0,"
+                " updated_at=? WHERE geometry_id=?",
+                (utc_sql(), entry["geometry_id"]),
+            )
+            conn.execute(
+                "UPDATE mesh_task SET mesh_path=NULL, run_id=NULL, updated_at=?"
+                " WHERE geometry_id=? AND mesh_path IS NOT NULL",
                 (utc_sql(), entry["geometry_id"]),
             )
         conn.commit()
@@ -2759,30 +3850,105 @@ def propose_task(conn: sqlite3.Connection, geometry_identity: dict,
 
 
 # =============================================================================
-# 14. 命令：claim（dispatch.py 用）
+# 14. 命令：claim / repair-timeout（dispatch.py / watch.py 的调试入口）
 # =============================================================================
+CLAIMERS = {
+    "spaceclaim": claim_model,
+    "fluent_meshing": claim_mesh,
+    "fluent_solution": claim_solution,
+    "datcom": claim_datcom_tasks,
+}
+
+
 def cmd_claim(args) -> int:
+    """原子领取一条待处理行，打印含 `run_id` 的 JSON。
+
+    领取会写上 `claimed_at + run_id`，所以并发的两次 `claim` 里只有一个能拿到这条任务。
+    """
     db_path = resolve_database(args.database)
     conn = connect(db_path)
     try:
-        if args.stage in STAGE_STATUS_FIELD:
-            claimed = [
-                {"stage": args.stage, "geometry_id": geometry_id, "condition_id": None}
-                for geometry_id in claim_geometry_stage(conn, args.stage, args.limit)
-            ]
-        elif args.stage == "fluent_solution":
-            claimed = [
-                {"stage": args.stage, "geometry_id": gid, "condition_id": cid}
-                for gid, cid in claim_cfd_tasks(conn, args.limit)
-            ]
-        elif args.stage == "datcom":
-            claimed = [
-                {"stage": args.stage, "geometry_id": gid, "condition_id": cid}
-                for gid, cid in claim_datcom_tasks(conn, args.limit)
-            ]
-        else:
-            raise SystemExit(f"未知阶段：{args.stage}（只能是 {STAGES}）")
+        claimed = CLAIMERS[args.stage](conn, args.limit)
         print(json.dumps(claimed, ensure_ascii=False))
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_repair_timeout(args) -> int:
+    """扫一遍修理超时的行并开上报单（`watch.py` 每轮调用同一个函数）。"""
+    conn = connect(resolve_database(args.database))
+    try:
+        found = scan_repair_timeouts(conn, args.timeout)
+        if not found:
+            print("没有修理超时的任务。")
+            return 0
+        for item in found:
+            target = item["geometry_id"] + (f" / {item['condition_id']}"
+                                            if item["condition_id"] else "")
+            print(f"{item['stage']} {target}：修理超时，已上报 {item['report_id']}"
+                  f"（repair_started_at {item['repair_started_at']}）")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_release_claim(args) -> int:
+    """放弃一次作废的领取（清 claimed_at + 注销 pid + 任务回 pending）。"""
+    conn = connect(resolve_database(args.database))
+    try:
+        result = abandon_claim(conn, args.run_id)
+        if result["stage"] is None:
+            print(f"{result['run_id']}：库里已无对应任务，只清掉了 pid 登记"
+                  f"（pid {result['pid']}）")
+            return 0
+        target = result["geometry_id"] + (f" / {result['condition_id']}"
+                                          if result["condition_id"] else "")
+        print(f"已放弃领取 {result['run_id']}（pid {result['pid'] or '未登记'}）："
+              f"{result['stage']} {target} → pending，run_id / claimed_at 已清")
+        print(f"已开上报单 {result['report_id']}（按阶段+几何+工况去重）")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_repair_mesh_migration(args) -> int:
+    """一次性修数据：把 2→3 迁移留下的"旧几何级网格 = 按工况过审"改回 pending。"""
+    conn = connect(resolve_database(args.database))
+    try:
+        release: list[str] = []
+        if args.release_claim:
+            # 领取中的行由 `MESH_MIGRATION_CONDITION` 的安全阀排除在批量修正之外，
+            # 必须显式列出才动——否则等于替一个可能正在跑的进程改它的 run_id。
+            wanted = set(args.run_id)
+            for row in conn.execute(
+                "SELECT run_id FROM mesh_task"
+                f" WHERE {MESH_MIGRATION_CONDITION_ANY_CLAIM}"
+                " AND claimed_at IS NOT NULL ORDER BY geometry_id, condition_id").fetchall():
+                if row["run_id"] and (not wanted or row["run_id"] in wanted):
+                    release.append(row["run_id"])
+        result = repair_mesh_migration(conn, reset_claim=release)
+        reset = result["reset"]
+        released = result["released_claims"]
+        if not reset:
+            print("没有需要修正的网格行（已是 pending / 无旧几何级网格）。")
+        else:
+            print(f"已修正 {len(reset)} 行 mesh_task → pending（清空 run_id / mesh_path）：")
+            for row in reset:
+                print(f"  {row['geometry_id']} / {row['condition_id']}"
+                      f"（原 {row['status']}，run_id {row['run_id'] or '—'}）")
+        for row in released:
+            print(f"已放弃领取：{row['run_id']}（pid {row['pid'] or '未登记'}）"
+                  f" → {row['stage']} {row['geometry_id']}"
+                  f"{' / ' + row['condition_id'] if row['condition_id'] else ''} pending，"
+                  f"上报 {row['report_id']}")
+        if args.release_claim and not released:
+            print("没有挂着 claimed_at 的旧网格行可放弃。")
+        # 队列目录是库的只读视图，库一变就必须重写，否则里面还留着指向未验证网格的指针
+        for queue in sorted(set(QUEUE_FOR_REVIEW_KIND.values())):
+            written = export_queue(conn, queue)
+            print(f"已按库重写 {queue}：{len(written)} 个指针"
+                  f"（{workspace_rel(queue_directory(queue))}）")
         return 0
     finally:
         conn.close()
@@ -2868,10 +4034,10 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.set_defaults(func=cmd_resolve_report)
 
     requeue = subparsers.add_parser(
-        "requeue", help="把 rejected / cancelled 的任务放回 pending，等 watch.py 重排")
+        "requeue", help="把一条任务放回 pending，等 watch.py / dispatch.py 重新领取")
     requeue.add_argument("--stage", required=True, choices=list(STAGES))
     requeue.add_argument("--geometry-id", required=True)
-    requeue.add_argument("--condition-id", help="求解 / 低保真按工况，必须给")
+    requeue.add_argument("--condition-id", help="网格 / 求解 / 低保真按工况，必须给")
     requeue.add_argument("--resolve-reports", action="store_true",
                          help="同时把这个任务 open 的上报单结掉")
     requeue.add_argument("--reason", help="结上报单时写进 report.resolution")
@@ -2888,10 +4054,39 @@ def build_parser() -> argparse.ArgumentParser:
     control.add_argument("--run-id", help="effective 用")
     control.set_defaults(func=cmd_control)
 
-    claim = subparsers.add_parser("claim", help="领取 queued 之前的那一步：pending → queued")
+    claim = subparsers.add_parser(
+        "claim", help="原子领取一条待处理行（claimed_at + run_id 挡住重复领取）")
     claim.add_argument("--stage", required=True, choices=list(STAGES))
     claim.add_argument("--limit", type=int, default=1)
     claim.set_defaults(func=cmd_claim)
+
+    repair = subparsers.add_parser(
+        "repair-timeout", help="扫 repairing 超时的行并写去重的上报单")
+    repair.add_argument("--timeout", type=float, default=REPAIR_TIMEOUT_SECONDS,
+                        help=f"超时秒数（默认 {REPAIR_TIMEOUT_SECONDS}）")
+    repair.set_defaults(func=cmd_repair_timeout)
+
+    fix_mesh = subparsers.add_parser(
+        "repair-mesh-migration",
+        help="一次性修数据：把 2→3 迁移动过的旧几何级网格改回 pending 并清空路径/运行号",
+        description="修 2→3 迁移留下的『一份几何级旧网格 = 四个工况都审核通过』。"
+                    "判据：first_height_mm IS NULL 且 run_id 是几何级（中段 shared）。"
+                    "置 pending 并清空 run_id / mesh_path / repair_started_at；"
+                    "旧网格文件留在 runs/high/fluent_meshing/<旧 run_id>/ 作历史证据。"
+                    "跑完自动按库重写两个队列目录。")
+    fix_mesh.add_argument("--release-claim", action="store_true",
+                          help="连『还挂着 claimed_at』的旧网格行一起清（同时注销 task_process）")
+    fix_mesh.add_argument("--run-id", action="append", default=[],
+                          help="配合 --release-claim：只释放这个 run_id 的领取登记，可重复")
+    fix_mesh.set_defaults(func=cmd_repair_mesh_migration)
+
+    release = subparsers.add_parser(
+        "release-claim",
+        help="放弃一次作废的领取：清 claimed_at + 注销 pid + 任务回 pending",
+        description="用于『进程已经不在、但 claimed_at 还挂着』的作废运行。"
+                    "拒绝仍然活着的进程（先用 control.py stop 收掉它）；产物文件不动。")
+    release.add_argument("--run-id", required=True, help="要放弃的 run_id")
+    release.set_defaults(func=cmd_release_claim)
 
     gc = subparsers.add_parser("gc", help="清理已通过审核的模型/网格（默认试运行）")
     gc.add_argument("--apply", action="store_true", help="真删；不加只列出将要删什么")

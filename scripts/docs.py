@@ -108,17 +108,21 @@ def load_spaceclaim_schema() -> dict:
 
 def load_thresholds() -> dict:
     import db  # noqa: PLC0415
+    import dispatch  # noqa: PLC0415
     import review  # noqa: PLC0415
+    import watch  # noqa: PLC0415
 
     sys.path.insert(0, str(WORKSPACE_ROOT / "fluent_meshing"))
     import mesh_validation  # noqa: PLC0415
 
     return {
         "自修重试预算": db.SELF_REPAIR_BUDGET,
-        "每阶段并发": 1,
-        "watch 扫描间隔（秒）": 30,
+        "修理超时（秒）": db.REPAIR_TIMEOUT_SECONDS,
+        "每阶段并发": dispatch.CLAIM_LIMIT,
+        "watch 扫描间隔（秒）": watch.SCAN_INTERVAL_SECONDS,
         "最小正交质量下限": mesh_validation.MINIMUM_ORTHOGONAL_QUALITY,
         "外形尺寸容差（m）": review.EXTENTS_TOLERANCE_M,
+        "网格边界层首层高度相对误差上限": review.BL_FIRST_HEIGHT_REL_TOL,
         "求解残差上限": review.RESIDUAL_MAX,
         "系数波动上限": review.FLUCTUATION_MAX_REL,
         "质量流量不平衡上限": review.MASS_IMBALANCE_MAX_REL,

@@ -3,7 +3,8 @@
 
 第一版刻意做小、做诚实：
 
-- 样本 = `cfd_task.status='passed'` 的行（**只用高保真**；DATCOM 留作后续多保真升级）。
+- 样本 = `cfd_task.status='queued'` 的行（三态里 `queued` = 审核通过；**只用高保真**，
+  DATCOM 留作后续多保真升级）。
 - 模型 = **最近邻代理**：把 16 个几何参数 + 3 个工况参数归一化后，按最近的 k 个样本
   取加权平均。它没有可训练的权重，所以 `model_path` 记的是本轮快照而不是权重文件。
 - 不确定度 = 候选点到最近样本的归一化距离。距离越大越"不知道"。
@@ -18,7 +19,7 @@
 -------------------------------------------------------------------------------
 输入
     数据库      命令行 `--database` > 环境变量 `MISSILE_DB` > `workspace.json`（与 db.py 共用）。
-    样本        `cfd_task` 里 `status='passed'` 且 `CL/CD/CM` 齐全的行。
+    样本        `cfd_task` 里 `status='queued'`（审核通过）且 `CL/CD/CM` 齐全的行。
 输出
     `training_round` 一行（`round_id` / `data_version` / `metrics_json` / `proposed_rows`）
     `data_lib/runtime/training/<round_id>/report.json`（本轮明细，可复现）
@@ -59,6 +60,11 @@ CANDIDATE_ALTITUDE = (0.0, 5000.0, 10000.0)
 COEFFICIENTS = ("CL", "CD", "CM")
 
 
+# 样本状态：三态里"审核通过、可被下一流程使用"就是 `queued`（旧 `passed` 已删除）。
+# 训练只吃已通过审核的高保真样本，所以这里必须与 `db.TASK_STATUSES` 对齐。
+SAMPLE_STATUS = "queued"
+assert SAMPLE_STATUS in db.TASK_STATUSES, "SAMPLE_STATUS 必须是三态之一"
+
 # =============================================================================
 # 2. 样本与归一化
 # =============================================================================
@@ -68,14 +74,16 @@ FALLBACK_SCALES = (0.1,) * len(db.GEOMETRY_LENGTH_KEYS) + (1.0, 0.1, 5.0, 5000.0
 
 
 def load_samples(conn) -> list[dict]:
+    """已有真实高保真样本：审核通过（三态里是 `queued`）且三个系数齐全的行。"""
     rows = conn.execute(
         "SELECT g.*, t.geometry_id AS geometry_id, t.condition_id AS condition_id,"
         " c.mach, c.alpha_deg, c.altitude_m, t.CL, t.CD, t.CM"
         " FROM cfd_task t"
         " JOIN geometry g ON g.geometry_id = t.geometry_id"
         " JOIN condition c ON c.condition_id = t.condition_id"
-        " WHERE t.status='passed' AND t.CL IS NOT NULL AND t.CD IS NOT NULL AND t.CM IS NOT NULL"
-        " ORDER BY g.geometry_id, c.mach, c.alpha_deg, c.altitude_m"
+        " WHERE t.status=? AND t.CL IS NOT NULL AND t.CD IS NOT NULL AND t.CM IS NOT NULL"
+        " ORDER BY g.geometry_id, c.mach, c.alpha_deg, c.altitude_m",
+        (SAMPLE_STATUS,),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -170,7 +178,7 @@ def run(argv: list[str] | None = None) -> int:
         samples = load_samples(conn)
         if len(samples) < 2:
             print(f"样本不足（{len(samples)} 条）：先让高保真链路跑出至少 2 条 "
-                  "`cfd_task.status='passed'` 的样本，再训练。")
+                  f"`cfd_task.status='{SAMPLE_STATUS}'`（审核通过）的样本，再训练。")
             return 1
 
         scales = _scales(samples)

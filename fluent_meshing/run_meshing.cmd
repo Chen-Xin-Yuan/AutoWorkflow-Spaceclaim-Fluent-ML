@@ -17,6 +17,10 @@ setlocal enabledelayedexpansion
 rem Inputs / outputs / parameters: paths are relative to this launcher;
 rem %* forwards every run parameter unchanged. The entry script keeps its own
 rem "Input / output / parameter configuration" block for the CLI defaults.
+rem Boundary layer design (--first-height / --layers / --growth-rate /
+rem --y-plus-target / --condition-id) travels inside %*: dispatch.py computes it
+rem per condition from fluent_meshing/boundary_layer.py and passes it through
+rem this launcher unchanged. Nothing is defaulted or rewritten here.
 rem Interpreter: FLUENT_MESH_PYTHON first, then the local .python-path file,
 rem then python 3.10 / 3.11 discovered through py -0p.
 rem Required input: --geometry. Output directory and defaults live in mesh_runner.py.

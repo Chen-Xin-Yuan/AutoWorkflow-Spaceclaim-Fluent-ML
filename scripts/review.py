@@ -6,8 +6,12 @@
 或者加 `--record` 由本文件代为一调（写入路径仍然是 db.py 那一个）。
 
 判据分两级：
-    否决性（blocking=True）——任何一条不过就是 `rejected`
+    否决性（blocking=True）——任何一条不过就是 `verdict='rejected'`（任务置 `repairing`）
     告警性（blocking=False）——只记进 `checks`，不影响结论
+
+注意两个词分属两层，不要混：`review.verdict` 是**审核结论**（`passed` / `rejected`），
+任务表的 `status` 是**排队位置**（`pending` / `repairing` / `queued`）。审核通过
+（`verdict='passed'`）会把任务置 `queued`，审核不通过置 `repairing`。
 
 -------------------------------------------------------------------------------
 输入 / 输出 / 参数配置
@@ -17,6 +21,9 @@
     运行目录        `data_lib/runs/high/<stage>/<run_id>/`（model / mesh / solution）
                     低保真归档 `data_lib/runs/low/<geometry_id>/`（datcom）
     产物            `run.json`、`result.json`、`params.json`、`quality.json` 等，由各阶段脚本写出。
+    边界层设计值    网格审核用 `fluent_meshing/boundary_layer.py` 按该工况重算一遍，
+                    与 `run.json` / `request.json` / `mesh_task` 里记的比对（同一份实现，
+                    不是另一份手抄的数）。
 输出
     审核 JSON       `data_lib/runtime/reviews/<kind>_<run_id>.json`（`--out` 可覆盖）
                     字段：kind / geometry_id / condition_id / run_id / reviewer / verdict / checks / artifact
@@ -27,6 +34,8 @@
     EXTENTS_TOLERANCE_M        外形尺寸容差（米）
     POINT_CLOUD_BLOCKING       点云核对是否否决（P6 之前不否决，见文件内说明）
     ORTHOGONAL_QUALITY_MIN     最小正交质量下限（网格）
+    BL_FIRST_HEIGHT_REL_TOL    首层高度设计值与记录值的相对误差上限（网格）
+    BL_LAYER_TOLERANCE         层数允许的绝对偏差（网格，层）
     CONVERGENCE_*              求解收敛门槛
     质心侧向容差                不在这里重复：写库校验与审核共用 `db.CENTROID_SYMMETRY_TOLERANCE_M`
 覆盖优先级
@@ -74,6 +83,15 @@ MESH_CELL_COUNT_TOLERANCE_REL = 0.50
 REQUIRED_BOUNDARY_ZONES = ("inlet", "outlet", "wall")
 # 网格会话的原始输出；`quality.json` 缺 `bboxM` 时从它解析包围盒（不改动已入账产物）
 TRANSCRIPT_NAME = "validation.trn"
+# 边界层与工况的一致性（网格按 (geometry_id, condition_id) 一行，设计值随工况变）
+BL_FIRST_HEIGHT_REL_TOL = 0.01     # 首层高度：相对误差 ≤ 1%
+BL_GROWTH_RATE_REL_TOL = 0.01      # 增长率：相对误差 ≤ 1%
+BL_LAYER_TOLERANCE = 0            # 层数是整数，必须完全一致
+# 设计计算的唯一实现：审核与派发共用同一份，避免"审核用的公式和跑网格用的一样吗"
+BOUNDARY_LAYER_DIR = "fluent_meshing"
+# run.json / request.json 里记录边界层设计值的键名（与 mesh_runner.py 一致）
+BL_RECORD_KEY = "boundaryLayer"
+CONDITION_RECORD_KEY = "conditionId"
 
 # 求解判据（P5 使用）
 RESIDUAL_MAX = 1e-4
@@ -354,11 +372,14 @@ def _verdict(conn, kind: str, geometry_id: str, condition_id, run_id: str,
 # 4. 其余三个 kind（P3 / P5 / P4 接入）
 # =============================================================================
 def review_mesh(conn, run_id: str) -> dict:
-    """网格审核（§7.2）。十条判据，其中第 10 条（单元数突变）只告警。
+    """网格审核（§7.2）。判据里第 9 条（单元数突变）只告警，其余是否决项。
+
+    网格按 `(geometry_id, condition_id)` 一行，所以 `condition_id` 必须给：判据 10、
+    11 就是"这次网格是不是按这个工况的边界层设计画的"。
 
     产物都在 `runs/high/fluent_meshing/<run_id>/`：`quality.json`、`mesh-inspection.json`、
-    `validation.trn`、`run.json`，以及 `.msh.h5`（`dispatch.py` 传 `--out` 时叫
-    `<geometry_id>_mesh.msh.h5`，手工运行是 Fluent 默认的 `missile_mesh.msh.h5`）。
+    `validation.trn`、`run.json`、`request.json`，以及 `.msh.h5`（`dispatch.py` 传 `--out`
+    时叫 `<geometry_id>_mesh.msh.h5`，手工运行是 Fluent 默认的 `missile_mesh.msh.h5`）。
 
     2026-10-31 已在真机 Fluent 2024 R1 上跑通（449 万单元、OQ_min 0.0738），
     字段名按实际产物校正过两处：
@@ -374,10 +395,11 @@ def review_mesh(conn, run_id: str) -> dict:
     if run["stage"] != "fluent_meshing":
         raise SystemExit(f"run_id {run_id} 属于 {run['stage']}，不是网格阶段")
     geometry_id = run["geometry_id"]
+    condition_id = run["condition_id"]
     run_dir = _run_directory("fluent_meshing", run_id)
     checks: list = []
     if not _check(checks, "运行目录存在", run_dir.is_dir(), str(run_dir)):
-        return _verdict(conn, "mesh", geometry_id, None, run_id, checks, None)
+        return _verdict(conn, "mesh", geometry_id, condition_id, run_id, checks, None)
 
     manifest = {}
     try:
@@ -486,13 +508,102 @@ def review_mesh(conn, run_id: str) -> dict:
                         + ("" if cells_ok else f"（超过 {MESH_CELL_COUNT_TOLERANCE_REL:.0%}）"))
     _check(checks, "单元数较上次通过值未突变（仅告警）", cells_ok, cells_detail, blocking=False)
 
+    # 判据 10/11：这一次网格是不是按**这个工况**的边界层设计画的
+    _check_boundary_layer(conn, checks, manifest, run_dir, geometry_id, condition_id)
+
     # 网格产物：优先按 `<geometry_id>*.msh.h5`（`dispatch.py` 显式传 `--out` 时的名字），
     # 否则退回运行目录里唯一的 `.msh.h5`（Fluent 默认名 `missile_mesh.msh.h5`）。
     mesh_files = sorted(run_dir.glob(f"{geometry_id}*.msh.h5")) or sorted(run_dir.glob("*.msh.h5"))
     artifact = _fingerprint(mesh_files[0]) if mesh_files else None
     _check(checks, "网格文件存在", artifact is not None,
            str(mesh_files[0]) if mesh_files else f"运行目录里没有 .msh.h5：{run_dir}")
-    return _verdict(conn, "mesh", geometry_id, None, run_id, checks, artifact)
+    return _verdict(conn, "mesh", geometry_id, condition_id, run_id, checks, artifact)
+
+
+def _boundary_layer_module():
+    """取 `fluent_meshing/boundary_layer.py`：公式只有那一份，审核不另抄一套。"""
+    directory = db.WORKSPACE_ROOT / BOUNDARY_LAYER_DIR
+    if str(directory) not in sys.path:
+        sys.path.insert(0, str(directory))
+    import boundary_layer  # noqa: PLC0415
+
+    return boundary_layer
+
+
+def _check_boundary_layer(conn, checks: list, manifest: dict, run_dir: Path,
+                          geometry_id: str, condition_id: str | None) -> None:
+    """判据 10/11：`condition_id` 一致 + 首层高度/层数等于该工况的设计值。
+
+    三处记录都要对得上：
+        1. `run.json` 的 `conditionId` == 这条 `mesh_task` 行的 `condition_id`；
+        2. `request.json` 的 `--condition-id` 也是同一个（防止 run.json 被改过）；
+        3. `run.json.boundaryLayer` 的 firstHeightMm / numberOfLayers / growthRate
+           与 `boundary_layer.py` **按该工况重算**的设计值一致（相对误差阈值见配置区）。
+
+    设计要求重新算而不是读 `mesh_task` 里的值，是因为"跑网格时算的对不对"要独立复核：
+    两处都读同一行等于自己证明自己。
+    """
+    # ---- 判据 10：condition_id 一致 ----
+    recorded = manifest.get(CONDITION_RECORD_KEY)
+    request = {}
+    try:
+        request = _read_json(run_dir / "request.json")
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        _check(checks, "request.json 可读（记录本次条件）", False, str(exc))
+    # request.json 是 argparse 的 vars() 转储，键名是 condition_id；
+    # 新版 mesh_runner 另外补写了一份 conditionId，两种都认。
+    request_condition = (request.get(CONDITION_RECORD_KEY)
+                         or request.get("condition_id")) if request else None
+    consistent = bool(condition_id) and recorded == condition_id and request_condition == condition_id
+    _check(checks, "网格的 condition_id 与该 mesh_task 行一致", consistent,
+           f"mesh_task={condition_id} run.json={recorded} request.json={request_condition}"
+           "（不一致说明这份网格是给别的工况画的）")
+
+    # ---- 判据 11：首层高度 / 层数 / 增长率 = 该工况的设计值 ----
+    design: dict = {}
+    design_error = None
+    try:
+        design = _boundary_layer_module().design_for_condition(
+            conn, geometry_id, condition_id).as_dict()
+    except Exception as exc:                       # noqa: BLE001  （缺几何/工况都算否决）
+        design_error = f"{type(exc).__name__}: {exc}"
+    if design_error:
+        _check(checks, "边界层设计值可按该工况复算", False, design_error)
+        return
+    _check(checks, "边界层设计值可按该工况复算", True,
+           f"首层 {design['first_height_mm']:.6g} mm / {design['n_layers']} 层 / "
+           f"增长率 {design['growth_rate']:g}（y+ {design['y_plus_target']:g}）")
+
+    recorded_bl = manifest.get(BL_RECORD_KEY) or {}
+    if not recorded_bl:
+        _check(checks, "run.json 记录了本次边界层设计值", False,
+               "缺 boundaryLayer：网格可能是按固定 P_BOUNDARY_LAYER 画的（不是按工况）")
+        return
+    _check(checks, "run.json 记录了本次边界层设计值", True, json.dumps(recorded_bl, ensure_ascii=False))
+
+    pairs = (
+        ("首层高度", recorded_bl.get("firstHeightMm"), design["first_height_mm"],
+         BL_FIRST_HEIGHT_REL_TOL, "mm"),
+        ("增长率", recorded_bl.get("growthRate"), design["growth_rate"],
+         BL_GROWTH_RATE_REL_TOL, ""),
+        ("层数", recorded_bl.get("numberOfLayers"), design["n_layers"],
+         None, "层"),
+    )
+    for label, actual, wanted, rel_tol, unit in pairs:
+        if actual is None or wanted is None:
+            _check(checks, f"边界层{label}等于该工况设计值", False,
+                   f"记录值 {actual!r} / 设计值 {wanted!r}（缺一项就无法比对）")
+            continue
+        if rel_tol is None:
+            ok = int(actual) == int(wanted)
+            detail = f"记录 {actual} {unit} / 设计 {wanted} {unit}（要求完全一致）"
+        else:
+            gap = abs(float(actual) - float(wanted))
+            relative = gap / abs(float(wanted)) if float(wanted) else float("inf")
+            ok = relative <= rel_tol
+            detail = (f"记录 {float(actual):.6g}{unit} / 设计 {float(wanted):.6g}{unit}"
+                      f"（差 {relative:.4%}，阈值 {rel_tol:.0%}）")
+        _check(checks, f"边界层{label}等于该工况设计值", ok, detail)
 
 
 CELL_COUNT_CHECK_NAME = "单元数与导出文件一致"
@@ -627,9 +738,11 @@ def review_solution(conn, run_id: str) -> dict:
            f"status={result.get('status')} converged={result.get('converged')}")
 
     # 与 DATCOM 对比：只告警不否决（跨声速区差 20–40% 属正常）
+    # 三态里"已通过审核"是 `queued`（旧 `passed` 已删除）
     datcom = conn.execute(
-        "SELECT CL, CD, CM FROM datcom_task WHERE geometry_id=? AND condition_id=? AND status='passed'",
-        (geometry_id, condition_id),
+        "SELECT CL, CD, CM FROM datcom_task WHERE geometry_id=? AND condition_id=?"
+        " AND status=?",
+        (geometry_id, condition_id, "queued"),
     ).fetchone()
     if datcom is not None:
         deltas = {}
@@ -789,8 +902,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     conn = db.connect(db.resolve_database(args.database))
     try:
-        # 已经 passed 的任务再跑一次审核会把状态打回 rejected 并清空产物路径。
-        # 这种回归只应在显式 --force 时发生。
+        # 已经 queued（审核通过）的任务再跑一次审核会把状态打回 repairing 并清空产物
+        # 路径。这种回归只应在显式 --force 时发生。
         run = db.resolve_run(conn, args.run_id)
         if run is not None and not args.force:
             row = conn.execute(
@@ -800,8 +913,8 @@ def main(argv: list[str] | None = None) -> int:
                 (run["geometry_id"],) if run["table"] == "geometry_state"
                 else (run["geometry_id"], run["condition_id"]),
             ).fetchone()
-            if row is not None and row["status"] == "passed":
-                print(f"{args.run_id} 已经 passed：重跑审核会把它打回 rejected。"
+            if row is not None and row["status"] == "queued":
+                print(f"{args.run_id} 已经 queued（审核通过）：重跑审核会把它打回 repairing。"
                       "确认要重审就加 --force --force-reason \"<理由>\"。", file=sys.stderr)
                 return 2
         if args.kind == "model":

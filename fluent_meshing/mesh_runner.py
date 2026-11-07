@@ -20,6 +20,11 @@ from mesh_validation import report_mesh, verify_export
 # workspace_runtime.py 管理；路径仍在每次运行时解析。
 # 下列日志、request.json 和工作流文件名属于既有产物约定，修改时需同步
 # 消费这些文件的脚本/工具；run.json 协议名由 workspace_runtime.py 定义。
+# 边界层设计值（--first-height / --layers / --growth-rate / --y-plus-target /
+# --condition-id）由调用方按工况算好传进来（fluent_meshing/boundary_layer.py）；
+# 不给时回落到 mesh_missile.P_BOUNDARY_LAYER 的固定值，但那样同一几何各工况会共用
+# 一套边界层，只应作为手工调试用。这些值同时写进 request.json 与 run.json 的
+# `boundaryLayer` / `conditionId`，供 review.py 按工况复核。
 # Fluent 计算进程数。这是 `-t`，不是线程数：一个进程一个物理核。
 # 本机是 i7-14650HX，16 个物理核 = 8 个 P 核（带超线程，16 线程）+ 8 个 E 核，
 # 共 24 个逻辑处理器。取 12 是给 Windows、Fluent 主进程、许可证服务和 SpaceClaim
@@ -41,6 +46,9 @@ FLUENT_PRODUCT_VERSION = '24.1'
 FLUENT_DIMENSION = '3d'
 FLUENT_PRECISION = 'double'
 FLUENT_WORKFLOW_TYPE = 'Watertight Geometry'
+# request.json / run.json 里记录边界层设计值的键名（review.py 按同一组键读回）
+BOUNDARY_LAYER_RECORD_KEY = 'boundaryLayer'
+CONDITION_RECORD_KEY = 'conditionId'
 
 
 def options(module):
@@ -52,6 +60,17 @@ def options(module):
     parser.add_argument('--run-id', help='Run id from the database (<geometry_id>__<condition_id>__<timestamp>); '
                                          'defaults to a generated run-<timestamp>-<short> id')
     parser.add_argument('--out', help='Mesh output file; must not already exist')
+    # 边界层设计值：不给就回落到 mesh_missile.P_BOUNDARY_LAYER（固定值，手工调试用）
+    parser.add_argument('--first-height', type=float, default=None,
+                        help='Mesh first layer height (mm); default: mesh_missile.P_BOUNDARY_LAYER')
+    parser.add_argument('--layers', type=int, default=None,
+                        help='Boundary layer count; default: mesh_missile.P_BOUNDARY_LAYER')
+    parser.add_argument('--growth-rate', type=float, default=None,
+                        help='Boundary layer growth ratio; default: mesh_missile.P_BOUNDARY_LAYER')
+    parser.add_argument('--y-plus-target', type=float, default=None,
+                        help='Design y+ target, recorded for traceability only')
+    parser.add_argument('--condition-id', default=None,
+                        help='Condition id this mesh is built for; recorded in request.json / run.json')
     parser.add_argument('--start-timeout', type=int, default=DEFAULT_START_TIMEOUT)
     parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument('--keep-fluent', action='store_true')
@@ -64,6 +83,17 @@ def options(module):
     # workflow is the single supported profile.
     parsed.profile = 'recorded'
     return parsed
+
+
+def boundary_layer_arguments(opts):
+    """把命令行里的边界层选项收成一个记录用字典（只保留真正给了的值）。"""
+    values = {
+        'firstHeightMm': opts.first_height,
+        'numberOfLayers': opts.layers,
+        'growthRate': opts.growth_rate,
+        'yPlusTarget': opts.y_plus_target,
+    }
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def execute_task(module, log, wf, name, arguments=None):
@@ -102,7 +132,23 @@ def worker(module, opts):
         if opts.processors <= 0 or opts.start_timeout <= 0 or opts.timeout <= 0:
             raise ValueError('Processor count and timeout limits must be positive')
         run.check_input(opts.geometry)
-        (run.directory / REQUEST_NAME).write_text(json.dumps({key: value for key, value in vars(opts).items() if key != 'worker'}, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+        # 本次网格对应的工况与边界层设计值：先写进运行记录，再真正拿去覆盖
+        # P_BOUNDARY_LAYER。写在这里是为了失败时 run.json 里也能查到"本来要画什么"。
+        boundary_layer = boundary_layer_arguments(opts)
+        run.record['conditionId'] = opts.condition_id
+        run.record[BOUNDARY_LAYER_RECORD_KEY] = boundary_layer
+        if boundary_layer:
+            run.record['boundaryLayerSource'] = 'cli'
+        else:
+            run.record['boundaryLayerSource'] = 'mesh_missile.P_BOUNDARY_LAYER'
+        run.save()
+        request_payload = {key: value for key, value in vars(opts).items() if key != 'worker'}
+        # `--condition-id` 的 argv 键是 condition_id（argparse 的默认 dest）；
+        # 另外写一份驼峰名，和 run.json 的 conditionId 对齐，review 读哪一份都能对上。
+        request_payload[CONDITION_RECORD_KEY] = opts.condition_id
+        request_payload[BOUNDARY_LAYER_RECORD_KEY] = boundary_layer
+        (run.directory / REQUEST_NAME).write_text(
+            json.dumps(request_payload, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         output = Path(opts.out).resolve() if opts.out else run.directory / module.MESH_NAME
         protected = run.root / 'DATCOM'
         if output == protected or protected in output.parents:
@@ -112,7 +158,14 @@ def worker(module, opts):
         output.parent.mkdir(parents=True, exist_ok=True)
         module.GEOMETRY_FILE = str(Path(opts.geometry).resolve())
         module.STOP_AFTER, module.DRAW_SIZE_CONTROL = opts.stop_after, opts.draw_size_control
+        # 边界层设计值按本次运行覆盖 P_BOUNDARY_LAYER（不给就保持模块默认值）
+        module.BOUNDARY_LAYER_OVERRIDES = {
+            'FirstHeight': opts.first_height,
+            'NumberOfLayers': opts.layers,
+            'GrowthRate': opts.growth_rate,
+        }
         log('profile:', opts.profile, 'processors:', opts.processors)
+        log('condition:', opts.condition_id, 'boundary layer:', json.dumps(boundary_layer))
         log('input:', relative(run.root, opts.geometry))
         import ansys.fluent.core as pyfluent
         module.ensure_writable_appdata(log, str(run.directory))

@@ -204,11 +204,17 @@ REQUIRED_BOUNDARY_ZONES = ["inlet", "wall", "outlet"]
 MISSILE_ZONE_HINT = ["missile-zone", "missile"]
 
 # 6. Add Boundary Layers (TaskObject10 -> TaskObject17 / last-ratio_1)
+# 下列 FirstHeight / NumberOfLayers / GrowthRate 是**手工调试用的固定回落值**。
+# 正式派发时由 mesh_runner.py 的 --first-height / --layers / --growth-rate 覆盖
+# （值来自 fluent_meshing/boundary_layer.py 按工况算出的设计），并在 request.json /
+# run.json 的 boundaryLayer 里留证；同一几何不同工况的首层高度本来就不同，
+# 共用这一组固定值会有工况落在 y+ 目标之外。
 P_BOUNDARY_LAYER = {
     "BLControlName": "last-ratio_1",
     "OffsetMethodType": "last-ratio",
     "FirstHeight": 0.07,
     "NumberOfLayers": 12,
+    "GrowthRate": 1.2,
     "LocalPrismPreferences": {"Continuous": "Stair Step"},
     "FaceScope": {"RegionsType": "fluid-regions"},
     "BLRegionList": [FALLBACK_REGION_NAME],
@@ -219,6 +225,13 @@ P_BOUNDARY_LAYER = {
         "wall",
         "outlet",
     ],
+}
+# 本次运行的边界层覆盖值（mesh_runner.py 在 worker 启动时填写；None = 不覆盖）。
+# 只在进程内生效，不改上面的模块级默认值。
+BOUNDARY_LAYER_OVERRIDES = {
+    "FirstHeight": None,
+    "NumberOfLayers": None,
+    "GrowthRate": None,
 }
 
 # 7. Generate the Volume Mesh (TaskObject11 / GenerateTheVolumeMeshWTM)
@@ -581,6 +594,27 @@ def step_boundary_layers(log: Logger, meshing, wf, region_names: list) -> None:
 
     args = {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
             for k, v in P_BOUNDARY_LAYER.items()}
+    # 按工况算出的边界层设计值覆盖固定值（mesh_runner.py 由命令行传入）。
+    # 覆盖只发生在本次进程内，不改模块级 P_BOUNDARY_LAYER：同一进程不会画两个工况，
+    # 但手工 `--stop-after` 分段调用仍要靠模块默认值。
+    overrides = BOUNDARY_LAYER_OVERRIDES or {}
+    applied = {}
+    for key, value in overrides.items():
+        if value is None:
+            continue
+        args[key] = value
+        applied[key] = value
+    if applied:
+        log("    boundary layer overrides (per-condition design): " + json.dumps(applied))
+    else:
+        log("    boundary layer uses P_BOUNDARY_LAYER defaults: "
+            + json.dumps({k: P_BOUNDARY_LAYER.get(k) for k in
+                          ("FirstHeight", "NumberOfLayers", "GrowthRate")}))
+    # GrowthRate 不在原 P_BOUNDARY_LAYER 里（工作流用 last-ratio 偏移法）；给了就一起写，
+    # Fluent 认得 NumberOfLayers + GrowthRate 这一对。
+    args.setdefault("GrowthRate", overrides.get("GrowthRate") or P_BOUNDARY_LAYER.get("GrowthRate"))
+    if args.get("GrowthRate") is None:
+        args.pop("GrowthRate", None)
     args["BLRegionList"] = list(region_names)
     args["AddChild"] = "yes"
 

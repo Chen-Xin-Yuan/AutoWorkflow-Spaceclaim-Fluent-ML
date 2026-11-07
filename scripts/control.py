@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 """启停开关：主智能体（或人）对工作流、阶段、单条任务执行 `start` / `pause` / `stop`。
 
-三种状态与优先级：
+三种开关状态与优先级：
 
     running   正常领取并执行
     paused    不再领新任务，**当前任务允许跑完**（排空式暂停）
-    stopped   不再领新任务，并终止 `task_process` 里在跑的进程树；任务置 `cancelled`
+    stopped   不再领新任务，并终止 `task_process` 里在跑的进程树；任务置 `repairing`
 
-优先级 `task` > `stage` > `workflow`。`stopped` / `cancelled` **不会自动恢复**，
-必须显式 `start`。
+注意 `control` 表的三个词（running / paused / stopped）是**开关**，与任务的排队状态
+（`pending` / `repairing` / `queued`）是两回事，不要混。
+
+**`stop` 之后任务落到哪**：任务状态词表只剩三态，旧的 `cancelled` 已删除。被杀掉的
+任务一律置 `repairing`（= 需要人/子智能体看，不能自动重排队，否则坏环境会反复烧机），
+并写一条 `open` 的 `report` 说明"被 stop 终止"。要把它们放回队列，用
+`python scripts/db.py requeue --stage <阶段> --geometry-id <id> [--condition-id <id>]
+--resolve-reports --reason "..."`。这样"叫停"和"自动恢复"仍然是两件事。
 
 终止进程树不走 `taskkill`：某些会话里 `tasklist` / `taskkill` 会被系统层拒绝
 （返回 `Access denied`），而 `OpenProcess(TERMINATE)` + `TerminateProcess` 与
@@ -23,12 +29,13 @@
     `control`   表：本文件写入；`watch.py` / `dispatch.py` 读取生效状态。
     `task_process` 表：要终止的进程。
 输出
-    只改库（`control` / `task_process` 以及任务状态列），不写文件、不删产物。
+    只改库（`control` / `task_process` / `report` 以及任务状态列），不写文件、不删产物。
     `stop` 之后产物留在 `runs/` 里，不入库也不删除，人工判断是否保留。
 参数配置
     KILL_TIMEOUT_SECONDS   终止进程树后等它消失的上限（验收要求 5 秒内消失）
     KILL_POLL_SECONDS      轮询间隔
     KILL_EXIT_CODE         强杀时写进目标进程的退出码
+    STOPPED_TASK_STATUS    `stop` 之后任务落到哪个状态（只能是 `db.TASK_STATUSES` 之一）
     STAGE_WORKFLOW         阶段 → 工作流，决定按工作流停哪些阶段
     PROCESS_* / TH32CS_* / STILL_ACTIVE / ERROR_*（见 §1）
                            Win32 固定常量，不是可调参数，不要按业务需要改
@@ -57,12 +64,17 @@ import db  # noqa: E402  （同目录的 scripts/db.py，唯一的写库入口�
 KILL_TIMEOUT_SECONDS = 5.0
 KILL_POLL_SECONDS = 0.2
 KILL_EXIT_CODE = 1
+# `stop` 之后任务落到哪个状态。三态里没有 cancelled：被杀掉的任务置 repairing
+# （需要人看，不自动重排队），并写一条 open 的 report 说明原因。
+STOPPED_TASK_STATUS = "repairing"
+STOPPED_REPORT_REASON = "被 control.py stop 终止（产物保留在 runs/，未入库）"
 STAGE_WORKFLOW = {
     "spaceclaim": "high",
     "fluent_meshing": "high",
     "fluent_solution": "high",
     "datcom": "low",
 }
+assert STOPPED_TASK_STATUS in db.TASK_STATUSES, "STOPPED_TASK_STATUS 必须是三态之一"
 
 # Win32 固定常量（协议值，不是可调参数）
 PROCESS_TERMINATE = 0x0001
@@ -238,7 +250,7 @@ def cmd_set(args, state: str) -> int:
 
         # ---- stopped：终止范围内的进程树 ----
         kind, name = db.parse_target(args.target)
-        killed, cancelled, failed = [], [], []
+        killed, stopped, failed = [], [], []
         for row in conn.execute("SELECT run_id, pid FROM task_process").fetchall():
             run_id, pid = row["run_id"], int(row["pid"])
             run = db.resolve_run(conn, run_id)
@@ -247,22 +259,31 @@ def cmd_set(args, state: str) -> int:
             if db.pid_alive(pid):
                 kill_tree(pid)
             if not wait_gone(pid):
-                # 进程没死就绝不标 cancelled、也不删 pid 登记：
+                # 进程没死就绝不标状态、也不删 pid 登记：
                 # 否则"已叫停"是假话，而且再也找不到它去补刀。
                 failed.append(f"pid {pid}（{run_id}）")
                 continue
             if run is not None:
-                db.mark_task(conn, run, "cancelled")
-                cancelled.append(f"{run['stage']}:{run_id}")
+                # 三态里没有 cancelled：被杀掉的任务置 repairing（不自动重排队），
+                # 并开一条 open 的 report 让主智能体看见。要重跑走 db.py requeue。
+                db.mark_task(conn, run, STOPPED_TASK_STATUS, bump_attempts=True)
+                db.record_report(
+                    conn, stage=run["stage"], geometry_id=run["geometry_id"], run_id=run_id,
+                    attempts=max(1, _attempts_of(conn, run)) + 1,
+                    condition_id=run["condition_id"], dedupe=True,
+                    last_error=f"{STOPPED_REPORT_REASON}（pid {pid}，run_id {run_id}）",
+                )
+                stopped.append(f"{run['stage']}:{run_id}")
             conn.execute("DELETE FROM task_process WHERE run_id=?", (run_id,))
             conn.commit()
             killed.append(f"pid {pid}（已退出）")
         if killed:
             print("已终止：" + "、".join(killed))
-        if cancelled:
-            print("已置 cancelled：" + "、".join(cancelled) + "（产物保留在 runs/，不入库）")
+        if stopped:
+            print(f"已置 {STOPPED_TASK_STATUS}（并写 open 上报单）：" + "、".join(stopped)
+                  + "（产物保留在 runs/，不入库；重跑用 db.py requeue）")
         if failed:
-            print("终止失败，任务仍为 running，pid 登记保留：" + "、".join(failed))
+            print("终止失败，任务状态未改，pid 登记保留：" + "、".join(failed))
             print("  常见原因是当前进程权限不足；请在有权限的终端重跑同一条命令，"
                   "或手工结束该进程后再执行一次 stop。", file=sys.stderr)
             return 1
@@ -271,6 +292,16 @@ def cmd_set(args, state: str) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _attempts_of(conn, run: dict) -> int:
+    """读一条任务行现有的 attempts（几何级建模没有这一列，按 0 计）。"""
+    if run["table"] == "geometry_state":
+        return 0
+    row = conn.execute(
+        f"SELECT attempts FROM {run['table']} WHERE geometry_id=? AND condition_id=?",
+        (run["geometry_id"], run["condition_id"])).fetchone()
+    return int(row["attempts"]) if row else 0
 
 
 def _scope_of(target: str) -> dict:
@@ -314,20 +345,24 @@ def cmd_status(args) -> int:
         print("\n== 任务计数 ==")
         counts = [
             ("建模", "geometry_state", "model_status"),
-            ("网格", "geometry_state", "mesh_status"),
+            ("网格", "mesh_task", "status"),
             ("求解", "cfd_task", "status"),
             ("低保真", "datcom_task", "status"),
         ]
         header = f"  {'':10}" + "".join(f"{status:>11}" for status in db.TASK_STATUSES)
-        print(header)
+        print(header + f"{'已领取':>9}")
         for label, table, column in counts:
             row = {status: 0 for status in db.TASK_STATUSES}
             for item in conn.execute(
                 f"SELECT {column} AS status, COUNT(*) AS n FROM {table} GROUP BY {column}"
             ):
                 row[item["status"]] = item["n"]
-            print(f"  {label:10}" + "".join(f"{row[s]:>11}" for s in db.TASK_STATUSES))
-        print(f"\n  在跑的进程：{conn.execute('SELECT COUNT(*) FROM task_process').fetchone()[0]}")
+            claimed = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE claimed_at IS NOT NULL").fetchone()[0]
+            print(f"  {label:10}" + "".join(f"{row[s]:>11}" for s in db.TASK_STATUSES)
+                  + f"{claimed:>9}")
+        print(f"\n  在跑的进程：{conn.execute('SELECT COUNT(*) FROM task_process').fetchone()[0]}"
+              "（claimed_at 非空即已领取）")
         return 0
     finally:
         conn.close()
